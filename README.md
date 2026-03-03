@@ -1,115 +1,128 @@
-# StockProject Fullstack Starter
+# StockProject 全栈项目
 
-Frontend and backend are separated:
+`StockProject` 是一个前后端分离的股票分析项目：
 
-- `frontend/`: Vue 3 + Vite + TypeScript + Element Plus + VueUse Motion
-- `backend/`: FastAPI managed by `uv`
+- `frontend/`：`Vue 3` + `Vite` + `TypeScript` + `Element Plus` + `VueUse Motion`
+- `backend/`：`FastAPI`（使用 `uv` 管理）
 
-Frontend auth pages and guards:
+## 已完成功能
 
-- `frontend/src/router/index.ts`: routes and auth guards
-- `frontend/src/stores/auth.ts`: token persistence and auth state
-- `frontend/src/views/LoginView.vue`: login page
-- `frontend/src/views/RegisterView.vue`: register page
-- `frontend/src/views/ProfileView.vue`: user profile and password change
+### 后端能力
 
-Backend structure:
+- 完成 Auth V1 全流程：注册、登录、刷新 Token、修改密码、登出、当前用户信息。
+- 登录支持用户名或邮箱（`account` 字段）。
+- 接入 JWT 鉴权与密码哈希安全模块。
+- 接入 Redis 刷新令牌存储。
+- 支持登录失败自适应图形验证码：
+  - 达到失败阈值后强制验证码
+  - 提供验证码获取接口 `GET /api/auth/captcha`
+  - 登录接口支持 `captcha_id` 与 `captcha_code`
+- 启动时支持自动检查/创建数据库、表与 schema（可配置）。
+- 完成请求级日志能力（含 `X-Request-ID`）。
 
-- `backend/main.py`: dev entrypoint (keeps `fastapi dev main.py` compatible)
-- `backend/app/main.py`: FastAPI app wiring (middleware, routers)
-- `backend/app/api/routes/`: API route modules (`health.py`, `stocks.py`, `auth.py`)
-- `backend/app/core/settings.py`: env/settings parsing (PostgreSQL, Redis)
-- `backend/app/core/logging.py`: centralized logging setup and request log helper
-- `backend/app/core/security.py`: password hashing and JWT token handling
-- `backend/app/services/auth_service.py`: user auth business logic
+### 前端能力
 
-## Quick start
+- 完成认证页面与流程：登录、注册、个人中心、修改密码。
+- 接入路由守卫（`guestOnly` / `requiresAuth`）与登录后重定向。
+- 完成 Pinia 认证状态管理（含 token 持久化与会话恢复）。
+- 完成密码确认与密码强度提示体验。
+- 登录页支持验证码挑战展示与刷新。
+- 完成 i18n 多语言基础：`zh-CN` 与 `en-US`，默认中文。
+- 顶部语言切换支持本地持久化（`localStorage` 的 `app.locale`）。
+- 认证相关错误信息已接入本地化映射（包含 422 校验错误首条提示）。
+- 头部品牌区与语言切换器已升级为精致产品风：
+  - 品牌文案：`AI STOCK LAB` / `by DreamBo`
+  - 语言切换器采用胶囊分段样式
+  - 已添加滑块式 active 背景动效
 
-### One-click startup (Windows)
+## 项目结构
 
-Run this in project root:
+### 前端关键文件
+
+- `frontend/src/router/index.ts`：路由定义
+- `frontend/src/router/guards.ts`：路由守卫
+- `frontend/src/stores/auth.ts`：认证状态与 token 持久化
+- `frontend/src/i18n/index.ts`：多语言初始化与切换
+- `frontend/src/App.vue`：全局布局、头部品牌与语言切换
+
+### 后端关键文件
+
+- `backend/main.py`：开发入口（兼容 `fastapi dev main.py`）
+- `backend/app/main.py`：FastAPI 应用装配
+- `backend/app/api/routes/auth.py`：认证相关路由
+- `backend/app/services/auth_service.py`：认证业务逻辑
+- `backend/app/services/captcha_service.py`：验证码服务
+- `backend/app/core/security.py`：JWT 与密码安全
+- `backend/app/core/settings.py`：环境配置解析
+
+## 快速启动
+
+### Windows 一键启动
+
+在项目根目录执行：
 
 ```bash
 start-dev.bat
 ```
 
-It opens two terminals automatically: backend and frontend dev servers.
+该脚本会自动拉起后端与前端开发服务。
 
-### 1) Run backend
+### 单独启动后端
 
-Backend reads database/cache settings from `backend/.env`.
-
-Template: `backend/.env.example`
-
-On startup, backend can auto-create the target database and required tables (controlled by `DB_AUTO_CREATE_DATABASE` and `DB_AUTO_CREATE_TABLES`).
-
-PostgreSQL URL supports `database.schema` format, e.g. `jdbc:postgresql://host:port/DreamBoDB.stockdb`.
-
-Login security controls in `backend/.env`:
-
-- `LOGIN_CAPTCHA_THRESHOLD` (default: `2`)
-- `LOGIN_FAIL_WINDOW_SECONDS` (default: `900`)
-- `CAPTCHA_TTL_SECONDS` (default: `300`)
-- `CAPTCHA_LENGTH` (default: `4`)
+后端配置文件：`backend/.env`（模板：`backend/.env.example`）。
 
 ```bash
 cd backend
 uv run fastapi dev main.py
 ```
 
-Backend default URL: `http://127.0.0.1:8000`
+默认地址：`http://127.0.0.1:8000`
 
-### Auth API
+常用登录安全参数（`backend/.env`）：
 
-- `POST /api/auth/register`
-- `POST /api/auth/login` (`account` supports username or email)
-- `GET /api/auth/captcha`
-- `POST /api/auth/refresh`
-- `POST /api/auth/change-password`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
+- `LOGIN_CAPTCHA_THRESHOLD`（默认 `2`）
+- `LOGIN_FAIL_WINDOW_SECONDS`（默认 `900`）
+- `CAPTCHA_TTL_SECONDS`（默认 `300`）
+- `CAPTCHA_LENGTH`（默认 `4`）
 
-Captcha flow:
+### 单独启动前端
 
-- After repeated failed logins (`LOGIN_CAPTCHA_THRESHOLD`), login requires captcha.
-- `GET /api/auth/captcha` returns `{ captcha_id, image_base64, expires_in }`.
-- `POST /api/auth/login` accepts optional `captcha_id` and `captcha_code`.
-- Captcha-required failures return structured `detail` with `captcha_required` and `captcha_reason`.
-
-### 2) Run frontend
+先根据 `frontend/.env.example` 创建 `frontend/.env`，然后执行：
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-Create `frontend/.env` from `frontend/.env.example` before running dev server.
+默认地址：`http://127.0.0.1:5173`
 
-Frontend default URL: `http://127.0.0.1:5173`
+## Auth API 列表
 
-### Frontend i18n
+- `POST /api/auth/register`
+- `POST /api/auth/login`（`account` 支持用户名或邮箱）
+- `GET /api/auth/captcha`
+- `POST /api/auth/refresh`
+- `POST /api/auth/change-password`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
 
-- Added `vue-i18n` with `zh-CN` and `en-US` locales.
-- Default locale is `zh-CN`.
-- Language can be switched from the top navigation and is persisted to `localStorage` (`app.locale`).
+## 测试与构建
 
-## Test commands
-
-Backend:
+后端测试：
 
 ```bash
 cd backend
 uv run pytest -q
 ```
 
-Frontend:
+前端测试：
 
 ```bash
 cd frontend
 npm run test -- --run
 ```
 
-## Build command
+前端构建：
 
 ```bash
 cd frontend
