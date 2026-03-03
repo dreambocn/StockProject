@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+:root {
+  --terminal-bg: #0b1220;
+  --terminal-surface: #131d30;
+  --terminal-panel: #1a263b;
+  --terminal-text: #e6edf7;
+  --terminal-muted: #92a1b6;
+  --terminal-primary: #3da9fc;
+  --terminal-success: #18b26a;
+  --terminal-danger: #e04f5f;
+  --terminal-warning: #f7b500;
+  --terminal-border: #2a3a55;
+  --terminal-shadow: 0 20px 45px rgba(3, 8, 17, 0.4);
+
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  color: var(--terminal-text);
+  background: radial-gradient(circle at top, #121e33 0%, var(--terminal-bg) 45%, #070d18 100%);
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--terminal-bg);
+}
+
+#app {
+  width: 100%;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: 'IBM Plex Sans', sans-serif;
+}
+
+.el-form-item__label {
+  color: var(--terminal-muted) !important;
+}
+
+.el-input__wrapper {
+  background-color: rgba(11, 18, 32, 0.78) !important;
+  box-shadow: 0 0 0 1px var(--terminal-border) inset !important;
+}
+
+.el-input__inner {
+  color: var(--terminal-text) !important;
+}
+
+.el-card__body {
+  color: var(--terminal-text);
+}
+
+.el-descriptions__label,
+.el-descriptions__content {
+  background: rgba(9, 16, 29, 0.9) !important;
+  color: var(--terminal-text) !important;
+  border-color: var(--terminal-border) !important;
+}

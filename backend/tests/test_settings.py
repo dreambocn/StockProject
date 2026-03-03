@@ -1,0 +1,51 @@
+from app.core.settings import Settings
+
+
+def test_settings_build_postgres_async_dsn() -> None:
+    settings = Settings(
+        postgres_jdbc_url="jdbc:postgresql://192.168.31.199:2143/DreamBoDB",
+        postgres_user="dreambo",
+        postgres_password="syb/20031122",
+        redis_jdbc_url="jdbc:redis://192.168.31.199:6379/0",
+    )
+
+    assert (
+        settings.postgres_async_dsn
+        == "postgresql+asyncpg://dreambo:syb%2F20031122@192.168.31.199:2143/DreamBoDB"
+    )
+
+
+def test_settings_build_redis_url() -> None:
+    settings = Settings(
+        postgres_jdbc_url="jdbc:postgresql://192.168.31.199:2143/DreamBoDB",
+        postgres_user="dreambo",
+        postgres_password="syb/20031122",
+        redis_jdbc_url="jdbc:redis://192.168.31.199:6379/0",
+    )
+
+    assert settings.redis_url == "redis://192.168.31.199:6379/0"
+
+
+def test_settings_parse_database_and_schema_from_jdbc_path() -> None:
+    settings = Settings(
+        postgres_jdbc_url="jdbc:postgresql://192.168.31.199:2143/DreamBoDB.stockdb",
+        postgres_user="dreambo",
+        postgres_password="syb/20031122",
+        redis_jdbc_url="jdbc:redis://192.168.31.199:6379/0",
+    )
+
+    assert settings.postgres_database == "DreamBoDB"
+    assert settings.postgres_schema == "stockdb"
+    assert (
+        settings.postgres_async_dsn
+        == "postgresql+asyncpg://dreambo:syb%2F20031122@192.168.31.199:2143/DreamBoDB"
+    )
+
+
+def test_settings_captcha_defaults() -> None:
+    settings = Settings()
+
+    assert settings.login_captcha_threshold == 2
+    assert settings.login_fail_window_seconds == 900
+    assert settings.captcha_ttl_seconds == 300
+    assert settings.captcha_length == 4
