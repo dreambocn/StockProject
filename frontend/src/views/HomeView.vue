@@ -14,6 +14,16 @@ const errorMessage = ref('')
 const hasMore = ref(true)
 const page = ref(1)
 const pageSize = 20
+const quotePatchByTsCode = ref<
+  Record<
+    string,
+    {
+      close: number | null
+      pctChg: number | null
+      tradeDate: string | null
+    }
+  >
+>({})
 const loadMoreTrigger = ref<HTMLElement | null>(null)
 const intersectionObserver = ref<IntersectionObserver | null>(null)
 const scheduledLoadFrame = ref<number | null>(null)
@@ -23,6 +33,17 @@ const formatPrice = (value: number | null | undefined) => {
     return '--'
   }
   return value.toFixed(2)
+}
+
+const formatTradeDate = (value: string | null | undefined) => {
+  if (!value) {
+    return '--'
+  }
+  const normalized = value.replace(/-/g, '')
+  if (normalized.length !== 8) {
+    return value
+  }
+  return `${normalized.slice(0, 4)}-${normalized.slice(4, 6)}-${normalized.slice(6, 8)}`
 }
 
 const formatChange = (value: number | null | undefined) => {
@@ -43,6 +64,61 @@ const resolveTagType = (value: number | null | undefined) => {
 const resolveSubtitle = (fullname: string | null | undefined, tsCode: string) => {
   const normalized = fullname?.trim()
   return normalized && normalized.length > 0 ? normalized : tsCode
+}
+
+const resolveQuoteField = (stock: StockListItem) => {
+  const patched = quotePatchByTsCode.value[stock.ts_code]
+  return {
+    close: patched?.close ?? stock.close,
+    pctChg: patched?.pctChg ?? stock.pct_chg,
+    tradeDate: patched?.tradeDate ?? stock.trade_date,
+  }
+}
+
+const backfillMissingCardQuotes = async (items: StockListItem[]) => {
+  const missingCodes = items
+    .filter((item) => {
+      const hasLocalPatch = quotePatchByTsCode.value[item.ts_code]
+      if (hasLocalPatch) {
+        return false
+      }
+      return item.close === null || item.trade_date === null
+    })
+    .map((item) => item.ts_code)
+
+  if (missingCodes.length === 0) {
+    return
+  }
+
+  const concurrency = 5
+  for (let index = 0; index < missingCodes.length; index += concurrency) {
+    const chunk = missingCodes.slice(index, index + concurrency)
+    await Promise.all(
+      chunk.map(async (tsCode) => {
+        try {
+          // 关键流程：仅对首页缺失价格/日期的卡片补拉最近一条日线，避免全量逐卡请求。
+          const rows = await stocksApi.getStockDaily(tsCode, {
+            limit: 1,
+            period: 'daily',
+          })
+          const latest = rows[0]
+          if (!latest) {
+            return
+          }
+          quotePatchByTsCode.value = {
+            ...quotePatchByTsCode.value,
+            [tsCode]: {
+              close: latest.close,
+              pctChg: latest.pct_chg,
+              tradeDate: latest.trade_date,
+            },
+          }
+        } catch {
+          return
+        }
+      }),
+    )
+  }
 }
 
 const mergeStocksByTsCode = (existing: StockListItem[], incoming: StockListItem[], reset: boolean) => {
@@ -70,6 +146,7 @@ const loadStocksPage = async (reset: boolean) => {
     page.value = 1
     hasMore.value = true
     loading.value = true
+    quotePatchByTsCode.value = {}
   } else {
     // 关键状态边界：触底加载时必须受 hasMore/loading 双条件保护，避免重复请求和并发翻页。
     if (!hasMore.value || loading.value || loadingMore.value) {
@@ -90,6 +167,7 @@ const loadStocksPage = async (reset: boolean) => {
 
     const mergeResult = mergeStocksByTsCode(stocks.value, pageItems, reset)
     stocks.value = mergeResult.merged
+    await backfillMissingCardQuotes(pageItems)
 
     if (pageItems.length < pageSize) {
       hasMore.value = false
@@ -207,14 +285,14 @@ onUnmounted(() => {
             <div class="stock-card-vertical">
               <div class="stock-head">
                 <strong>{{ stock.symbol }}</strong>
-                <el-tag :type="resolveTagType(stock.pct_chg)">
-                  {{ formatChange(stock.pct_chg) }}
+                <el-tag :type="resolveTagType(resolveQuoteField(stock).pctChg)">
+                  {{ formatChange(resolveQuoteField(stock).pctChg) }}
                 </el-tag>
               </div>
               <p class="stock-name">{{ stock.name }}</p>
               <p class="stock-code">{{ resolveSubtitle(stock.fullname, stock.ts_code) }}</p>
-              <p class="stock-price">¥{{ formatPrice(stock.close) }}</p>
-              <p class="stock-date">{{ stock.trade_date ?? '--' }}</p>
+              <p class="stock-price">¥{{ formatPrice(resolveQuoteField(stock).close) }}</p>
+              <p class="stock-date">{{ formatTradeDate(resolveQuoteField(stock).tradeDate) }}</p>
             </div>
           </el-card>
         </router-link>

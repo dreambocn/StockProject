@@ -61,12 +61,43 @@ export type StockDetail = {
 }
 
 
+export type StockAdjFactor = {
+  ts_code: string
+  trade_date: string
+  adj_factor: number
+}
+
+
+export type StockTradeCalendar = {
+  exchange: string
+  cal_date: string
+  is_open: string
+  pretrade_date: string | null
+}
+
+
 export type StockDailyQueryOptions = {
   limit?: number
   period?: 'daily' | 'weekly' | 'monthly'
   tradeDate?: string
   startDate?: string
   endDate?: string
+}
+
+
+export type StockAdjFactorQueryOptions = {
+  limit?: number
+  tradeDate?: string
+  startDate?: string
+  endDate?: string
+}
+
+
+export type StockTradeCalendarQueryOptions = {
+  exchange?: string
+  startDate?: string
+  endDate?: string
+  isOpen?: '0' | '1'
 }
 
 
@@ -107,5 +138,25 @@ export const stocksApi = {
     return requestJson<StockDailySnapshot[]>(
       `/api/stocks/${encodeURIComponent(tsCode)}/daily${query}`,
     )
+  },
+  async getStockAdjFactor(tsCode: string, options?: StockAdjFactorQueryOptions) {
+    const query = buildQueryString({
+      limit: options?.limit ?? 240,
+      trade_date: options?.tradeDate,
+      start_date: options?.startDate,
+      end_date: options?.endDate,
+    })
+    return requestJson<StockAdjFactor[]>(
+      `/api/stocks/${encodeURIComponent(tsCode)}/adj-factor${query}`,
+    )
+  },
+  async getTradeCalendar(options?: StockTradeCalendarQueryOptions) {
+    const query = buildQueryString({
+      exchange: options?.exchange ?? 'SSE',
+      start_date: options?.startDate,
+      end_date: options?.endDate,
+      is_open: options?.isOpen,
+    })
+    return requestJson<StockTradeCalendar[]>(`/api/stocks/trade-cal${query}`)
   },
 }

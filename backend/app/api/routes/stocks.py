@@ -171,6 +171,131 @@ async def _load_daily_rows_from_db(
     return [_to_daily_snapshot_response(snapshot) for snapshot in snapshots]
 
 
+def _is_quote_complete(value: StockDailySnapshotResponse | None) -> bool:
+    if value is None:
+        return False
+    return value.close is not None and value.trade_date is not None
+
+
+async def _load_latest_snapshots_map(
+    *,
+    session: AsyncSession,
+    ts_codes: list[str],
+) -> dict[str, StockDailySnapshotResponse]:
+    if not ts_codes:
+        return {}
+
+    statement = (
+        select(StockDailySnapshot)
+        .where(StockDailySnapshot.ts_code.in_(ts_codes))
+        .order_by(StockDailySnapshot.ts_code, StockDailySnapshot.trade_date.desc())
+    )
+    snapshots = (await session.execute(statement)).scalars().all()
+    result: dict[str, StockDailySnapshotResponse] = {}
+    for snapshot in snapshots:
+        if snapshot.ts_code in result:
+            continue
+        result[snapshot.ts_code] = _to_daily_snapshot_response(snapshot)
+    return result
+
+
+async def _load_latest_daily_kline_map(
+    *,
+    session: AsyncSession,
+    ts_codes: list[str],
+) -> dict[str, StockDailySnapshotResponse]:
+    if not ts_codes:
+        return {}
+
+    statement = (
+        select(StockKlineBar)
+        .where(StockKlineBar.ts_code.in_(ts_codes))
+        .where(StockKlineBar.period == "daily")
+        .order_by(StockKlineBar.ts_code, StockKlineBar.trade_date.desc())
+    )
+    bars = (await session.execute(statement)).scalars().all()
+    result: dict[str, StockDailySnapshotResponse] = {}
+    for bar in bars:
+        if bar.ts_code in result:
+            continue
+        result[bar.ts_code] = _to_kline_snapshot_response(bar)
+    return result
+
+
+async def _fetch_latest_daily_quotes_from_tushare(
+    *,
+    session: AsyncSession,
+    ts_codes: list[str],
+) -> dict[str, StockDailySnapshotResponse]:
+    if not ts_codes:
+        return {}
+
+    settings = get_settings()
+    try:
+        gateway = TushareGateway(settings.tushare_token)
+    except ValueError:
+        return {}
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=45)
+    try:
+        rows = await gateway.fetch_daily_by_range(
+            ts_code=",".join(ts_codes),
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+        )
+    except Exception:
+        return {}
+
+    # 关键流程：首页列表补全必须以“最近可用交易日”为准，按 ts_code 选取最新 trade_date 的行情。
+    latest_by_code: dict[str, StockDailySnapshotResponse] = {}
+    for row in rows:
+        raw_ts_code = str(row.get("ts_code") or "").strip().upper()
+        if not raw_ts_code:
+            continue
+        mapped = _map_tushare_daily_row_to_snapshot_response(
+            ts_code=raw_ts_code,
+            row=row,
+        )
+        if mapped is None:
+            continue
+
+        existing = latest_by_code.get(raw_ts_code)
+        if existing is None or mapped.trade_date > existing.trade_date:
+            latest_by_code[raw_ts_code] = mapped
+
+    if not latest_by_code:
+        return {}
+
+    # 关键状态流转：回源成功后立即落库，后续列表请求优先命中数据库，避免重复访问三方接口。
+    try:
+        for ts_code, quote in latest_by_code.items():
+            await _upsert_kline_rows(
+                session=session,
+                ts_code=ts_code,
+                period="daily",
+                rows=[
+                    {
+                        "trade_date": quote.trade_date.strftime("%Y%m%d"),
+                        "open": quote.open,
+                        "high": quote.high,
+                        "low": quote.low,
+                        "close": quote.close,
+                        "pre_close": quote.pre_close,
+                        "change": quote.change,
+                        "pct_chg": quote.pct_chg,
+                        "vol": quote.vol,
+                        "amount": quote.amount,
+                    }
+                ],
+            )
+        await session.commit()
+    except Exception:
+        await session.rollback()
+
+    return latest_by_code
+
+
 def _parse_period(value: str) -> str:
     normalized_value = value.strip().lower()
     if normalized_value in SUPPORTED_KLINE_PERIODS:
@@ -590,10 +715,43 @@ async def list_stocks(
     )
     instruments = (await session.execute(statement)).scalars().all()
 
+    ts_codes = [instrument.ts_code for instrument in instruments]
+    quote_by_ts_code = await _load_latest_snapshots_map(
+        session=session, ts_codes=ts_codes
+    )
+
+    missing_after_snapshot = [
+        ts_code
+        for ts_code in ts_codes
+        if not _is_quote_complete(quote_by_ts_code.get(ts_code))
+    ]
+    if missing_after_snapshot:
+        kline_quote_by_ts_code = await _load_latest_daily_kline_map(
+            session=session,
+            ts_codes=missing_after_snapshot,
+        )
+        for ts_code, quote in kline_quote_by_ts_code.items():
+            if _is_quote_complete(quote):
+                quote_by_ts_code[ts_code] = quote
+
+    missing_after_kline = [
+        ts_code
+        for ts_code in ts_codes
+        if not _is_quote_complete(quote_by_ts_code.get(ts_code))
+    ]
+    if missing_after_kline:
+        tushare_quote_by_ts_code = await _fetch_latest_daily_quotes_from_tushare(
+            session=session,
+            ts_codes=missing_after_kline,
+        )
+        for ts_code, quote in tushare_quote_by_ts_code.items():
+            if _is_quote_complete(quote):
+                quote_by_ts_code[ts_code] = quote
+
     # 关键流程：列表查询始终补齐“最新交易日快照”，前端无需再发额外请求拼接卡片数据。
     result: list[StockListItemResponse] = []
     for instrument in instruments:
-        latest_snapshot = await _fetch_latest_snapshot(session, instrument.ts_code)
+        latest_snapshot = quote_by_ts_code.get(instrument.ts_code)
         result.append(
             StockListItemResponse(
                 ts_code=instrument.ts_code,
@@ -601,15 +759,9 @@ async def list_stocks(
                 name=instrument.name,
                 fullname=instrument.fullname,
                 exchange=instrument.exchange,
-                close=(
-                    _to_float(latest_snapshot.close)
-                    if latest_snapshot is not None
-                    else None
-                ),
+                close=(latest_snapshot.close if latest_snapshot is not None else None),
                 pct_chg=(
-                    _to_float(latest_snapshot.pct_chg)
-                    if latest_snapshot is not None
-                    else None
+                    latest_snapshot.pct_chg if latest_snapshot is not None else None
                 ),
                 trade_date=(
                     latest_snapshot.trade_date if latest_snapshot is not None else None

@@ -102,6 +102,20 @@ describe('StockDetailView', () => {
             },
           ]),
         )
+        .mockResolvedValueOnce(
+          jsonResponse([
+            {
+              ts_code: '600000.SH',
+              trade_date: '2026-03-03',
+              adj_factor: 2.0,
+            },
+            {
+              ts_code: '600000.SH',
+              trade_date: '2026-03-02',
+              adj_factor: 1.9,
+            },
+          ]),
+        )
     vi.stubGlobal('fetch', fetchMock)
 
     setAppLocale('zh-CN')
@@ -121,7 +135,7 @@ describe('StockDetailView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('浦发银行')
-    expect(wrapper.text()).toContain('600000.SH')
+    expect(wrapper.text()).not.toContain('600000.SH')
     expect(wrapper.text()).toContain('上海浦东发展银行股份有限公司')
     expect(wrapper.text()).toContain('8.25')
     expect(wrapper.text()).toContain('2026-03-03')
@@ -129,6 +143,9 @@ describe('StockDetailView', () => {
     expect(wrapper.find('[data-testid="kline-period-daily"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="kline-period-weekly"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="kline-period-monthly"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kline-adjust-none"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kline-adjust-qfq"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kline-adjust-hfq"]').exists()).toBe(true)
 
     const latestClose = wrapper.get('[data-testid="latest-close-value"]').text()
     const latestChange = wrapper.get('[data-testid="latest-change-value"]').text()
@@ -148,5 +165,10 @@ describe('StockDetailView', () => {
     expect(dailyRequest[0]).toContain('limit=60')
     expect(dailyRequest[0]).toContain('period=daily')
     expect(dailyRequest[0]).not.toContain('adjust=')
+
+    const adjFactorRequest = fetchMock.mock.calls[2] as [string, RequestInit]
+    expect(adjFactorRequest[0]).toContain('/api/stocks/600000.SH/adj-factor?')
+    expect(adjFactorRequest[0]).toContain('start_date=20260302')
+    expect(adjFactorRequest[0]).toContain('end_date=20260303')
   })
 })

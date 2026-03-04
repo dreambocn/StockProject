@@ -4,9 +4,15 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { ApiError } from '../api/http'
-import { stocksApi, type StockDailySnapshot, type StockDetail } from '../api/stocks'
+import {
+  stocksApi,
+  type StockAdjFactor,
+  type StockDailySnapshot,
+  type StockDetail,
+} from '../api/stocks'
 
 type KlinePeriod = 'daily' | 'weekly' | 'monthly'
+type AdjustMode = 'none' | 'qfq' | 'hfq'
 
 type KlineRow = {
   tsCode: string
@@ -31,7 +37,9 @@ const loading = ref(false)
 const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
+const adjFactors = ref<StockAdjFactor[]>([])
 const selectedPeriod = ref<KlinePeriod>('daily')
+const selectedAdjustMode = ref<AdjustMode>('none')
 const hoveredIndex = ref<number | null>(null)
 
 const chartWidth = 980
@@ -174,7 +182,7 @@ const aggregateRows = (rows: KlineRow[], period: KlinePeriod): KlineRow[] => {
   return result
 }
 
-const baseRows = computed(() => {
+const rawBaseRows = computed(() => {
   const mapped = dailyRows.value
     .map((item) => {
       const open = item.open
@@ -209,6 +217,57 @@ const baseRows = computed(() => {
 
   return mapped.sort((a, b) => a.tradeDateKey.localeCompare(b.tradeDateKey))
 })
+
+const factorByTradeDateKey = computed(() => {
+  const map = new Map<string, number>()
+  adjFactors.value.forEach((item) => {
+    const key = toTradeDateKey(item.trade_date)
+    if (key.length !== 8 || !Number.isFinite(item.adj_factor) || item.adj_factor <= 0) {
+      return
+    }
+    map.set(key, item.adj_factor)
+  })
+  return map
+})
+
+const adjustedRows = computed(() => {
+  const mode = selectedAdjustMode.value
+  if (mode === 'none') {
+    return rawBaseRows.value
+  }
+
+  const factors = factorByTradeDateKey.value
+  const rows = rawBaseRows.value
+  if (rows.length === 0 || factors.size === 0) {
+    return rows
+  }
+
+  const latestFactor = factors.get(rows[rows.length - 1]?.tradeDateKey ?? '')
+  const firstFactor = factors.get(rows[0]?.tradeDateKey ?? '')
+  const baseFactor = mode === 'qfq' ? latestFactor : firstFactor
+  if (!baseFactor || baseFactor <= 0) {
+    return rows
+  }
+
+  return rows.map((item) => {
+    const currentFactor = factors.get(item.tradeDateKey)
+    if (!currentFactor || currentFactor <= 0) {
+      return item
+    }
+    const ratio = currentFactor / baseFactor
+    return {
+      ...item,
+      open: item.open * ratio,
+      high: item.high * ratio,
+      low: item.low * ratio,
+      close: item.close * ratio,
+      preClose: item.preClose === null ? null : item.preClose * ratio,
+      change: item.change === null ? null : item.change * ratio,
+    }
+  })
+})
+
+const baseRows = computed(() => adjustedRows.value)
 
 const klineRows = computed(() => aggregateRows(baseRows.value, selectedPeriod.value))
 
@@ -411,6 +470,47 @@ const selectPeriod = (period: KlinePeriod) => {
   void loadData()
 }
 
+const selectAdjustMode = (mode: AdjustMode) => {
+  if (selectedAdjustMode.value === mode) {
+    return
+  }
+  // 关键状态流转：复权模式只在前端改写展示价格，不改变后端原始行情数据。
+  selectedAdjustMode.value = mode
+  hoveredIndex.value = null
+}
+
+const loadAdjFactors = async (rows: StockDailySnapshot[]) => {
+  if (!tsCode.value || rows.length === 0) {
+    adjFactors.value = []
+    return
+  }
+
+  const sortedKeys = rows
+    .map((item) => toTradeDateKey(item.trade_date))
+    .filter((key) => key.length === 8)
+    .sort()
+
+  if (sortedKeys.length === 0) {
+    adjFactors.value = []
+    return
+  }
+
+  const startDate = sortedKeys[0]
+  const endDate = sortedKeys[sortedKeys.length - 1]
+  try {
+    const payload = await stocksApi.getStockAdjFactor(tsCode.value, {
+      limit: Math.max(rows.length, 120),
+      startDate,
+      endDate,
+    })
+    adjFactors.value = payload
+  } catch {
+    // 降级分支：复权因子失败时保持原始价格展示，避免详情页整体不可用。
+    adjFactors.value = []
+    selectedAdjustMode.value = 'none'
+  }
+}
+
 watch(
   () => dailyRows.value,
   () => {
@@ -436,6 +536,7 @@ const loadData = async () => {
     ])
     detail.value = detailPayload
     dailyRows.value = dailyPayload
+    await loadAdjFactors(dailyPayload)
   } catch (error) {
     if (error instanceof ApiError) {
       errorMessage.value = error.message
@@ -519,6 +620,29 @@ onMounted(async () => {
               月K
             </el-button>
           </el-button-group>
+          <el-button-group>
+            <el-button
+              data-testid="kline-adjust-none"
+              :type="selectedAdjustMode === 'none' ? 'primary' : 'default'"
+              @click="selectAdjustMode('none')"
+            >
+              不复权
+            </el-button>
+            <el-button
+              data-testid="kline-adjust-qfq"
+              :type="selectedAdjustMode === 'qfq' ? 'primary' : 'default'"
+              @click="selectAdjustMode('qfq')"
+            >
+              前复权
+            </el-button>
+            <el-button
+              data-testid="kline-adjust-hfq"
+              :type="selectedAdjustMode === 'hfq' ? 'primary' : 'default'"
+              @click="selectAdjustMode('hfq')"
+            >
+              后复权
+            </el-button>
+          </el-button-group>
           <el-button :loading="loading" @click="loadData">{{ t('home.refresh') }}</el-button>
         </div>
       </div>
@@ -540,7 +664,10 @@ onMounted(async () => {
             <span>MA20: {{ formatNumber(ma20[ma20.length - 1] ?? null) }}</span>
             <span>MA60: {{ formatNumber(ma60[ma60.length - 1] ?? null) }}</span>
           </div>
-          <p class="trend-window">{{ chartStats.firstDate }} → {{ chartStats.lastDate }}</p>
+          <p class="trend-window">
+            {{ chartStats.firstDate }} → {{ chartStats.lastDate }}
+            <span class="adjust-badge">{{ selectedAdjustMode === 'none' ? 'RAW' : selectedAdjustMode.toUpperCase() }}</span>
+          </p>
         </div>
 
         <div class="chart-wrap">
@@ -715,12 +842,6 @@ h1 {
   margin: 0.45rem 0 0.2rem;
 }
 
-.code-line {
-  margin: 0;
-  color: var(--terminal-muted);
-  font-family: 'IBM Plex Mono', monospace;
-}
-
 .fullname-line {
   margin: 0.22rem 0 0;
   font-size: 0.8rem;
@@ -816,6 +937,11 @@ h2 {
   color: var(--terminal-muted);
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.74rem;
+}
+
+.adjust-badge {
+  margin-left: 0.35rem;
+  color: #7bc5ff;
 }
 
 .chart-wrap {

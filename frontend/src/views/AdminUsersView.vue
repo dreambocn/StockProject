@@ -26,6 +26,9 @@ const totalUsers = computed(() => users.value.length)
 const totalAdmins = computed(
   () => users.value.filter((item) => item.user_level === 'admin').length,
 )
+const activeUsers = computed(
+  () => users.value.filter((item) => item.is_active).length,
+)
 
 const accessToken = computed(() => authStore.accessToken)
 
@@ -108,25 +111,33 @@ onMounted(async () => {
 
 <template>
   <section
+    data-testid="admin-users-neo-shell"
     class="admin-page"
     v-motion
     :initial="{ opacity: 0, y: 18 }"
     :enter="{ opacity: 1, y: 0 }"
   >
-    <header class="control-header">
-      <div>
+    <header class="control-header neo-hero">
+      <div class="hero-copy">
         <p class="panel-kicker">{{ t('adminUsers.kicker') }}</p>
         <h1>{{ t('adminUsers.title') }}</h1>
         <p class="section-note">{{ t('adminUsers.note') }}</p>
       </div>
-      <div class="status-chips">
+      <div class="status-chips hero-chips">
         <div class="status-chip">
-          <span>{{ t('adminUsers.totalUsers') }}</span>
+          <span>USERS</span>
           <strong>{{ totalUsers }}</strong>
+          <em>{{ t('adminUsers.totalUsers') }}</em>
         </div>
         <div class="status-chip danger">
-          <span>{{ t('adminUsers.totalAdmins') }}</span>
+          <span>ADMINS</span>
           <strong>{{ totalAdmins }}</strong>
+          <em>{{ t('adminUsers.totalAdmins') }}</em>
+        </div>
+        <div class="status-chip success">
+          <span>ACTIVE</span>
+          <strong>{{ activeUsers }}</strong>
+          <em>{{ t('profile.active') }}</em>
         </div>
       </div>
     </header>
@@ -141,31 +152,44 @@ onMounted(async () => {
 
     <div class="admin-grid">
       <el-card class="admin-card data-card" shadow="never">
-        <div class="card-head">
-          <h2>{{ t('adminUsers.userListTitle') }}</h2>
-          <el-button :loading="loadingUsers" @click="loadUsers">{{
+        <div class="card-head list-head">
+          <div>
+            <p class="mini-kicker">USER DIRECTORY</p>
+            <h2>{{ t('adminUsers.userListTitle') }}</h2>
+          </div>
+          <el-button data-testid="admin-users-refresh" :loading="loadingUsers" @click="loadUsers">{{
             t('adminUsers.refresh')
           }}</el-button>
         </div>
-        <el-table :data="users" v-loading="loadingUsers" class="users-table" height="420">
-          <el-table-column prop="username" :label="t('adminUsers.username')" min-width="130" />
-          <el-table-column prop="email" :label="t('adminUsers.email')" min-width="190" />
-          <el-table-column :label="t('adminUsers.level')" min-width="120">
-            <template #default="scope">
-              <el-tag :type="scope.row.user_level === 'admin' ? 'danger' : 'info'">
-                {{ userLevelLabel(scope.row.user_level) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('adminUsers.lastLogin')" min-width="190">
-            <template #default="scope">
-              {{ formatDateTime(scope.row.last_login_at) }}
-            </template>
-          </el-table-column>
-        </el-table>
+
+        <div class="table-shell">
+          <el-table
+            data-testid="admin-users-table"
+            :data="users"
+            v-loading="loadingUsers"
+            class="users-table theme-table"
+            height="430"
+          >
+            <el-table-column prop="username" :label="t('adminUsers.username')" min-width="130" />
+            <el-table-column prop="email" :label="t('adminUsers.email')" min-width="190" />
+            <el-table-column :label="t('adminUsers.level')" min-width="120">
+              <template #default="scope">
+                <el-tag :type="scope.row.user_level === 'admin' ? 'danger' : 'info'">
+                  {{ userLevelLabel(scope.row.user_level) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column :label="t('adminUsers.lastLogin')" min-width="190">
+              <template #default="scope">
+                {{ formatDateTime(scope.row.last_login_at) }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
       </el-card>
 
       <el-card class="admin-card create-card" shadow="never">
+        <p class="mini-kicker">ACCESS PROVISION</p>
         <h2>{{ t('adminUsers.createTitle') }}</h2>
         <p class="section-note">{{ t('adminUsers.createNote') }}</p>
 
@@ -193,7 +217,13 @@ onMounted(async () => {
               ]"
             />
           </el-form-item>
-          <el-button class="submit-btn" type="primary" native-type="submit" :loading="creatingUser">
+          <el-button
+            data-testid="admin-users-create"
+            class="submit-btn"
+            type="primary"
+            native-type="submit"
+            :loading="creatingUser"
+          >
             {{ t('adminUsers.createButton') }}
           </el-button>
         </el-form>
@@ -208,11 +238,39 @@ onMounted(async () => {
   gap: 1rem;
 }
 
+.neo-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--terminal-border) 85%, transparent);
+  border-radius: 18px;
+  padding: 1rem 1.05rem;
+  background:
+    radial-gradient(circle at 86% 12%, rgba(123, 197, 255, 0.2), transparent 45%),
+    linear-gradient(145deg, rgba(21, 33, 53, 0.97), rgba(9, 17, 31, 0.96));
+  box-shadow: var(--terminal-shadow);
+}
+
+.neo-hero::after {
+  content: '';
+  position: absolute;
+  inset: auto -26% -56% auto;
+  width: 280px;
+  height: 280px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(247, 181, 0, 0.16), transparent 72%);
+  pointer-events: none;
+}
+
 .control-header {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
   align-items: flex-start;
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 1;
 }
 
 .panel-kicker {
@@ -238,30 +296,45 @@ h1 {
   gap: 0.6rem;
 }
 
+.hero-chips {
+  position: relative;
+  z-index: 1;
+}
+
 .status-chip {
   min-width: 132px;
-  padding: 0.55rem 0.8rem;
+  padding: 0.58rem 0.8rem;
   border: 1px solid var(--terminal-border);
   border-radius: 12px;
-  background: linear-gradient(150deg, rgba(25, 40, 63, 0.95), rgba(11, 20, 35, 0.96));
+  background: linear-gradient(150deg, rgba(23, 36, 58, 0.94), rgba(10, 18, 32, 0.96));
   display: grid;
-  gap: 0.2rem;
+  gap: 0.18rem;
 }
 
 .status-chip span {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: var(--terminal-muted);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   font-family: 'IBM Plex Mono', monospace;
 }
 
 .status-chip strong {
-  font-size: 1.25rem;
+  font-size: 1.2rem;
+}
+
+.status-chip em {
+  font-style: normal;
+  font-size: 0.68rem;
+  color: color-mix(in srgb, var(--terminal-muted) 72%, white 28%);
 }
 
 .status-chip.danger {
   box-shadow: inset 0 0 0 1px rgba(247, 83, 113, 0.25);
+}
+
+.status-chip.success {
+  box-shadow: inset 0 0 0 1px rgba(24, 178, 106, 0.25);
 }
 
 .admin-grid {
@@ -272,7 +345,7 @@ h1 {
 
 .admin-card {
   border: 1px solid var(--terminal-border);
-  border-radius: 16px;
+  border-radius: 18px;
   background: linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(9, 16, 30, 0.97));
   box-shadow: var(--terminal-shadow);
   position: relative;
@@ -294,11 +367,25 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.72rem;
+}
+
+.list-head {
+  padding-bottom: 0.55rem;
+  border-bottom: 1px dashed color-mix(in srgb, var(--terminal-border) 72%, transparent);
+}
+
+.mini-kicker {
+  margin: 0;
+  color: color-mix(in srgb, var(--terminal-primary) 84%, white 16%);
+  font-family: 'IBM Plex Mono', monospace;
+  letter-spacing: 0.14em;
+  font-size: 0.66rem;
+  text-transform: uppercase;
 }
 
 h2 {
-  margin: 0;
+  margin: 0.24rem 0 0;
 }
 
 .users-table {
@@ -307,8 +394,20 @@ h2 {
   overflow: hidden;
 }
 
+.table-shell {
+  border: 1px solid color-mix(in srgb, var(--terminal-border) 75%, transparent);
+  border-radius: 14px;
+  padding: 0.45rem;
+  background: linear-gradient(180deg, rgba(12, 20, 35, 0.94), rgba(8, 15, 28, 0.95));
+}
+
+.create-card .section-note {
+  margin-bottom: 0.75rem;
+}
+
 .submit-btn {
   width: 100%;
+  margin-top: 0.2rem;
 }
 
 @media (max-width: 980px) {

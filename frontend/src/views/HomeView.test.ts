@@ -249,4 +249,58 @@ describe('HomeView', () => {
     const searchRequest = fetchMock.mock.calls[requestCountBeforeSearch] as [string, RequestInit]
     expect(searchRequest[0]).toContain('/api/stocks?keyword=%E5%B9%B3%E5%AE%89&page=1&page_size=20')
   })
+
+  it('backfills missing card quote from latest daily endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '000001.SZ',
+            symbol: '000001',
+            name: '平安银行',
+            fullname: '平安银行股份有限公司',
+            exchange: 'SZSE',
+            close: null,
+            pct_chg: null,
+            trade_date: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '000001.SZ',
+            trade_date: '2026-03-06',
+            open: 11.0,
+            high: 11.5,
+            low: 10.9,
+            close: 11.23,
+            pre_close: 11.1,
+            change: 0.13,
+            pct_chg: 1.17,
+            vol: 123000,
+            amount: 321000,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountHomeView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('11.23')
+    expect(wrapper.text()).toContain('2026-03-06')
+
+    const quoteCall = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(quoteCall[0]).toContain('/api/stocks/000001.SZ/daily?')
+    expect(quoteCall[0]).toContain('limit=1')
+    expect(quoteCall[0]).toContain('period=daily')
+  })
 })

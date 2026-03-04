@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 
 import { adminApi, type AdminStock } from '../api/admin'
 import { ApiError } from '../api/http'
+import { stocksApi, type StockTradeCalendar } from '../api/stocks'
 import { useAuthStore } from '../stores/auth'
 import { mapApiErrorMessage } from '../utils/apiErrorI18n'
 
@@ -14,6 +15,8 @@ const loadingStocks = ref(false)
 const syncingStocks = ref(false)
 const errorMessage = ref('')
 const stocks = ref<AdminStock[]>([])
+const tradeCalendarRows = ref<StockTradeCalendar[]>([])
+const loadingTradeCalendar = ref(false)
 
 const filters = reactive({
   keyword: '',
@@ -26,11 +29,30 @@ const pagination = reactive({
   total: 0,
 })
 
+const tradeCalendarFilters = reactive({
+  exchange: 'SSE',
+  isOpen: '' as '' | '0' | '1',
+  startDate: '',
+  endDate: '',
+})
+
+const tradeCalendarPagination = reactive({
+  page: 1,
+  pageSize: 20,
+  total: 0,
+})
+
 const accessToken = computed(() => authStore.accessToken)
 
 const totalStocks = computed(() => pagination.total)
 const listedStocks = computed(() => stocks.value.filter((item) => item.list_status === 'L').length)
 const delistedStocks = computed(() => stocks.value.filter((item) => item.list_status === 'D').length)
+
+const pagedTradeCalendarRows = computed(() => {
+  const start = (tradeCalendarPagination.page - 1) * tradeCalendarPagination.pageSize
+  const end = start + tradeCalendarPagination.pageSize
+  return tradeCalendarRows.value.slice(start, end)
+})
 
 const listStatusOptions = computed(() => [
   { label: t('adminStocks.filters.all'), value: 'ALL' },
@@ -152,6 +174,38 @@ const defaultQuery = async () => {
   await loadStocksFromDb()
 }
 
+const queryTradeCalendar = async () => {
+  loadingTradeCalendar.value = true
+  try {
+    // 关键流程：交易日历查询先走后端 DB-first 接口，管理员侧只做筛选参数透传。
+    tradeCalendarRows.value = await stocksApi.getTradeCalendar({
+      exchange: tradeCalendarFilters.exchange,
+      isOpen: tradeCalendarFilters.isOpen || undefined,
+      startDate: tradeCalendarFilters.startDate || undefined,
+      endDate: tradeCalendarFilters.endDate || undefined,
+    })
+    tradeCalendarPagination.total = tradeCalendarRows.value.length
+    tradeCalendarPagination.page = 1
+  } catch (error) {
+    if (error instanceof ApiError) {
+      errorMessage.value = mapApiErrorMessage(error, t, 'errors.fallback')
+    } else {
+      errorMessage.value = t('errors.fallback')
+    }
+  } finally {
+    loadingTradeCalendar.value = false
+  }
+}
+
+const handleTradeCalendarPageChange = (page: number) => {
+  tradeCalendarPagination.page = page
+}
+
+const handleTradeCalendarPageSizeChange = (pageSize: number) => {
+  tradeCalendarPagination.pageSize = pageSize
+  tradeCalendarPagination.page = 1
+}
+
 const handlePageChange = async (page: number) => {
   pagination.page = page
   await loadStocksFromDb()
@@ -238,35 +292,37 @@ onMounted(async () => {
         </el-button-group>
       </div>
 
-      <el-table
-        :data="stocks"
-        v-loading="loadingStocks || syncingStocks"
-        class="stocks-table"
-        height="460"
-        row-key="ts_code"
-      >
-        <el-table-column prop="ts_code" :label="t('adminStocks.table.tsCode')" min-width="130" />
-        <el-table-column prop="symbol" :label="t('adminStocks.table.symbol')" min-width="110" />
-        <el-table-column prop="name" :label="t('adminStocks.table.name')" min-width="150" />
-        <el-table-column prop="industry" :label="t('adminStocks.table.industry')" min-width="140" />
-        <el-table-column :label="t('adminStocks.table.listStatus')" min-width="120">
-          <template #default="scope">
-            <el-tag :type="resolveListStatusTagType(scope.row.list_status)">
-              {{ resolveListStatusLabel(scope.row.list_status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('adminStocks.table.listDate')" min-width="120">
-          <template #default="scope">
-            {{ formatDate(scope.row.list_date) }}
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('adminStocks.table.delistDate')" min-width="120">
-          <template #default="scope">
-            {{ formatDate(scope.row.delist_date) }}
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="table-shell">
+        <el-table
+          :data="stocks"
+          v-loading="loadingStocks || syncingStocks"
+          class="stocks-table theme-table"
+          height="460"
+          row-key="ts_code"
+        >
+          <el-table-column prop="ts_code" :label="t('adminStocks.table.tsCode')" min-width="130" />
+          <el-table-column prop="symbol" :label="t('adminStocks.table.symbol')" min-width="110" />
+          <el-table-column prop="name" :label="t('adminStocks.table.name')" min-width="150" />
+          <el-table-column prop="industry" :label="t('adminStocks.table.industry')" min-width="140" />
+          <el-table-column :label="t('adminStocks.table.listStatus')" min-width="120">
+            <template #default="scope">
+              <el-tag :type="resolveListStatusTagType(scope.row.list_status)">
+                {{ resolveListStatusLabel(scope.row.list_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('adminStocks.table.listDate')" min-width="120">
+            <template #default="scope">
+              {{ formatDate(scope.row.list_date) }}
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('adminStocks.table.delistDate')" min-width="120">
+            <template #default="scope">
+              {{ formatDate(scope.row.delist_date) }}
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
 
       <div class="pagination-wrap">
         <el-pagination
@@ -279,6 +335,79 @@ onMounted(async () => {
           @current-change="handlePageChange"
           @size-change="handlePageSizeChange"
         />
+      </div>
+
+      <div class="trade-cal-panel">
+        <div class="trade-cal-header">
+          <h3>{{ t('adminStocks.tradeCal.title') }}</h3>
+          <el-button
+            data-testid="trade-cal-query"
+            :loading="loadingTradeCalendar"
+            @click="queryTradeCalendar"
+          >
+            {{ t('adminStocks.tradeCal.query') }}
+          </el-button>
+        </div>
+
+        <div class="trade-cal-filters">
+          <el-select v-model="tradeCalendarFilters.exchange" class="trade-cal-field">
+            <el-option label="SSE" value="SSE" />
+            <el-option label="SZSE" value="SZSE" />
+            <el-option label="BSE" value="BSE" />
+          </el-select>
+          <el-select v-model="tradeCalendarFilters.isOpen" class="trade-cal-field" clearable>
+            <el-option :label="t('adminStocks.tradeCal.allStatus')" value="" />
+            <el-option :label="t('adminStocks.tradeCal.openOnly')" value="1" />
+            <el-option :label="t('adminStocks.tradeCal.closedOnly')" value="0" />
+          </el-select>
+          <el-date-picker
+            v-model="tradeCalendarFilters.startDate"
+            type="date"
+            value-format="YYYYMMDD"
+            :placeholder="t('adminStocks.tradeCal.startDate')"
+            class="trade-cal-field"
+          />
+          <el-date-picker
+            v-model="tradeCalendarFilters.endDate"
+            type="date"
+            value-format="YYYYMMDD"
+            :placeholder="t('adminStocks.tradeCal.endDate')"
+            class="trade-cal-field"
+          />
+        </div>
+
+        <el-table
+          :data="pagedTradeCalendarRows"
+          v-loading="loadingTradeCalendar"
+          class="stocks-table theme-table"
+          height="260"
+          row-key="cal_date"
+        >
+          <el-table-column prop="exchange" :label="t('adminStocks.tradeCal.exchange')" min-width="100" />
+          <el-table-column prop="cal_date" :label="t('adminStocks.tradeCal.calDate')" min-width="120" />
+          <el-table-column :label="t('adminStocks.tradeCal.isOpen')" min-width="120">
+            <template #default="scope">
+              <el-tag :type="scope.row.is_open === '1' ? 'success' : 'info'">
+                {{ scope.row.is_open === '1' ? t('adminStocks.tradeCal.openOnly') : t('adminStocks.tradeCal.closedOnly') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="pretrade_date" :label="t('adminStocks.tradeCal.pretradeDate')" min-width="140" />
+        </el-table>
+
+        <div class="pagination-wrap trade-cal-pagination-wrap">
+          <el-pagination
+            data-testid="trade-cal-pagination"
+            background
+            layout="total, sizes, prev, pager, next"
+            :total="tradeCalendarPagination.total"
+            :current-page="tradeCalendarPagination.page"
+            :page-size="tradeCalendarPagination.pageSize"
+            :page-sizes="[20, 50, 100]"
+            @current-change="handleTradeCalendarPageChange"
+            @size-change="handleTradeCalendarPageSizeChange"
+          />
+        </div>
       </div>
     </el-card>
   </section>
@@ -387,10 +516,49 @@ h1 {
   overflow: hidden;
 }
 
+.table-shell {
+  border: 1px solid color-mix(in srgb, var(--terminal-border) 75%, transparent);
+  border-radius: 14px;
+  padding: 0.45rem;
+  background: linear-gradient(180deg, rgba(12, 20, 35, 0.94), rgba(8, 15, 28, 0.95));
+}
+
 .pagination-wrap {
   margin-top: 0.9rem;
   display: flex;
   justify-content: flex-end;
+}
+
+.trade-cal-panel {
+  margin-top: 1rem;
+  border-top: 1px dashed color-mix(in srgb, var(--terminal-border) 72%, transparent);
+  padding-top: 0.9rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.trade-cal-pagination-wrap {
+  margin-top: 0.5rem;
+}
+
+.trade-cal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.trade-cal-header h3 {
+  margin: 0;
+}
+
+.trade-cal-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 0.55rem;
+}
+
+.trade-cal-field {
+  width: 100%;
 }
 
 @media (max-width: 980px) {
@@ -399,6 +567,10 @@ h1 {
   }
 
   .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-cal-filters {
     grid-template-columns: 1fr;
   }
 }

@@ -68,3 +68,62 @@ h4 {
   color: var(--terminal-text) !important;
   border-color: var(--terminal-border) !important;
 }
+
+.theme-table {
+  --table-header-bg: linear-gradient(180deg, rgba(20, 33, 55, 0.96), rgba(12, 22, 38, 0.96));
+  --table-body-bg: color-mix(in srgb, var(--terminal-surface, #10172a) 88%, transparent);
+  --el-table-header-bg-color: rgba(20, 33, 55, 0.96);
+  --el-table-tr-bg-color: color-mix(in srgb, var(--terminal-surface, #10172a) 88%, transparent);
+  --el-table-row-hover-bg-color: color-mix(in srgb, var(--terminal-primary) 12%, var(--terminal-surface, #10172a) 88%);
+  --el-table-border-color: color-mix(in srgb, var(--terminal-border) 68%, transparent);
+  --el-fill-color-blank: color-mix(in srgb, var(--terminal-surface, #10172a) 88%, transparent);
+  --el-bg-color: color-mix(in srgb, var(--terminal-surface, #10172a) 88%, transparent);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--table-body-bg);
+}
+
+.theme-table .el-table__inner-wrapper {
+  border-radius: inherit;
+  overflow: hidden;
+  background: var(--table-body-bg);
+}
+
+.theme-table .el-table__header-wrapper th.el-table__cell {
+  background: var(--table-header-bg);
+  color: color-mix(in srgb, var(--terminal-text) 88%, white 12%);
+  border-bottom: 1px solid color-mix(in srgb, var(--terminal-border) 80%, transparent);
+}
+
+.theme-table .el-table__row td.el-table__cell {
+  background: var(--table-body-bg);
+  border-bottom: 1px solid color-mix(in srgb, var(--terminal-border) 62%, transparent);
+}
+
+.theme-table .el-table__row:hover > td.el-table__cell {
+  background: color-mix(in srgb, var(--terminal-primary) 12%, var(--terminal-surface, #10172a) 88%);
+}
+
+.theme-table .el-table__inner-wrapper::before {
+  background-color: color-mix(in srgb, var(--terminal-border) 68%, transparent);
+}
+
+.theme-table .el-table__body-wrapper,
+.theme-table .el-table__header-wrapper,
+.theme-table .el-table__header,
+.theme-table .el-table__body,
+.theme-table .el-table__empty-block,
+.theme-table .el-table__empty-text,
+.theme-table .el-scrollbar__view,
+.theme-table .el-table__border-left-patch,
+.theme-table .el-table__fixed-right-patch,
+.theme-table .el-table__fixed-left,
+.theme-table .el-table__fixed-right {
+  background: color-mix(in srgb, var(--terminal-surface, #10172a) 88%, transparent);
+  color: var(--terminal-muted);
+}
+
+.theme-table .el-table__empty-text {
+  font-family: 'IBM Plex Mono', monospace;
+  letter-spacing: 0.04em;
+}

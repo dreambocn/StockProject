@@ -217,6 +217,149 @@ def test_stock_detail_returns_latest_snapshot(stock_client: TestClient) -> None:
     assert payload["latest_snapshot"]["close"] == 8.25
 
 
+def test_stocks_list_backfills_price_and_date_from_kline_db(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called: dict[str, object] = {
+        "count": 0,
+    }
+
+    class FakeTushareGateway:
+        def __init__(self, token: str) -> None:
+            called["token"] = token
+
+        async def fetch_daily_by_range(
+            self,
+            *,
+            ts_code: str,
+            start_date: str,
+            end_date: str,
+        ) -> list[dict[str, object]]:
+            called["count"] = int(called["count"]) + 1
+            called["ts_code"] = ts_code
+            called["start_date"] = start_date
+            called["end_date"] = end_date
+            return [
+                {
+                    "ts_code": ts_code,
+                    "trade_date": "20260304",
+                    "open": 12.1,
+                    "high": 12.4,
+                    "low": 11.9,
+                    "close": 12.25,
+                    "pre_close": 12.0,
+                    "change": 0.25,
+                    "pct_chg": 2.08,
+                    "vol": 567000,
+                    "amount": 830000,
+                }
+            ]
+
+    fake_redis = FakeRedisClient()
+    monkeypatch.setattr("app.api.routes.stocks.TushareGateway", FakeTushareGateway)
+    monkeypatch.setattr("app.api.routes.stocks.get_redis_client", lambda: fake_redis)
+
+    seed_daily_response = stock_client.get(
+        "/api/stocks/000004.SZ/daily",
+        params={
+            "period": "daily",
+            "limit": 1,
+            "start_date": "20260301",
+            "end_date": "20260305",
+        },
+    )
+    assert seed_daily_response.status_code == 200
+    assert called["count"] == 1
+
+    list_response = stock_client.get(
+        "/api/stocks",
+        params={
+            "keyword": "000004",
+            "list_status": "ALL",
+        },
+    )
+
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert len(payload) == 1
+    assert payload[0]["ts_code"] == "000004.SZ"
+    assert payload[0]["close"] == 12.25
+    assert payload[0]["pct_chg"] == 2.08
+    assert payload[0]["trade_date"] == "2026-03-04"
+    assert called["count"] == 1
+
+
+def test_stocks_list_falls_back_to_tushare_and_persists_latest_quote(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called: dict[str, object] = {
+        "count": 0,
+    }
+
+    class FakeTushareGateway:
+        def __init__(self, token: str) -> None:
+            called["token"] = token
+
+        async def fetch_daily_by_range(
+            self,
+            *,
+            ts_code: str,
+            start_date: str,
+            end_date: str,
+        ) -> list[dict[str, object]]:
+            called["count"] = int(called["count"]) + 1
+            called["ts_code"] = ts_code
+            called["start_date"] = start_date
+            called["end_date"] = end_date
+            return [
+                {
+                    "ts_code": ts_code,
+                    "trade_date": "20260305",
+                    "open": 12.3,
+                    "high": 12.8,
+                    "low": 12.0,
+                    "close": 12.6,
+                    "pre_close": 12.25,
+                    "change": 0.35,
+                    "pct_chg": 2.86,
+                    "vol": 620000,
+                    "amount": 910000,
+                }
+            ]
+
+    monkeypatch.setattr("app.api.routes.stocks.TushareGateway", FakeTushareGateway)
+
+    first_response = stock_client.get(
+        "/api/stocks",
+        params={
+            "keyword": "000004",
+            "list_status": "ALL",
+        },
+    )
+
+    assert first_response.status_code == 200
+    first_payload = first_response.json()
+    assert len(first_payload) == 1
+    assert first_payload[0]["close"] == 12.6
+    assert first_payload[0]["trade_date"] == "2026-03-05"
+    assert called["count"] == 1
+
+    second_response = stock_client.get(
+        "/api/stocks",
+        params={
+            "keyword": "000004",
+            "list_status": "ALL",
+        },
+    )
+
+    assert second_response.status_code == 200
+    second_payload = second_response.json()
+    assert len(second_payload) == 1
+    assert second_payload[0]["close"] == 12.6
+    assert second_payload[0]["trade_date"] == "2026-03-05"
+    assert called["count"] == 1
+
+
 def test_stock_daily_returns_recent_records(
     stock_client: TestClient, monkeypatch
 ) -> None:

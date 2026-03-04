@@ -132,4 +132,40 @@ describe('AdminStocksView', () => {
     expect(queryCall[0]).toContain('/api/admin/stocks?list_status=G&page=1&page_size=20')
     expect(queryCall[1].method).toBe('GET')
   })
+
+  it('queries trade calendar from db-first stock endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [],
+          total: 0,
+          page: 1,
+          page_size: 20,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            exchange: 'SSE',
+            cal_date: '2026-03-03',
+            is_open: '1',
+            pretrade_date: '2026-03-02',
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountAdminStocksView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="trade-cal-query"]').trigger('click')
+    await flushPromises()
+
+    const tradeCalCall = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(tradeCalCall[0]).toContain('/api/stocks/trade-cal?exchange=SSE')
+    expect(tradeCalCall[1].method).toBe('GET')
+    expect(wrapper.text()).toContain('2026-03-03')
+    expect(wrapper.find('[data-testid="trade-cal-pagination"]').exists()).toBe(true)
+  })
 })

@@ -44,7 +44,7 @@
   - 新增 `stock_instruments`、`stock_daily_snapshots`、`stock_kline_bars`、`stock_trade_calendars`、`stock_adj_factors`、`stock_sync_cursors` 六张表
   - 接入 Tushare 数据源并完整保留 `L/D/P/G` 股票基础库
   - 接入“最近 120 个交易日”增量行情同步
-  - `/api/stocks` 支持关键词搜索（名称/代码/TS Code）与显式状态筛选
+  - `/api/stocks` 支持关键词搜索（名称/代码/TS Code）与显式状态筛选，并对 `close/trade_date` 执行 DB-first 补全（snapshot -> daily kline -> Tushare）
   - `/api/stocks/{ts_code}` 提供股票详情与最新快照
   - `/api/stocks/{ts_code}/daily` 支持 `daily/weekly/monthly` 周期，先查库再回源并带 10 分钟缓存
   - `POST /api/stocks/sync/full` 支持登录态触发股票基础信息全量更新
@@ -73,6 +73,7 @@
   - 语言切换器采用胶囊分段样式
   - 已添加滑块式 active 背景动效
 - 首页股票卡片已切换为后端真实数据，支持关键词搜索。
+- 首页对缺失价格/日期的卡片增加轻量补全：仅补拉该股票最近一条 `daily` 数据并回填展示。
 - 首页仪表盘股票区采用瀑布流布局，并在滚动到底部时自动加载下一页股票数据。
 - 新增股票详情页（最新快照 + 最近 60 个交易日日线）。
 

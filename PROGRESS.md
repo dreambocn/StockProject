@@ -114,6 +114,11 @@ Last update: 2026-03-04
   - Added `GET /api/stocks/trade-cal` with DB-first + Tushare fallback + write-through persistence
   - Added `GET /api/stocks/{ts_code}/adj-factor` with DB-first + Tushare fallback + write-through persistence
   - Added route tests covering fallback and second-request DB hit behavior
+- Completed home-card quote completion enhancement:
+  - `GET /api/stocks` now backfills missing `close/trade_date/pct_chg` via DB-first chain (`stock_daily_snapshots` -> `stock_kline_bars(daily)` -> Tushare `daily`)
+  - Tushare list fallback now persists latest available daily quotes into `stock_kline_bars` for subsequent direct DB hits
+  - Home view adds lightweight missing-card quote patching (`daily?limit=1`) to reduce `--` in price/date display
+  - Added backend/frontend tests for quote backfill and card-display completion behavior
 
 ## In Progress
 
