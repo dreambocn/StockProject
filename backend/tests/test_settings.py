@@ -49,3 +49,6 @@ def test_settings_captcha_defaults() -> None:
     assert settings.login_fail_window_seconds == 900
     assert settings.captcha_ttl_seconds == 300
     assert settings.captcha_length == 4
+    assert settings.email_code_ttl_seconds == 300
+    assert settings.email_code_cooldown_seconds == 60
+    assert settings.email_code_length == 6

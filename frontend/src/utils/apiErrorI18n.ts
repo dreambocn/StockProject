@@ -9,6 +9,9 @@ const API_ERROR_KEY_MAP: Record<string, string> = {
   'current password is incorrect': 'errors.currentPasswordIncorrect',
   'captcha required': 'errors.captchaRequired',
   'captcha invalid': 'errors.captchaInvalid',
+  'email verification code invalid': 'errors.emailCodeInvalid',
+  'email verification code send too frequent': 'errors.emailCodeTooFrequent',
+  'email service unavailable': 'errors.emailServiceUnavailable',
   'Password must be 8-128 chars and include uppercase, lowercase, number, and special character':
     'errors.passwordPolicy',
 }

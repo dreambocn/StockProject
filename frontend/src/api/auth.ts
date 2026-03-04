@@ -26,8 +26,20 @@ export type UserProfile = {
   is_active: boolean
 }
 
+export type EmailCodeSendResponse = {
+  message: string
+  expires_in: number
+  cooldown_in: number
+}
+
 export const authApi = {
-  register: (payload: { username: string; email: string; password: string }) =>
+  sendRegisterEmailCode: (email: string) =>
+    requestJson<EmailCodeSendResponse>('/api/auth/register/email-code', {
+      method: 'POST',
+      body: { email },
+    }),
+
+  register: (payload: { username: string; email: string; email_code: string; password: string }) =>
     requestJson<UserProfile>('/api/auth/register', { method: 'POST', body: payload }),
 
   login: (payload: LoginPayload) =>
@@ -47,12 +59,30 @@ export const authApi = {
 
   changePassword: (
     accessToken: string,
-    payload: { current_password: string; new_password: string },
+    payload: { current_password: string; new_password: string; email_code: string },
   ) =>
     requestJson<{ message: string }>('/api/auth/change-password', {
       method: 'POST',
       body: payload,
       accessToken,
+    }),
+
+  sendChangePasswordEmailCode: (accessToken: string) =>
+    requestJson<EmailCodeSendResponse>('/api/auth/change-password/email-code', {
+      method: 'POST',
+      accessToken,
+    }),
+
+  sendResetPasswordEmailCode: (email: string) =>
+    requestJson<EmailCodeSendResponse>('/api/auth/reset-password/email-code', {
+      method: 'POST',
+      body: { email },
+    }),
+
+  resetPassword: (payload: { email: string; email_code: string; new_password: string }) =>
+    requestJson<{ message: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: payload,
     }),
 
   logout: (refreshToken: string) =>

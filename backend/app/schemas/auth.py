@@ -15,6 +15,7 @@ def _is_strong_password(value: str) -> bool:
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     email: EmailStr
+    email_code: str = Field(min_length=4, max_length=12)
     password: str = Field(min_length=8, max_length=128)
 
     @field_validator("password")
@@ -40,6 +41,7 @@ class RefreshTokenRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=8, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
+    email_code: str = Field(min_length=4, max_length=12)
 
     @field_validator("new_password")
     @classmethod
@@ -73,3 +75,31 @@ class CaptchaChallengeResponse(BaseModel):
     captcha_id: str
     image_base64: str
     expires_in: int
+
+
+class RegisterEmailCodeRequest(BaseModel):
+    email: EmailStr
+
+
+class EmailCodeSendResponse(BaseModel):
+    message: str
+    expires_in: int
+    cooldown_in: int
+
+
+class ResetPasswordEmailCodeRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    email_code: str = Field(min_length=4, max_length=12)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password_strength(cls, value: str) -> str:
+        if not _is_strong_password(value):
+            raise ValueError(PASSWORD_POLICY_MESSAGE)
+
+        return value

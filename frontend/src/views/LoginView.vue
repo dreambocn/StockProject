@@ -113,6 +113,9 @@ const submitLogin = async () => {
       <p class="jump-link">
         {{ t('auth.login.noAccount') }}<router-link to="/register">{{ t('auth.login.goRegister') }}</router-link>
       </p>
+      <p class="jump-link secondary">
+        <router-link to="/reset-password">{{ t('auth.login.forgotPassword') }}</router-link>
+      </p>
     </article>
   </section>
 </template>
@@ -190,9 +193,14 @@ h1 {
 .jump-link {
   margin: 0.9rem 0 0;
   color: var(--terminal-muted);
+  text-align: right;
 }
 
 .jump-link a {
   color: var(--terminal-primary);
+}
+
+.jump-link.secondary {
+  margin-top: 0.35rem;
 }
 </style>

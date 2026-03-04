@@ -19,9 +19,30 @@ const errorMessage = ref('')
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 const form = reactive({
-  currentPassword: '',
-  newPassword: '',
+  email: '',
   emailCode: '',
+  newPassword: '',
+  confirmPassword: '',
+})
+
+const strength = computed(() => getPasswordStrength(form.newPassword))
+const strengthLabel = computed(() => {
+  if (strength.value === 'none') return t('password.none')
+  if (strength.value === 'strong') return t('password.strong')
+  if (strength.value === 'medium') return t('password.medium')
+  return t('password.weak')
+})
+const strengthPercent = computed(() => {
+  if (strength.value === 'none') return 0
+  if (strength.value === 'strong') return 100
+  if (strength.value === 'medium') return 66
+  return 33
+})
+const strengthStatus = computed(() => {
+  if (strength.value === 'none') return undefined
+  if (strength.value === 'strong') return 'success'
+  if (strength.value === 'medium') return 'warning'
+  return 'exception'
 })
 
 const startCodeCountdown = (seconds: number) => {
@@ -45,16 +66,17 @@ const startCodeCountdown = (seconds: number) => {
 }
 
 const sendEmailCode = async () => {
-  if (sendingCode.value || codeCountdown.value > 0) {
+  if (!form.email || sendingCode.value || codeCountdown.value > 0) {
     return
   }
 
   sendingCode.value = true
-  successMessage.value = ''
   errorMessage.value = ''
+  successMessage.value = ''
   try {
-    const result = await authStore.sendChangePasswordEmailCode()
+    const result = await authStore.sendResetPasswordEmailCode(form.email)
     startCodeCountdown(result.cooldown_in)
+    successMessage.value = t('resetPassword.codeSent')
   } catch (error) {
     errorMessage.value = mapApiErrorMessage(error, t, 'errors.fallback')
   } finally {
@@ -62,30 +84,16 @@ const sendEmailCode = async () => {
   }
 }
 
-const strength = computed(() => getPasswordStrength(form.newPassword))
-const strengthLabel = computed(() => {
-  if (strength.value === 'none') return t('password.none')
-  if (strength.value === 'strong') return t('password.strong')
-  if (strength.value === 'medium') return t('password.medium')
-  return t('password.weak')
-})
-const strengthPercent = computed(() => {
-  if (strength.value === 'none') return 0
-  if (strength.value === 'strong') return 100
-  if (strength.value === 'medium') return 66
-  return 33
-})
-const strengthStatus = computed(() => {
-  if (strength.value === 'none') return undefined
-  if (strength.value === 'strong') return 'success'
-  if (strength.value === 'medium') return 'warning'
-  return 'exception'
-})
-
-const submitChangePassword = async () => {
+const submitResetPassword = async () => {
   loading.value = true
-  successMessage.value = ''
   errorMessage.value = ''
+  successMessage.value = ''
+
+  if (form.newPassword !== form.confirmPassword) {
+    errorMessage.value = t('resetPassword.mismatch')
+    loading.value = false
+    return
+  }
 
   if (!isStrongPassword(form.newPassword)) {
     errorMessage.value = t(PASSWORD_POLICY_MESSAGE_KEY)
@@ -94,11 +102,11 @@ const submitChangePassword = async () => {
   }
 
   try {
-    await authStore.changePassword(form.currentPassword, form.newPassword, form.emailCode.trim())
-    successMessage.value = t('changePassword.success')
-    form.currentPassword = ''
-    form.newPassword = ''
-    form.emailCode = ''
+    await authStore.resetPassword(form.email, form.emailCode.trim(), form.newPassword)
+    successMessage.value = t('resetPassword.success')
+    setTimeout(() => {
+      void router.push('/login')
+    }, 800)
   } catch (error) {
     errorMessage.value = mapApiErrorMessage(error, t, 'errors.fallback')
   } finally {
@@ -111,98 +119,84 @@ onBeforeUnmount(() => {
     clearInterval(countdownTimer)
   }
 })
-
-const backToProfile = async () => {
-  await router.push('/profile')
-}
 </script>
 
 <template>
-  <section class="profile-page" v-motion :initial="{ opacity: 0, y: 18 }" :enter="{ opacity: 1, y: 0 }">
-    <el-card class="profile-card" shadow="never">
-      <div class="title-row">
-        <h1>{{ t('changePassword.title') }}</h1>
-        <el-button text @click="backToProfile">{{ t('changePassword.backToProfile') }}</el-button>
-      </div>
-      <el-form label-position="top" @submit.prevent="submitChangePassword">
-        <el-form-item :label="t('changePassword.currentPassword')">
-          <el-input v-model="form.currentPassword" type="password" show-password />
+  <section class="auth-page" v-motion :initial="{ opacity: 0, y: 18 }" :enter="{ opacity: 1, y: 0 }">
+    <article class="auth-panel">
+      <p class="panel-kicker">{{ t('resetPassword.kicker') }}</p>
+      <h1>{{ t('resetPassword.title') }}</h1>
+      <p class="panel-note">{{ t('resetPassword.note') }}</p>
+
+      <el-form label-position="top" @submit.prevent="submitResetPassword">
+        <el-form-item :label="t('resetPassword.email')">
+          <el-input v-model="form.email" :placeholder="t('resetPassword.emailPlaceholder')" />
         </el-form-item>
-        <el-form-item :label="t('changePassword.newPassword')">
-          <el-input v-model="form.newPassword" type="password" show-password :placeholder="t('changePassword.newPasswordPlaceholder')" />
-        </el-form-item>
-        <el-form-item :label="t('changePassword.emailCode')">
-          <el-input v-model="form.emailCode" class="code-input" :placeholder="t('changePassword.emailCodePlaceholder')">
+        <el-form-item :label="t('resetPassword.emailCode')">
+          <el-input v-model="form.emailCode" class="code-input" :placeholder="t('resetPassword.emailCodePlaceholder')">
             <template #append>
-              <el-button class="code-btn" :class="{ 'is-sending': sendingCode }" native-type="button" :disabled="sendingCode || codeCountdown > 0" @click="sendEmailCode">
-                {{ codeCountdown > 0 ? `${codeCountdown}s` : t('changePassword.sendEmailCode') }}
+              <el-button class="code-btn" :class="{ 'is-sending': sendingCode }" native-type="button" :disabled="sendingCode || !form.email || codeCountdown > 0" @click="sendEmailCode">
+                {{ codeCountdown > 0 ? `${codeCountdown}s` : t('resetPassword.sendCode') }}
               </el-button>
             </template>
           </el-input>
         </el-form-item>
-
+        <el-form-item :label="t('resetPassword.newPassword')">
+          <el-input v-model="form.newPassword" type="password" show-password :placeholder="t('resetPassword.newPasswordPlaceholder')" />
+        </el-form-item>
         <transition name="strength-fade">
           <div v-if="strength !== 'none'" class="strength-wrap">
             <span>{{ t('changePassword.strength') }}：{{ strengthLabel }}</span>
             <el-progress :percentage="strengthPercent" :status="strengthStatus" :show-text="false" />
           </div>
         </transition>
-
+        <el-form-item :label="t('resetPassword.confirmPassword')">
+          <el-input v-model="form.confirmPassword" type="password" show-password :placeholder="t('resetPassword.confirmPasswordPlaceholder')" />
+        </el-form-item>
         <el-alert v-if="successMessage" class="form-alert" :title="successMessage" type="success" show-icon :closable="false" />
         <el-alert v-if="errorMessage" class="form-alert" :title="errorMessage" type="error" show-icon :closable="false" />
-        <el-button class="submit-btn" type="primary" native-type="submit" :loading="loading">
-          {{ t('changePassword.submit') }}
+        <el-button class="submit-btn" native-type="submit" type="primary" :loading="loading">
+          {{ t('resetPassword.submit') }}
         </el-button>
       </el-form>
-    </el-card>
+
+      <p class="jump-link">
+        <router-link to="/login">{{ t('resetPassword.backToLogin') }}</router-link>
+      </p>
+    </article>
   </section>
 </template>
 
 <style scoped>
-.profile-page {
-  display: grid;
-  gap: 1rem;
+.auth-page {
+  max-width: 560px;
+  margin: 0 auto;
 }
 
-.profile-card {
+.auth-panel {
   border: 1px solid var(--terminal-border);
-  border-radius: 16px;
   background: linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(11, 18, 32, 0.96));
+  border-radius: 16px;
+  padding: 1.3rem;
+  box-shadow: var(--terminal-shadow);
 }
 
-.title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.8rem;
-  margin-bottom: 0.6rem;
+.panel-kicker {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--terminal-warning);
+  letter-spacing: 0.12em;
+  font-size: 0.76rem;
+  text-transform: uppercase;
 }
 
 h1 {
-  margin: 0;
+  margin: 0.45rem 0;
 }
 
-.strength-wrap {
-  margin-bottom: 0.7rem;
+.panel-note {
+  margin: 0 0 1rem;
   color: var(--terminal-muted);
-}
-
-.strength-fade-enter-active,
-.strength-fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.strength-fade-enter-from,
-.strength-fade-leave-to {
-  opacity: 0;
-}
-
-.form-alert {
-  margin-bottom: 0.75rem;
-}
-
-.submit-btn {
-  width: 100%;
 }
 
 .code-btn {
@@ -290,5 +284,37 @@ h1 {
 :deep(.code-input .el-input-group__append .el-button.is-loading::before) {
   inset: 0 !important;
   border-radius: 0 !important;
+}
+
+.submit-btn {
+  width: 100%;
+}
+
+.strength-wrap {
+  margin-bottom: 0.7rem;
+  color: var(--terminal-muted);
+}
+
+.strength-fade-enter-active,
+.strength-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.strength-fade-enter-from,
+.strength-fade-leave-to {
+  opacity: 0;
+}
+
+.form-alert {
+  margin-bottom: 0.75rem;
+}
+
+.jump-link {
+  margin: 0.9rem 0 0;
+  text-align: right;
+}
+
+.jump-link a {
+  color: var(--terminal-primary);
 }
 </style>

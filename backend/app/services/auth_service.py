@@ -45,6 +45,12 @@ async def get_user_by_account(session: AsyncSession, account: str) -> User | Non
     return result.scalar_one_or_none()
 
 
+async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
+    statement = select(User).where(User.email == email)
+    result = await session.execute(statement)
+    return result.scalar_one_or_none()
+
+
 async def register_user(
     session: AsyncSession,
     username: str,
@@ -139,3 +145,16 @@ async def logout(refresh_token: str, token_store: TokenStore) -> None:
 
     jti = str(payload["jti"])
     await token_store.revoke_refresh_token(jti)
+
+
+async def reset_password_by_email(
+    session: AsyncSession,
+    email: str,
+    new_password: str,
+) -> None:
+    user = await get_user_by_email(session, email)
+    if user is None:
+        raise NotFoundError("user not found")
+
+    user.password_hash = hash_password(new_password)
+    await session.commit()

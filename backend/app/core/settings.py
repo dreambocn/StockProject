@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     login_fail_window_seconds: int = 900
     captcha_ttl_seconds: int = 300
     captcha_length: int = 4
+    email_code_ttl_seconds: int = 300
+    email_code_cooldown_seconds: int = 60
+    email_code_length: int = 6
+    smtp_host: str = ""
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_port: int = 465
+    smtp_use_ssl: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -104,6 +113,16 @@ class Settings(BaseSettings):
     @property
     def refresh_token_expire_seconds(self) -> int:
         return self.refresh_token_expire_days * 24 * 60 * 60
+
+    @property
+    def smtp_from_address(self) -> str:
+        if not self.smtp_from:
+            return self.smtp_username
+
+        if self.smtp_from.startswith("${") and self.smtp_from.endswith("}"):
+            return self.smtp_username
+
+        return self.smtp_from
 
 
 @lru_cache

@@ -7,6 +7,9 @@ const messages: Record<string, string> = {
   'errors.invalidCredentials': '用户名或密码错误',
   'errors.usernameOrEmailExists': '用户名或邮箱已存在',
   'errors.passwordPolicy': '密码强度不符合要求',
+  'errors.emailCodeInvalid': '邮箱验证码错误或已过期',
+  'errors.emailCodeTooFrequent': '验证码发送过于频繁，请稍后重试',
+  'errors.emailServiceUnavailable': '邮件服务暂不可用，请稍后重试',
   'errors.validation.required': '{field}为必填项',
   'errors.validation.tooShort': '{field}至少 {min} 位',
   'errors.validation.tooLong': '{field}最多 {max} 位',
@@ -31,6 +34,22 @@ describe('mapApiErrorMessage', () => {
     })
 
     expect(mapApiErrorMessage(error, t, 'errors.fallback')).toBe('用户名或密码错误')
+  })
+
+  it('maps email verification error messages', () => {
+    const invalidCodeError = new ApiError('email verification code invalid', 400, {
+      detail: 'email verification code invalid',
+    })
+    const tooFrequentError = new ApiError('email verification code send too frequent', 429, {
+      detail: 'email verification code send too frequent',
+    })
+    const serviceUnavailableError = new ApiError('email service unavailable', 503, {
+      detail: 'email service unavailable',
+    })
+
+    expect(mapApiErrorMessage(invalidCodeError, t, 'errors.fallback')).toBe('邮箱验证码错误或已过期')
+    expect(mapApiErrorMessage(tooFrequentError, t, 'errors.fallback')).toBe('验证码发送过于频繁，请稍后重试')
+    expect(mapApiErrorMessage(serviceUnavailableError, t, 'errors.fallback')).toBe('邮件服务暂不可用，请稍后重试')
   })
 
   it('uses detail.message when backend returns detail object', () => {

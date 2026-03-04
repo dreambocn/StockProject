@@ -1,6 +1,6 @@
 import asyncio
 
-from app.cache.redis import RedisLoginChallengeStore
+from app.cache.redis import RedisEmailVerificationStore, RedisLoginChallengeStore
 
 
 class FakeRedis:
@@ -25,6 +25,15 @@ class FakeRedis:
     async def set(self, key: str, value: str, ex: int) -> None:
         self.values[key] = value
         self.expire_calls.append((key, ex))
+
+
+class FakeRedisWithNx(FakeRedis):
+    async def set(self, key: str, value: str, ex: int, nx: bool = False):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        self.expire_calls.append((key, ex))
+        return True
 
 
 def test_record_failed_login_and_reset() -> None:
@@ -60,5 +69,49 @@ def test_set_validate_and_revoke_captcha_challenge() -> None:
 
         await store.revoke_captcha_challenge(captcha_id)
         assert await store.validate_captcha_challenge(captcha_id, "AB12") is False
+
+    asyncio.run(run_test())
+
+
+def test_email_verification_store_code_and_cooldown() -> None:
+    async def run_test() -> None:
+        client = FakeRedisWithNx()
+        store = RedisEmailVerificationStore(client)  # type: ignore[arg-type]
+
+        allowed = await store.try_acquire_send_cooldown("register", "a@example.com", 60)
+        denied = await store.try_acquire_send_cooldown("register", "a@example.com", 60)
+
+        assert allowed is True
+        assert denied is False
+
+        await store.set_email_verification_code(
+            "register", "a@example.com", "123456", 300
+        )
+        assert (
+            await store.validate_email_verification_code(
+                "register", "a@example.com", "123456"
+            )
+            is True
+        )
+        assert (
+            await store.validate_email_verification_code(
+                "register", "a@example.com", "000000"
+            )
+            is False
+        )
+
+        await store.consume_email_verification_code("register", "a@example.com")
+        assert (
+            await store.validate_email_verification_code(
+                "register", "a@example.com", "123456"
+            )
+            is False
+        )
+
+        await store.release_send_cooldown("register", "a@example.com")
+        assert (
+            await store.try_acquire_send_cooldown("register", "a@example.com", 60)
+            is True
+        )
 
     asyncio.run(run_test())

@@ -26,6 +26,7 @@ const mountLoginView = async () => {
       { path: '/', component: { template: '<div>home</div>' } },
       { path: '/login', component: LoginView },
       { path: '/register', component: { template: '<div>register</div>' } },
+      { path: '/reset-password', component: { template: '<div>reset-password</div>' } },
     ],
   })
   await router.push('/login')

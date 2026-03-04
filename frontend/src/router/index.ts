@@ -5,6 +5,7 @@ import ChangePasswordView from '../views/ChangePasswordView.vue'
 import LoginView from '../views/LoginView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import RegisterView from '../views/RegisterView.vue'
+import ResetPasswordView from '../views/ResetPasswordView.vue'
 import { useAuthStore } from '../stores/auth'
 import { createAuthGuard } from './guards'
 
@@ -33,6 +34,12 @@ export const router = createRouter({
       path: '/register',
       name: 'register',
       component: RegisterView,
+      meta: { guestOnly: true },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: ResetPasswordView,
       meta: { guestOnly: true },
     },
     {

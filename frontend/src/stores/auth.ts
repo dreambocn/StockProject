@@ -104,8 +104,15 @@ export const useAuthStore = defineStore('auth', () => {
     await fetchMe()
   }
 
-  const register = async (username: string, email: string, password: string) => {
-    await authApi.register({ username, email, password })
+  const sendRegisterEmailCode = async (email: string) => authApi.sendRegisterEmailCode(email)
+
+  const register = async (
+    username: string,
+    email: string,
+    password: string,
+    emailCode: string,
+  ) => {
+    await authApi.register({ username, email, email_code: emailCode, password })
     await login(username, password)
   }
 
@@ -119,7 +126,31 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  const changePassword = async (currentPassword: string, newPassword: string) => {
+  const sendChangePasswordEmailCode = async () => {
+    if (!accessToken.value) {
+      throw new Error('No access token')
+    }
+
+    return authApi.sendChangePasswordEmailCode(accessToken.value)
+  }
+
+  const sendResetPasswordEmailCode = async (email: string) => {
+    return authApi.sendResetPasswordEmailCode(email)
+  }
+
+  const resetPassword = async (email: string, emailCode: string, newPassword: string) => {
+    await authApi.resetPassword({
+      email,
+      email_code: emailCode,
+      new_password: newPassword,
+    })
+  }
+
+  const changePassword = async (
+    currentPassword: string,
+    newPassword: string,
+    emailCode: string,
+  ) => {
     if (!accessToken.value) {
       throw new Error('No access token')
     }
@@ -127,6 +158,7 @@ export const useAuthStore = defineStore('auth', () => {
     await authApi.changePassword(accessToken.value, {
       current_password: currentPassword,
       new_password: newPassword,
+      email_code: emailCode,
     })
   }
 
@@ -139,9 +171,13 @@ export const useAuthStore = defineStore('auth', () => {
     hydrateFromStorage,
     initialize,
     login,
+    sendRegisterEmailCode,
     register,
     fetchMe,
     refreshSession,
+    sendChangePasswordEmailCode,
+    sendResetPasswordEmailCode,
+    resetPassword,
     changePassword,
     clearAuth,
     logout,

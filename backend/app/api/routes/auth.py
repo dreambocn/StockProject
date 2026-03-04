@@ -5,10 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import (
+    get_email_sender,
+    get_email_verification_store,
     get_current_user,
     get_login_challenge_store,
     get_token_store,
 )
+from app.cache.email_verification_store import EmailVerificationStore
 from app.cache.login_challenge_store import LoginChallengeStore
 from app.cache.token_store import TokenStore
 from app.core.logging import get_logger
@@ -18,8 +21,12 @@ from app.models.user import User
 from app.schemas.auth import (
     CaptchaChallengeResponse,
     ChangePasswordRequest,
+    EmailCodeSendResponse,
     LoginRequest,
     MessageResponse,
+    RegisterEmailCodeRequest,
+    ResetPasswordEmailCodeRequest,
+    ResetPasswordRequest,
     RefreshTokenRequest,
     RegisterRequest,
     TokenPairResponse,
@@ -30,10 +37,19 @@ from app.services.auth_service import (
     AuthError,
     authenticate_user,
     change_password,
+    get_user_by_email,
     issue_token_pair,
     logout,
     refresh_token_pair,
     register_user,
+    reset_password_by_email,
+)
+from app.services.email_service import EmailSender
+from app.services.email_verification_service import (
+    CHANGE_PASSWORD_EMAIL_SCENE,
+    REGISTER_EMAIL_SCENE,
+    RESET_PASSWORD_EMAIL_SCENE,
+    generate_email_verification_code,
 )
 
 
@@ -54,7 +70,23 @@ def _build_login_identity_key(account: str, client_ip: str) -> str:
 async def register(
     payload: RegisterRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    email_verification_store: Annotated[
+        EmailVerificationStore, Depends(get_email_verification_store)
+    ],
 ) -> UserResponse:
+    is_email_code_valid = (
+        await email_verification_store.validate_email_verification_code(
+            REGISTER_EMAIL_SCENE,
+            payload.email,
+            payload.email_code.strip(),
+        )
+    )
+    if not is_email_code_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="email verification code invalid",
+        )
+
     try:
         user = await register_user(
             session,
@@ -70,8 +102,61 @@ async def register(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    await email_verification_store.consume_email_verification_code(
+        REGISTER_EMAIL_SCENE,
+        payload.email,
+    )
     logger.info("event=auth.register.success user_id=%s", user.id)
     return UserResponse.model_validate(user)
+
+
+@router.post("/register/email-code", response_model=EmailCodeSendResponse)
+async def send_register_email_code(
+    payload: RegisterEmailCodeRequest,
+    email_verification_store: Annotated[
+        EmailVerificationStore, Depends(get_email_verification_store)
+    ],
+    email_sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> EmailCodeSendResponse:
+    is_allowed = await email_verification_store.try_acquire_send_cooldown(
+        REGISTER_EMAIL_SCENE,
+        payload.email,
+        settings.email_code_cooldown_seconds,
+    )
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email verification code send too frequent",
+        )
+
+    code = generate_email_verification_code(settings.email_code_length)
+    try:
+        await email_sender.send_register_verification_code(
+            payload.email,
+            code,
+            settings.email_code_ttl_seconds,
+        )
+        await email_verification_store.set_email_verification_code(
+            REGISTER_EMAIL_SCENE,
+            payload.email,
+            code,
+            settings.email_code_ttl_seconds,
+        )
+    except RuntimeError as exc:
+        await email_verification_store.release_send_cooldown(
+            REGISTER_EMAIL_SCENE,
+            payload.email,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="email service unavailable",
+        ) from exc
+
+    return EmailCodeSendResponse(
+        message="email code sent",
+        expires_in=settings.email_code_ttl_seconds,
+        cooldown_in=settings.email_code_cooldown_seconds,
+    )
 
 
 @router.post("/login", response_model=TokenPairResponse)
@@ -185,7 +270,24 @@ async def update_password(
     payload: ChangePasswordRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    email_verification_store: Annotated[
+        EmailVerificationStore, Depends(get_email_verification_store)
+    ],
+    email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> MessageResponse:
+    is_email_code_valid = (
+        await email_verification_store.validate_email_verification_code(
+            CHANGE_PASSWORD_EMAIL_SCENE,
+            current_user.email,
+            payload.email_code.strip(),
+        )
+    )
+    if not is_email_code_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="email verification code invalid",
+        )
+
     try:
         await change_password(
             session,
@@ -201,8 +303,174 @@ async def update_password(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    await email_verification_store.consume_email_verification_code(
+        CHANGE_PASSWORD_EMAIL_SCENE,
+        current_user.email,
+    )
+    try:
+        await email_sender.send_password_changed_notice(current_user.email)
+    except RuntimeError:
+        logger.warning(
+            "event=auth.password_change.notice_failed user_id=%s reason=email_service_unavailable",
+            current_user.id,
+        )
+
     logger.info("event=auth.password_change.success user_id=%s", current_user.id)
     return MessageResponse(message="password changed")
+
+
+@router.post("/change-password/email-code", response_model=EmailCodeSendResponse)
+async def send_change_password_email_code(
+    current_user: Annotated[User, Depends(get_current_user)],
+    email_verification_store: Annotated[
+        EmailVerificationStore, Depends(get_email_verification_store)
+    ],
+    email_sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> EmailCodeSendResponse:
+    is_allowed = await email_verification_store.try_acquire_send_cooldown(
+        CHANGE_PASSWORD_EMAIL_SCENE,
+        current_user.email,
+        settings.email_code_cooldown_seconds,
+    )
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email verification code send too frequent",
+        )
+
+    code = generate_email_verification_code(settings.email_code_length)
+    try:
+        await email_sender.send_change_password_verification_code(
+            current_user.email,
+            code,
+            settings.email_code_ttl_seconds,
+        )
+        await email_verification_store.set_email_verification_code(
+            CHANGE_PASSWORD_EMAIL_SCENE,
+            current_user.email,
+            code,
+            settings.email_code_ttl_seconds,
+        )
+    except RuntimeError as exc:
+        await email_verification_store.release_send_cooldown(
+            CHANGE_PASSWORD_EMAIL_SCENE,
+            current_user.email,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="email service unavailable",
+        ) from exc
+
+    return EmailCodeSendResponse(
+        message="email code sent",
+        expires_in=settings.email_code_ttl_seconds,
+        cooldown_in=settings.email_code_cooldown_seconds,
+    )
+
+
+@router.post("/reset-password/email-code", response_model=EmailCodeSendResponse)
+async def send_reset_password_email_code(
+    payload: ResetPasswordEmailCodeRequest,
+    email_verification_store: Annotated[
+        EmailVerificationStore, Depends(get_email_verification_store)
+    ],
+    email_sender: Annotated[EmailSender, Depends(get_email_sender)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> EmailCodeSendResponse:
+    is_allowed = await email_verification_store.try_acquire_send_cooldown(
+        RESET_PASSWORD_EMAIL_SCENE,
+        payload.email,
+        settings.email_code_cooldown_seconds,
+    )
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email verification code send too frequent",
+        )
+
+    user = await get_user_by_email(session, payload.email)
+    if user is None:
+        return EmailCodeSendResponse(
+            message="email code sent",
+            expires_in=settings.email_code_ttl_seconds,
+            cooldown_in=settings.email_code_cooldown_seconds,
+        )
+
+    code = generate_email_verification_code(settings.email_code_length)
+    try:
+        await email_sender.send_reset_password_verification_code(
+            payload.email,
+            code,
+            settings.email_code_ttl_seconds,
+        )
+        await email_verification_store.set_email_verification_code(
+            RESET_PASSWORD_EMAIL_SCENE,
+            payload.email,
+            code,
+            settings.email_code_ttl_seconds,
+        )
+    except RuntimeError as exc:
+        await email_verification_store.release_send_cooldown(
+            RESET_PASSWORD_EMAIL_SCENE,
+            payload.email,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="email service unavailable",
+        ) from exc
+
+    return EmailCodeSendResponse(
+        message="email code sent",
+        expires_in=settings.email_code_ttl_seconds,
+        cooldown_in=settings.email_code_cooldown_seconds,
+    )
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    email_verification_store: Annotated[
+        EmailVerificationStore, Depends(get_email_verification_store)
+    ],
+    email_sender: Annotated[EmailSender, Depends(get_email_sender)],
+) -> MessageResponse:
+    is_email_code_valid = (
+        await email_verification_store.validate_email_verification_code(
+            RESET_PASSWORD_EMAIL_SCENE,
+            payload.email,
+            payload.email_code.strip(),
+        )
+    )
+    if not is_email_code_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="email verification code invalid",
+        )
+
+    try:
+        await reset_password_by_email(
+            session,
+            payload.email,
+            payload.new_password,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    await email_verification_store.consume_email_verification_code(
+        RESET_PASSWORD_EMAIL_SCENE,
+        payload.email,
+    )
+    try:
+        await email_sender.send_password_changed_notice(payload.email)
+    except RuntimeError:
+        logger.warning(
+            "event=auth.password_reset.notice_failed email=%s reason=email_service_unavailable",
+            payload.email,
+        )
+
+    logger.info("event=auth.password_reset.success email=%s", payload.email)
+    return MessageResponse(message="password reset")
 
 
 @router.post("/logout", response_model=MessageResponse)

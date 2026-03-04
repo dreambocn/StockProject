@@ -17,16 +17,23 @@
   - 达到失败阈值后强制验证码
   - 提供验证码获取接口 `GET /api/auth/captcha`
   - 登录接口支持 `captcha_id` 与 `captcha_code`
+- 新增邮箱验证码安全链路：
+  - 注册前必须先获取并提交邮箱验证码
+  - 修改密码前必须先获取并提交邮箱验证码（与当前密码双校验）
+  - 修改密码成功后发送邮箱通知
+  - 新增忘记密码重置流程（邮箱验证码 + 新密码）
 - 启动时支持自动检查/创建数据库、表与 schema（可配置）。
 - 完成请求级日志能力（含 `X-Request-ID`）。
 
 ### 前端能力
 
 - 完成认证页面与流程：登录、注册、个人中心、修改密码。
+- 新增重置密码页面（登录失败/忘记密码场景）。
 - 接入路由守卫（`guestOnly` / `requiresAuth`）与登录后重定向。
 - 完成 Pinia 认证状态管理（含 token 持久化与会话恢复）。
 - 完成密码确认与密码强度提示体验。
 - 登录页支持验证码挑战展示与刷新。
+- 注册页与修改密码页支持邮箱验证码发送、输入与倒计时。
 - 完成 i18n 多语言基础：`zh-CN` 与 `en-US`，默认中文。
 - 顶部语言切换支持本地持久化（`localStorage` 的 `app.locale`）。
 - 认证相关错误信息已接入本地化映射（包含 422 校验错误首条提示）。
@@ -84,6 +91,18 @@ uv run fastapi dev main.py
 - `LOGIN_FAIL_WINDOW_SECONDS`（默认 `900`）
 - `CAPTCHA_TTL_SECONDS`（默认 `300`）
 - `CAPTCHA_LENGTH`（默认 `4`）
+- `EMAIL_CODE_TTL_SECONDS`（默认 `300`）
+- `EMAIL_CODE_COOLDOWN_SECONDS`（默认 `60`）
+- `EMAIL_CODE_LENGTH`（默认 `6`）
+
+邮件服务参数（`backend/.env`）：
+
+- `SMTP_HOST`
+- `SMTP_PORT`（默认 `465`）
+- `SMTP_USERNAME`
+- `SMTP_PASSWORD`
+- `SMTP_FROM`（可选，不填则使用 `SMTP_USERNAME`）
+- `SMTP_USE_SSL`（默认 `true`）
 
 ### 单独启动前端
 
@@ -99,10 +118,14 @@ npm run dev
 ## Auth API 列表
 
 - `POST /api/auth/register`
+- `POST /api/auth/register/email-code`
 - `POST /api/auth/login`（`account` 支持用户名或邮箱）
 - `GET /api/auth/captcha`
 - `POST /api/auth/refresh`
 - `POST /api/auth/change-password`
+- `POST /api/auth/change-password/email-code`
+- `POST /api/auth/reset-password/email-code`
+- `POST /api/auth/reset-password`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 

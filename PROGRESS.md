@@ -50,6 +50,16 @@ Last update: 2026-03-04
   - Default locale is Chinese (`zh-CN`)
   - Added top-nav language switch with persisted locale preference (`app.locale`)
   - Migrated App/Home/Login/Register/Profile/ChangePassword UI strings to i18n keys
+- Implemented email verification for account security:
+  - Register now requires an email verification code before user creation
+  - Change-password now requires current password + email verification code
+  - Added email-code send endpoints for register/change-password flows
+  - Added password-changed email notice after successful password updates
+  - Added frontend email-code UX (send action, countdown, localized errors)
+- Implemented forgot-password reset flow:
+  - Added reset-password email-code send endpoint
+  - Added reset-password endpoint with email code + new password
+  - Added dedicated frontend reset-password view and login-page entry
 
 ## In Progress
 
@@ -60,4 +70,4 @@ Last update: 2026-03-04
 - Add database and Redis real client initialization with startup checks.
 - Add JSON structured logging output for log ingestion systems.
 - Add frontend auth pages and route guards.
-- Add email verification and forgot-password flow.
+- Add forgot-password flow.
