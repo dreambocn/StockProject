@@ -19,17 +19,36 @@ from app.main import app
 class InMemoryTokenStore:
     def __init__(self) -> None:
         self._store: dict[str, str] = {}
+        self._user_index: dict[str, set[str]] = {}
 
     async def set_refresh_token(
         self, jti: str, user_id: str, expires_seconds: int
     ) -> None:
         self._store[jti] = user_id
+        if user_id not in self._user_index:
+            self._user_index[user_id] = set()
+        self._user_index[user_id].add(jti)
 
     async def validate_refresh_token(self, jti: str, user_id: str) -> bool:
         return self._store.get(jti) == user_id
 
     async def revoke_refresh_token(self, jti: str) -> None:
-        self._store.pop(jti, None)
+        user_id = self._store.pop(jti, None)
+        if user_id is None:
+            return
+
+        user_jtis = self._user_index.get(user_id)
+        if user_jtis is None:
+            return
+
+        user_jtis.discard(jti)
+        if not user_jtis:
+            self._user_index.pop(user_id, None)
+
+    async def revoke_all_refresh_tokens_for_user(self, user_id: str) -> None:
+        user_jtis = self._user_index.pop(user_id, set())
+        for jti in user_jtis:
+            self._store.pop(jti, None)
 
 
 class InMemoryLoginChallengeStore:
@@ -219,6 +238,12 @@ def test_register_login_refresh_change_password_logout_flow(
         headers={"Authorization": f"Bearer {login_payload['access_token']}"},
     )
     assert change_password_response.status_code == 200
+
+    refresh_after_change_password_response = auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": login_payload["refresh_token"]},
+    )
+    assert refresh_after_change_password_response.status_code == 401
 
     old_login_response = auth_client.post(
         "/api/auth/login",
@@ -606,6 +631,13 @@ def test_reset_password_flow_with_email_code(auth_client: TestClient) -> None:
     )
     assert register_response.status_code == 201
 
+    login_before_reset_response = auth_client.post(
+        "/api/auth/login",
+        json={"account": "kate", "password": "StrongP@ss1"},
+    )
+    assert login_before_reset_response.status_code == 200
+    refresh_token_before_reset = login_before_reset_response.json()["refresh_token"]
+
     send_reset_code_response = auth_client.post(
         "/api/auth/reset-password/email-code",
         json={"email": "kate@example.com"},
@@ -621,6 +653,12 @@ def test_reset_password_flow_with_email_code(auth_client: TestClient) -> None:
         },
     )
     assert reset_response.status_code == 200
+
+    refresh_after_reset_response = auth_client.post(
+        "/api/auth/refresh",
+        json={"refresh_token": refresh_token_before_reset},
+    )
+    assert refresh_after_reset_response.status_code == 401
 
     old_login_response = auth_client.post(
         "/api/auth/login",

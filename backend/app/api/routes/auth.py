@@ -282,6 +282,7 @@ async def update_password(
     payload: ChangePasswordRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    token_store: Annotated[TokenStore, Depends(get_token_store)],
     email_verification_store: Annotated[
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
@@ -307,6 +308,7 @@ async def update_password(
             user_id=current_user.id,
             current_password=payload.current_password,
             new_password=payload.new_password,
+            token_store=token_store,
         )
     except AuthError as exc:
         logger.warning(
@@ -450,6 +452,7 @@ async def send_reset_password_email_code(
 async def reset_password(
     payload: ResetPasswordRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    token_store: Annotated[TokenStore, Depends(get_token_store)],
     email_verification_store: Annotated[
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
@@ -474,6 +477,7 @@ async def reset_password(
             session,
             payload.email,
             payload.new_password,
+            token_store=token_store,
         )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

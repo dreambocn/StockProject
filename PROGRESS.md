@@ -60,6 +60,10 @@ Last update: 2026-03-04
   - Added reset-password email-code send endpoint
   - Added reset-password endpoint with email code + new password
   - Added dedicated frontend reset-password view and login-page entry
+- Hardened refresh-token session revocation for credential security events:
+  - Password change now revokes all existing refresh tokens of that user
+  - Password reset now revokes all existing refresh tokens of that user
+  - Added integration tests to verify old refresh tokens return `401` after both flows
 
 ## In Progress
 

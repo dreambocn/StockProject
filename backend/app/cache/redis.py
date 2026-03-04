@@ -24,15 +24,47 @@ class RedisTokenStore(TokenStore):
     async def set_refresh_token(
         self, jti: str, user_id: str, expires_seconds: int
     ) -> None:
-        # refresh token 与用户绑定存储，支持后续撤销与校验。
-        await self.client.set(f"auth:refresh:{jti}", user_id, ex=expires_seconds)
+        # 刷新令牌写入双索引：jti->user 与 user->jtis。
+        # 这样既能做单 token 校验，也能在改密/重置后按用户全量撤销。
+        async with self.client.pipeline(transaction=True) as pipe:
+            await (
+                pipe.set(f"auth:refresh:{jti}", user_id, ex=expires_seconds)
+                .sadd(f"auth:user_refresh:{user_id}", jti)
+                .execute()
+            )
 
     async def validate_refresh_token(self, jti: str, user_id: str) -> bool:
         value = await self.client.get(f"auth:refresh:{jti}")
         return value == user_id
 
     async def revoke_refresh_token(self, jti: str) -> None:
-        await self.client.delete(f"auth:refresh:{jti}")
+        refresh_key = f"auth:refresh:{jti}"
+        user_id = await self.client.get(refresh_key)
+
+        # 单 token 撤销也要同步维护用户索引，避免索引长期残留脏数据。
+        if user_id is None:
+            await self.client.delete(refresh_key)
+            return
+
+        async with self.client.pipeline(transaction=True) as pipe:
+            await (
+                pipe.delete(refresh_key)
+                .srem(f"auth:user_refresh:{user_id}", jti)
+                .execute()
+            )
+
+    async def revoke_all_refresh_tokens_for_user(self, user_id: str) -> None:
+        user_refresh_index_key = f"auth:user_refresh:{user_id}"
+        jtis = await self.client.smembers(user_refresh_index_key)
+        refresh_keys = [f"auth:refresh:{jti}" for jti in jtis]
+
+        # 鉴权安全边界：改密/重置后立刻废弃该用户全部 refresh token。
+        # access token 仍按短期过期策略自然失效，避免跨层强制状态同步。
+        async with self.client.pipeline(transaction=True) as pipe:
+            if refresh_keys:
+                pipe.delete(*refresh_keys)
+            pipe.delete(user_refresh_index_key)
+            await pipe.execute()
 
 
 class RedisLoginChallengeStore(LoginChallengeStore):

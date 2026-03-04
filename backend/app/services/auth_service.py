@@ -131,6 +131,7 @@ async def change_password(
     user_id: str,
     current_password: str,
     new_password: str,
+    token_store: TokenStore,
 ) -> None:
     user = await get_user_by_id(session, user_id)
     if user is None:
@@ -142,6 +143,10 @@ async def change_password(
     # 服务层只负责密码哈希更新，验证码与鉴权边界由路由层先行校验。
     user.password_hash = hash_password(new_password)
     await session.commit()
+
+    # 安全关键流程：密码变更后撤销该用户所有 refresh token。
+    # 这样历史会话无法继续换发新 access token，降低凭据泄露后的持续风险。
+    await token_store.revoke_all_refresh_tokens_for_user(user.id)
 
 
 async def logout(refresh_token: str, token_store: TokenStore) -> None:
@@ -159,6 +164,7 @@ async def reset_password_by_email(
     session: AsyncSession,
     email: str,
     new_password: str,
+    token_store: TokenStore,
 ) -> None:
     user = await get_user_by_email(session, email)
     if user is None:
@@ -167,3 +173,7 @@ async def reset_password_by_email(
     # 忘记密码链路只更新目标用户密码，邮箱验证码校验由上层完成。
     user.password_hash = hash_password(new_password)
     await session.commit()
+
+    # 安全关键流程：找回密码成功后全量撤销 refresh token。
+    # access token 保持“到期即失效”策略，避免引入额外的全局会话状态耦合。
+    await token_store.revoke_all_refresh_tokens_for_user(user.id)
