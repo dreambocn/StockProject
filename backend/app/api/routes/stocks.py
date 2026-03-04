@@ -185,6 +185,8 @@ async def _load_latest_snapshots_map(
     if not ts_codes:
         return {}
 
+    # 关键流程：先读 stock_daily_snapshots 作为“首选快照源”，优先复用已有同步结果，
+    # 避免首页列表每次都回源到第三方行情接口。
     statement = (
         select(StockDailySnapshot)
         .where(StockDailySnapshot.ts_code.in_(ts_codes))
@@ -207,6 +209,8 @@ async def _load_latest_daily_kline_map(
     if not ts_codes:
         return {}
 
+    # 关键流程：当 snapshots 不完整时，再回退读取 daily 周期 kline 持久化表。
+    # 这里按 trade_date 倒序取每个 ts_code 的第一条，确保拿到最近可用交易日。
     statement = (
         select(StockKlineBar)
         .where(StockKlineBar.ts_code.in_(ts_codes))
@@ -720,6 +724,7 @@ async def list_stocks(
         session=session, ts_codes=ts_codes
     )
 
+    # 关键流程：第一阶段只补 snapshots 缺失项，避免重复覆盖已有快照数据。
     missing_after_snapshot = [
         ts_code
         for ts_code in ts_codes
@@ -734,6 +739,7 @@ async def list_stocks(
             if _is_quote_complete(quote):
                 quote_by_ts_code[ts_code] = quote
 
+    # 关键流程：第二阶段只对仍缺失的股票回源 Tushare，控制第三方调用范围。
     missing_after_kline = [
         ts_code
         for ts_code in ts_codes

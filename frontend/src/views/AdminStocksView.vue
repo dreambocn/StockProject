@@ -198,10 +198,12 @@ const queryTradeCalendar = async () => {
 }
 
 const handleTradeCalendarPageChange = (page: number) => {
+  // 关键状态流转：只切换页码，不触发重新查询，避免分页点击导致重复请求。
   tradeCalendarPagination.page = page
 }
 
 const handleTradeCalendarPageSizeChange = (pageSize: number) => {
+  // 关键状态流转：每页条数变化后强制回到第一页，防止当前页越界导致“空页”误判。
   tradeCalendarPagination.pageSize = pageSize
   tradeCalendarPagination.page = 1
 }

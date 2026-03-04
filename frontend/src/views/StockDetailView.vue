@@ -520,6 +520,7 @@ watch(
 
 const loadData = async () => {
   if (!tsCode.value) {
+    // 关键边界：缺少 tsCode 时不发请求，直接进入错误提示分支，避免无效接口调用。
     errorMessage.value = t('errors.fallback')
     return
   }
@@ -527,6 +528,7 @@ const loadData = async () => {
   loading.value = true
   errorMessage.value = ''
   try {
+    // 关键流程：详情与K线并行拉取，缩短首屏等待；任一失败统一走降级错误提示。
     const [detailPayload, dailyPayload] = await Promise.all([
       stocksApi.getStockDetail(tsCode.value),
       stocksApi.getStockDaily(tsCode.value, {
@@ -536,6 +538,7 @@ const loadData = async () => {
     ])
     detail.value = detailPayload
     dailyRows.value = dailyPayload
+    // 关键状态流转：复权因子依赖已拉取的行情时间窗，必须在 dailyRows 更新后再请求。
     await loadAdjFactors(dailyPayload)
   } catch (error) {
     if (error instanceof ApiError) {

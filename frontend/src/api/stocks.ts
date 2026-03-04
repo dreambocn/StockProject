@@ -128,6 +128,8 @@ export const stocksApi = {
     return requestJson<StockDetail>(`/api/stocks/${encodeURIComponent(tsCode)}`)
   },
   async getStockDaily(tsCode: string, options?: StockDailyQueryOptions) {
+    // 关键流程：默认 period=daily 且 limit=60，与详情页主图窗口保持一致；
+    // 若调用方未显式传参，后端将按日线语义返回最近可用交易日数据。
     const query = buildQueryString({
       limit: options?.limit ?? 60,
       period: options?.period ?? 'daily',
@@ -140,6 +142,8 @@ export const stocksApi = {
     )
   },
   async getStockAdjFactor(tsCode: string, options?: StockAdjFactorQueryOptions) {
+    // 关键流程：复权因子默认拉较大窗口（240）用于覆盖图表历史区间，
+    // 调用方可通过 start/end 精确限定范围以降低返回体积。
     const query = buildQueryString({
       limit: options?.limit ?? 240,
       trade_date: options?.tradeDate,
@@ -151,6 +155,8 @@ export const stocksApi = {
     )
   },
   async getTradeCalendar(options?: StockTradeCalendarQueryOptions) {
+    // 关键边界：交易日历默认 exchange=SSE；is_open 仅透传 0/1，
+    // 过滤规则统一交由后端 DB-first 接口处理，避免前端本地二次筛选偏差。
     const query = buildQueryString({
       exchange: options?.exchange ?? 'SSE',
       start_date: options?.startDate,
