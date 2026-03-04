@@ -1,10 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { ApiError } from '../api/http'
 import { stocksApi, type StockDailySnapshot, type StockDetail } from '../api/stocks'
+
+type KlinePeriod = 'daily' | 'weekly' | 'monthly'
+
+type KlineRow = {
+  tsCode: string
+  tradeDateKey: string
+  tradeDateLabel: string
+  open: number
+  high: number
+  low: number
+  close: number
+  preClose: number | null
+  change: number | null
+  pctChg: number | null
+  vol: number | null
+  amount: number | null
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -14,6 +31,19 @@ const loading = ref(false)
 const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
+const selectedPeriod = ref<KlinePeriod>('daily')
+const hoveredIndex = ref<number | null>(null)
+
+const chartWidth = 980
+const chartHeight = 520
+const chartPaddingX = 42
+const panelGap = 14
+const pricePanelTop = 24
+const pricePanelHeight = 250
+const volumePanelTop = pricePanelTop + pricePanelHeight + panelGap
+const volumePanelHeight = 95
+const rsiPanelTop = volumePanelTop + volumePanelHeight + panelGap
+const rsiPanelHeight = 80
 
 const tsCode = computed(() => String(route.params.tsCode ?? '').trim().toUpperCase())
 
@@ -32,6 +62,362 @@ const formatPercent = (value: number | null) => {
   return `${sign}${value.toFixed(2)}%`
 }
 
+const formatCompactNumber = (value: number | null) => {
+  if (value === null) {
+    return '--'
+  }
+  if (value >= 100000000) {
+    return `${(value / 100000000).toFixed(2)}亿`
+  }
+  if (value >= 10000) {
+    return `${(value / 10000).toFixed(2)}万`
+  }
+  return value.toFixed(0)
+}
+
+const toTradeDateKey = (value: string) => value.replace(/-/g, '').slice(0, 8)
+
+const toTradeDateLabel = (value: string) => {
+  const key = toTradeDateKey(value)
+  if (key.length !== 8) {
+    return value
+  }
+  return `${key.slice(0, 4)}-${key.slice(4, 6)}-${key.slice(6, 8)}`
+}
+
+const toDate = (tradeDateKey: string) => {
+  const year = Number(tradeDateKey.slice(0, 4))
+  const month = Number(tradeDateKey.slice(4, 6))
+  const day = Number(tradeDateKey.slice(6, 8))
+  return new Date(year, month - 1, day)
+}
+
+const getWeekKey = (tradeDateKey: string) => {
+  const dateValue = toDate(tradeDateKey)
+  const day = dateValue.getDay() || 7
+  dateValue.setDate(dateValue.getDate() + 4 - day)
+  const yearStart = new Date(dateValue.getFullYear(), 0, 1)
+  const week = Math.ceil(((dateValue.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
+  return `${dateValue.getFullYear()}-W${String(week).padStart(2, '0')}`
+}
+
+const aggregateRows = (rows: KlineRow[], period: KlinePeriod): KlineRow[] => {
+  if (period === 'daily') {
+    return rows
+  }
+
+  const grouped = new Map<string, KlineRow[]>()
+  for (const item of rows) {
+    const key = period === 'weekly' ? getWeekKey(item.tradeDateKey) : item.tradeDateKey.slice(0, 6)
+    if (!grouped.has(key)) {
+      grouped.set(key, [])
+    }
+    grouped.get(key)?.push(item)
+  }
+
+  const result: KlineRow[] = []
+  const orderedKeys = Array.from(grouped.keys()).sort()
+  for (const key of orderedKeys) {
+    const bucket = grouped.get(key)
+    if (!bucket || bucket.length === 0) {
+      continue
+    }
+    const sortedBucket = bucket.slice().sort((a, b) => a.tradeDateKey.localeCompare(b.tradeDateKey))
+    const first = sortedBucket[0]
+    const last = sortedBucket[sortedBucket.length - 1]
+    if (!first || !last) {
+      continue
+    }
+    let high = first.high
+    let low = first.low
+    let vol = 0
+    let amount = 0
+    sortedBucket.forEach((row) => {
+      high = Math.max(high, row.high)
+      low = Math.min(low, row.low)
+      vol += row.vol ?? 0
+      amount += row.amount ?? 0
+    })
+
+    result.push({
+      tsCode: first.tsCode,
+      tradeDateKey: last.tradeDateKey,
+      tradeDateLabel: last.tradeDateLabel,
+      open: first.open,
+      high,
+      low,
+      close: last.close,
+      preClose: first.preClose,
+      change: null,
+      pctChg: null,
+      vol,
+      amount,
+    })
+  }
+
+  for (let index = 0; index < result.length; index += 1) {
+    const current = result[index]
+    if (!current) {
+      continue
+    }
+    const prevClose = index === 0 ? current.preClose : result[index - 1]?.close ?? current.preClose
+    if (prevClose === null || prevClose === 0) {
+      current.change = null
+      current.pctChg = null
+      continue
+    }
+    const change = current.close - prevClose
+    current.change = change
+    current.pctChg = (change / prevClose) * 100
+  }
+
+  return result
+}
+
+const baseRows = computed(() => {
+  const mapped = dailyRows.value
+    .map((item) => {
+      const open = item.open
+      const high = item.high
+      const low = item.low
+      const close = item.close
+      if (open === null || high === null || low === null || close === null) {
+        return null
+      }
+
+      const tradeDateKey = toTradeDateKey(item.trade_date)
+      if (tradeDateKey.length !== 8) {
+        return null
+      }
+
+      return {
+        tsCode: item.ts_code,
+        tradeDateKey,
+        tradeDateLabel: toTradeDateLabel(tradeDateKey),
+        open,
+        high,
+        low,
+        close,
+        preClose: item.pre_close,
+        change: item.change,
+        pctChg: item.pct_chg,
+        vol: item.vol,
+        amount: item.amount,
+      } as KlineRow
+    })
+    .filter((item): item is KlineRow => item !== null)
+
+  return mapped.sort((a, b) => a.tradeDateKey.localeCompare(b.tradeDateKey))
+})
+
+const klineRows = computed(() => aggregateRows(baseRows.value, selectedPeriod.value))
+
+const chartStats = computed(() => {
+  if (klineRows.value.length === 0) {
+    return {
+      minPrice: 0,
+      maxPrice: 1,
+      minRsi: 0,
+      maxRsi: 100,
+      maxVol: 1,
+      firstDate: '--',
+      lastDate: '--',
+    }
+  }
+
+  const highs = klineRows.value.map((item) => item.high)
+  const lows = klineRows.value.map((item) => item.low)
+  const vols = klineRows.value.map((item) => item.vol ?? 0)
+  const maxPrice = Math.max(...highs)
+  const minPrice = Math.min(...lows)
+  const padding = Math.max((maxPrice - minPrice) * 0.06, 0.01)
+
+  return {
+    minPrice: minPrice - padding,
+    maxPrice: maxPrice + padding,
+    minRsi: 0,
+    maxRsi: 100,
+    maxVol: Math.max(...vols, 1),
+    firstDate: klineRows.value[0]?.tradeDateLabel ?? '--',
+    lastDate: klineRows.value[klineRows.value.length - 1]?.tradeDateLabel ?? '--',
+  }
+})
+
+const calcMa = (values: number[], period: number) => {
+  const result: number[] = []
+  for (let i = 0; i < values.length; i += 1) {
+    const start = Math.max(0, i - period + 1)
+    const windowValues = values.slice(start, i + 1)
+    const sum = windowValues.reduce((acc, value) => acc + value, 0)
+    result.push(sum / windowValues.length)
+  }
+  return result
+}
+
+const calcRsi = (values: number[], period: number) => {
+  const result: Array<number | null> = new Array(values.length).fill(null)
+  if (values.length <= period) {
+    return result
+  }
+
+  for (let i = period; i < values.length; i += 1) {
+    let gains = 0
+    let losses = 0
+    for (let j = i - period + 1; j <= i; j += 1) {
+      const current = values[j] ?? 0
+      const previous = values[j - 1] ?? current
+      const diff = current - previous
+      if (diff >= 0) {
+        gains += diff
+      } else {
+        losses += Math.abs(diff)
+      }
+    }
+    const avgGain = gains / period
+    const avgLoss = losses / period
+    if (avgLoss === 0) {
+      result[i] = 100
+      continue
+    }
+    const rs = avgGain / avgLoss
+    result[i] = 100 - 100 / (1 + rs)
+  }
+
+  return result
+}
+
+const closes = computed(() => klineRows.value.map((item) => item.close))
+const ma5 = computed(() => calcMa(closes.value, 5))
+const ma10 = computed(() => calcMa(closes.value, 10))
+const ma20 = computed(() => calcMa(closes.value, 20))
+const ma60 = computed(() => calcMa(closes.value, 60))
+const rsi6 = computed(() => calcRsi(closes.value, 6))
+const rsi12 = computed(() => calcRsi(closes.value, 12))
+const rsi24 = computed(() => calcRsi(closes.value, 24))
+
+const drawWidth = computed(() => chartWidth - chartPaddingX * 2)
+const xStep = computed(() =>
+  klineRows.value.length > 1 ? drawWidth.value / (klineRows.value.length - 1) : 0,
+)
+const candleWidth = computed(() => Math.max(4, Math.min(14, xStep.value * 0.62)))
+
+const xAt = (index: number) => chartPaddingX + xStep.value * index
+
+const priceToY = (value: number) => {
+  const span = chartStats.value.maxPrice - chartStats.value.minPrice
+  const ratio = span <= 0 ? 0 : (value - chartStats.value.minPrice) / span
+  return pricePanelTop + pricePanelHeight - ratio * pricePanelHeight
+}
+
+const volumeToY = (value: number) => {
+  const ratio = value / chartStats.value.maxVol
+  return volumePanelTop + volumePanelHeight - ratio * volumePanelHeight
+}
+
+const rsiToY = (value: number) => {
+  const ratio = (value - chartStats.value.minRsi) / (chartStats.value.maxRsi - chartStats.value.minRsi)
+  return rsiPanelTop + rsiPanelHeight - ratio * rsiPanelHeight
+}
+
+const maPoints = (values: number[]) =>
+  values.map((value, index) => `${xAt(index).toFixed(2)},${priceToY(value).toFixed(2)}`).join(' ')
+
+const rsiPoints = (values: Array<number | null>) =>
+  values
+    .map((value, index) => {
+      if (value === null) {
+        return null
+      }
+      return `${xAt(index).toFixed(2)},${rsiToY(value).toFixed(2)}`
+    })
+    .filter((item): item is string => item !== null)
+    .join(' ')
+
+const hoveredRow = computed(() => {
+  if (hoveredIndex.value === null) {
+    return null
+  }
+  return klineRows.value[hoveredIndex.value] ?? null
+})
+
+const activeRow = computed(() => {
+  if (hoveredRow.value) {
+    return hoveredRow.value
+  }
+  return klineRows.value[klineRows.value.length - 1] ?? null
+})
+
+const activeClose = computed(() => activeRow.value?.close ?? detail.value?.latest_snapshot?.close ?? null)
+const activePctChg = computed(() => activeRow.value?.pctChg ?? detail.value?.latest_snapshot?.pct_chg ?? null)
+
+const activeHoverX = computed(() => {
+  if (hoveredIndex.value === null) {
+    return null
+  }
+  return xAt(hoveredIndex.value)
+})
+
+const activeHoverY = computed(() => {
+  if (!hoveredRow.value) {
+    return null
+  }
+  return priceToY(hoveredRow.value.close)
+})
+
+const activeTooltipLeft = computed(() => {
+  if (activeHoverX.value === null) {
+    return '50%'
+  }
+  return `${(activeHoverX.value / chartWidth) * 100}%`
+})
+
+const updateHoveredPoint = (event: MouseEvent) => {
+  if (klineRows.value.length === 0) {
+    hoveredIndex.value = null
+    return
+  }
+
+  const currentTarget = event.currentTarget as SVGRectElement | null
+  if (!currentTarget) {
+    hoveredIndex.value = klineRows.value.length - 1
+    return
+  }
+
+  const bounds = currentTarget.getBoundingClientRect()
+  if (bounds.width <= 0) {
+    hoveredIndex.value = klineRows.value.length - 1
+    return
+  }
+
+  const normalizedOffset = (event.clientX - bounds.left) / bounds.width
+  const clampedOffset = Math.max(0, Math.min(1, normalizedOffset))
+  const nearestIndex = Math.round(clampedOffset * (klineRows.value.length - 1))
+
+  // 关键状态流转：交互层仅更新本地高亮索引，不触发请求，避免鼠标移动导致额外 API 压力。
+  hoveredIndex.value = nearestIndex
+}
+
+const clearHoveredPoint = () => {
+  hoveredIndex.value = null
+}
+
+const selectPeriod = (period: KlinePeriod) => {
+  if (selectedPeriod.value === period) {
+    return
+  }
+  selectedPeriod.value = period
+  hoveredIndex.value = null
+  // 关键流程：周期切换必须触发后端真实请求，优先走数据库命中，缺失再由后端回源补齐。
+  void loadData()
+}
+
+watch(
+  () => dailyRows.value,
+  () => {
+    hoveredIndex.value = null
+  },
+)
+
 const loadData = async () => {
   if (!tsCode.value) {
     errorMessage.value = t('errors.fallback')
@@ -41,10 +427,12 @@ const loadData = async () => {
   loading.value = true
   errorMessage.value = ''
   try {
-    // 关键流程：详情与日线并行加载，减少二次渲染等待时间并保持页面状态一致。
     const [detailPayload, dailyPayload] = await Promise.all([
       stocksApi.getStockDetail(tsCode.value),
-      stocksApi.getStockDaily(tsCode.value, 60),
+      stocksApi.getStockDaily(tsCode.value, {
+        limit: 60,
+        period: selectedPeriod.value,
+      }),
     ])
     detail.value = detailPayload
     dailyRows.value = dailyPayload
@@ -75,7 +463,9 @@ onMounted(async () => {
         <div>
           <p class="panel-kicker">{{ t('stockDetail.kicker') }}</p>
           <h1>{{ detail?.instrument.name ?? tsCode }}</h1>
-          <p class="code-line">{{ detail?.instrument.ts_code ?? tsCode }}</p>
+          <p data-testid="stock-fullname" class="fullname-line">
+            {{ detail?.instrument.fullname ?? '--' }}
+          </p>
         </div>
         <el-button text @click="goBack">{{ t('stockDetail.back') }}</el-button>
       </div>
@@ -85,11 +475,11 @@ onMounted(async () => {
       <div v-if="detail" class="metrics-grid">
         <div class="metric-item">
           <span class="metric-label">{{ t('stockDetail.latestClose') }}</span>
-          <strong>{{ formatNumber(detail.latest_snapshot?.close ?? null) }}</strong>
+          <strong data-testid="latest-close-value">{{ formatNumber(activeClose) }}</strong>
         </div>
         <div class="metric-item">
           <span class="metric-label">{{ t('stockDetail.latestChange') }}</span>
-          <strong>{{ formatPercent(detail.latest_snapshot?.pct_chg ?? null) }}</strong>
+          <strong data-testid="latest-change-value">{{ formatPercent(activePctChg) }}</strong>
         </div>
         <div class="metric-item">
           <span class="metric-label">{{ t('stockDetail.industry') }}</span>
@@ -105,19 +495,190 @@ onMounted(async () => {
     <el-card class="detail-card" shadow="never">
       <div class="daily-header">
         <h2>{{ t('stockDetail.dailyTitle') }}</h2>
-        <el-button :loading="loading" @click="loadData">{{ t('home.refresh') }}</el-button>
+        <div class="daily-actions">
+          <el-button-group>
+            <el-button
+              data-testid="kline-period-daily"
+              :type="selectedPeriod === 'daily' ? 'primary' : 'default'"
+              @click="selectPeriod('daily')"
+            >
+              日K
+            </el-button>
+            <el-button
+              data-testid="kline-period-weekly"
+              :type="selectedPeriod === 'weekly' ? 'primary' : 'default'"
+              @click="selectPeriod('weekly')"
+            >
+              周K
+            </el-button>
+            <el-button
+              data-testid="kline-period-monthly"
+              :type="selectedPeriod === 'monthly' ? 'primary' : 'default'"
+              @click="selectPeriod('monthly')"
+            >
+              月K
+            </el-button>
+          </el-button-group>
+          <el-button :loading="loading" @click="loadData">{{ t('home.refresh') }}</el-button>
+        </div>
       </div>
 
-      <el-empty v-if="!loading && dailyRows.length === 0" :description="t('stockDetail.empty')" />
+      <el-empty v-if="!loading && klineRows.length === 0" :description="t('stockDetail.empty')" />
 
-      <el-table v-else :data="dailyRows" class="daily-table" size="small">
-        <el-table-column prop="trade_date" label="Date" min-width="120" />
-        <el-table-column prop="open" label="Open" min-width="100" />
-        <el-table-column prop="high" label="High" min-width="100" />
-        <el-table-column prop="low" label="Low" min-width="100" />
-        <el-table-column prop="close" label="Close" min-width="100" />
-        <el-table-column prop="pct_chg" label="%Chg" min-width="100" />
-      </el-table>
+      <div
+        v-else
+        data-testid="kline-chart"
+        class="kline-panel"
+        v-motion
+        :initial="{ opacity: 0, y: 12 }"
+        :enter="{ opacity: 1, y: 0 }"
+      >
+        <div class="kline-meta-row">
+          <div class="ma-legend">
+            <span>MA5: {{ formatNumber(ma5[ma5.length - 1] ?? null) }}</span>
+            <span>MA10: {{ formatNumber(ma10[ma10.length - 1] ?? null) }}</span>
+            <span>MA20: {{ formatNumber(ma20[ma20.length - 1] ?? null) }}</span>
+            <span>MA60: {{ formatNumber(ma60[ma60.length - 1] ?? null) }}</span>
+          </div>
+          <p class="trend-window">{{ chartStats.firstDate }} → {{ chartStats.lastDate }}</p>
+        </div>
+
+        <div class="chart-wrap">
+          <svg class="kline-svg" :viewBox="`0 0 ${chartWidth} ${chartHeight}`" role="img" aria-label="kline chart">
+            <defs>
+              <linearGradient id="klineAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="rgba(123, 197, 255, 0.16)" />
+                <stop offset="100%" stop-color="rgba(123, 197, 255, 0.02)" />
+              </linearGradient>
+            </defs>
+
+            <rect :x="chartPaddingX" :y="pricePanelTop" :width="drawWidth" :height="pricePanelHeight" class="panel-bg" />
+            <rect :x="chartPaddingX" :y="volumePanelTop" :width="drawWidth" :height="volumePanelHeight" class="panel-bg" />
+            <rect :x="chartPaddingX" :y="rsiPanelTop" :width="drawWidth" :height="rsiPanelHeight" class="panel-bg" />
+
+            <line :x1="chartPaddingX" :x2="chartWidth - chartPaddingX" :y1="pricePanelTop" :y2="pricePanelTop" class="axis-line" />
+            <line
+              :x1="chartPaddingX"
+              :x2="chartWidth - chartPaddingX"
+              :y1="pricePanelTop + pricePanelHeight"
+              :y2="pricePanelTop + pricePanelHeight"
+              class="axis-line"
+            />
+            <line
+              :x1="chartPaddingX"
+              :x2="chartWidth - chartPaddingX"
+              :y1="volumePanelTop + volumePanelHeight"
+              :y2="volumePanelTop + volumePanelHeight"
+              class="axis-line"
+            />
+            <line :x1="chartPaddingX" :x2="chartWidth - chartPaddingX" :y1="rsiPanelTop" :y2="rsiPanelTop" class="axis-line" />
+            <line
+              :x1="chartPaddingX"
+              :x2="chartWidth - chartPaddingX"
+              :y1="rsiPanelTop + rsiPanelHeight"
+              :y2="rsiPanelTop + rsiPanelHeight"
+              class="axis-line"
+            />
+
+            <line
+              v-for="(row, index) in klineRows"
+              :key="`wick-${row.tradeDateKey}`"
+              :x1="xAt(index)"
+              :x2="xAt(index)"
+              :y1="priceToY(row.high)"
+              :y2="priceToY(row.low)"
+              class="wick-line"
+              :class="row.close >= row.open ? 'up' : 'down'"
+            />
+
+            <rect
+              v-for="(row, index) in klineRows"
+              :key="`body-${row.tradeDateKey}`"
+              :x="xAt(index) - candleWidth / 2"
+              :y="Math.min(priceToY(row.open), priceToY(row.close))"
+              :width="candleWidth"
+              :height="Math.max(Math.abs(priceToY(row.close) - priceToY(row.open)), 1.4)"
+              class="candle-body"
+              :class="row.close >= row.open ? 'up' : 'down'"
+            />
+
+            <polyline :points="maPoints(ma5)" class="ma-line ma5" />
+            <polyline :points="maPoints(ma10)" class="ma-line ma10" />
+            <polyline :points="maPoints(ma20)" class="ma-line ma20" />
+            <polyline :points="maPoints(ma60)" class="ma-line ma60" />
+
+            <rect
+              v-for="(row, index) in klineRows"
+              :key="`vol-${row.tradeDateKey}`"
+              :x="xAt(index) - candleWidth / 2"
+              :y="volumeToY(row.vol ?? 0)"
+              :width="candleWidth"
+              :height="volumePanelTop + volumePanelHeight - volumeToY(row.vol ?? 0)"
+              class="volume-bar"
+              :class="row.close >= row.open ? 'up' : 'down'"
+            />
+
+            <polyline :points="rsiPoints(rsi6)" class="rsi-line rsi6" />
+            <polyline :points="rsiPoints(rsi12)" class="rsi-line rsi12" />
+            <polyline :points="rsiPoints(rsi24)" class="rsi-line rsi24" />
+
+            <line
+              v-if="activeHoverX !== null"
+              :x1="activeHoverX"
+              :x2="activeHoverX"
+              :y1="pricePanelTop"
+              :y2="rsiPanelTop + rsiPanelHeight"
+              class="crosshair-line"
+            />
+            <line
+              v-if="activeHoverY !== null"
+              :x1="chartPaddingX"
+              :x2="chartWidth - chartPaddingX"
+              :y1="activeHoverY"
+              :y2="activeHoverY"
+              class="crosshair-line"
+            />
+            <circle v-if="activeHoverX !== null && activeHoverY !== null" :cx="activeHoverX" :cy="activeHoverY" r="5" class="active-dot" />
+
+            <rect
+              data-testid="kline-interaction-layer"
+              :x="chartPaddingX"
+              :y="pricePanelTop"
+              :width="drawWidth"
+              :height="rsiPanelTop + rsiPanelHeight - pricePanelTop"
+              class="interaction-layer"
+              @mousemove="updateHoveredPoint"
+              @mouseleave="clearHoveredPoint"
+            />
+          </svg>
+
+          <div v-if="hoveredRow" data-testid="kline-tooltip" class="kline-tooltip" :style="{ left: activeTooltipLeft }">
+            <p>{{ hoveredRow.tradeDateLabel }}</p>
+            <div class="tooltip-grid">
+              <span>开: {{ formatNumber(hoveredRow.open) }}</span>
+              <span>收: {{ formatNumber(hoveredRow.close) }}</span>
+              <span>高: {{ formatNumber(hoveredRow.high) }}</span>
+              <span>低: {{ formatNumber(hoveredRow.low) }}</span>
+              <span>涨跌: {{ formatPercent(hoveredRow.pctChg) }}</span>
+              <span>量: {{ formatCompactNumber(hoveredRow.vol) }}</span>
+              <span>额: {{ formatCompactNumber(hoveredRow.amount) }}</span>
+            </div>
+            <strong>¥{{ formatNumber(hoveredRow.close) }}</strong>
+          </div>
+        </div>
+
+        <div class="indicator-tabs">
+          <span class="active">RSI</span>
+          <span>KDJ</span>
+          <span>MACD</span>
+          <span>WR</span>
+          <span>DMI</span>
+          <span>BIAS</span>
+          <span>OBV</span>
+          <span>CCI</span>
+          <span>ROC</span>
+        </div>
+      </div>
     </el-card>
   </section>
 </template>
@@ -160,6 +721,12 @@ h1 {
   font-family: 'IBM Plex Mono', monospace;
 }
 
+.fullname-line {
+  margin: 0.22rem 0 0;
+  font-size: 0.8rem;
+  color: color-mix(in srgb, var(--terminal-muted) 72%, white 28%);
+}
+
 .detail-alert {
   margin-top: 0.8rem;
 }
@@ -190,21 +757,237 @@ h1 {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.8rem;
+  gap: 0.8rem;
+}
+
+.daily-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
 h2 {
   margin: 0;
 }
 
-.daily-table {
-  width: 100%;
+.kline-panel {
+  border: 1px solid rgba(123, 197, 255, 0.24);
+  border-radius: 14px;
+  padding: 0.75rem;
+  background:
+    radial-gradient(circle at 84% 10%, rgba(247, 181, 0, 0.12), transparent 44%),
+    linear-gradient(145deg, rgba(10, 18, 32, 0.98), rgba(8, 14, 25, 0.97));
 }
 
-@media (max-width: 760px) {
-  .title-row,
+.kline-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.55rem;
+  gap: 0.6rem;
+}
+
+.ma-legend {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.74rem;
+}
+
+.ma-legend span:nth-child(1) {
+  color: #57b8ff;
+}
+
+.ma-legend span:nth-child(2) {
+  color: #f7b500;
+}
+
+.ma-legend span:nth-child(3) {
+  color: #ec6ad8;
+}
+
+.ma-legend span:nth-child(4) {
+  color: #6dd889;
+}
+
+.trend-window {
+  margin: 0;
+  color: var(--terminal-muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.74rem;
+}
+
+.chart-wrap {
+  position: relative;
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(8, 14, 25, 0.84);
+}
+
+.kline-svg {
+  width: 100%;
+  display: block;
+}
+
+.panel-bg {
+  fill: rgba(255, 255, 255, 0.02);
+}
+
+.axis-line {
+  stroke: rgba(146, 161, 182, 0.35);
+  stroke-width: 1;
+}
+
+.wick-line {
+  stroke-width: 1;
+}
+
+.candle-body {
+  rx: 1;
+}
+
+.wick-line.up,
+.candle-body.up,
+.volume-bar.up {
+  stroke: #ff4d4f;
+  fill: #ff4d4f;
+}
+
+.wick-line.down,
+.candle-body.down,
+.volume-bar.down {
+  stroke: #12b76a;
+  fill: #12b76a;
+}
+
+.ma-line,
+.rsi-line {
+  fill: none;
+  stroke-width: 1.6;
+}
+
+.ma5 {
+  stroke: #57b8ff;
+}
+
+.ma10 {
+  stroke: #f7b500;
+}
+
+.ma20 {
+  stroke: #ec6ad8;
+}
+
+.ma60 {
+  stroke: #6dd889;
+}
+
+.rsi6 {
+  stroke: #b7becd;
+}
+
+.rsi12 {
+  stroke: #f7b500;
+}
+
+.rsi24 {
+  stroke: #ec6ad8;
+}
+
+.crosshair-line {
+  stroke: rgba(123, 197, 255, 0.48);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.active-dot {
+  fill: #7bc5ff;
+  stroke: rgba(5, 12, 22, 0.95);
+  stroke-width: 1.8;
+}
+
+.interaction-layer {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.kline-tooltip {
+  position: absolute;
+  top: 0.55rem;
+  transform: translateX(-50%);
+  border: 1px solid rgba(123, 197, 255, 0.42);
+  border-radius: 10px;
+  padding: 0.4rem 0.55rem;
+  background: rgba(11, 19, 34, 0.96);
+  pointer-events: none;
+  box-shadow: 0 10px 24px rgba(2, 8, 18, 0.4);
+  min-width: 160px;
+}
+
+.kline-tooltip p {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--terminal-muted);
+}
+
+.tooltip-grid {
+  margin-top: 0.2rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.1rem 0.5rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+}
+
+.kline-tooltip strong {
+  display: block;
+  margin-top: 0.22rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.9rem;
+}
+
+.indicator-tabs {
+  margin-top: 0.45rem;
+  border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--terminal-muted);
+}
+
+.indicator-tabs .active {
+  color: #7bc5ff;
+}
+
+@media (max-width: 960px) {
   .daily-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .kline-meta-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .daily-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

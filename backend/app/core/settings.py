@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
     tushare_token: str = ""
     stock_sync_trade_days: int = 120
+    stock_daily_cache_ttl_seconds: int = 600
+    stock_trade_cal_cache_ttl_seconds: int = 86400
+    stock_adj_factor_cache_ttl_seconds: int = 3600
     init_admin_username: str = ""
     init_admin_email: str = ""
     init_admin_password: str = ""

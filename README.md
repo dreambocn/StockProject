@@ -41,12 +41,12 @@
 - 启动时支持自动检查/创建数据库、表与 schema（可配置）。
 - 完成请求级日志能力（含 `X-Request-ID`）。
 - 完成股票业务基础闭环（数据库存储 + 真实接口）：
-  - 新增 `stock_instruments`、`stock_daily_snapshots`、`stock_sync_cursors` 三张表
+  - 新增 `stock_instruments`、`stock_daily_snapshots`、`stock_kline_bars`、`stock_trade_calendars`、`stock_adj_factors`、`stock_sync_cursors` 六张表
   - 接入 Tushare 数据源并完整保留 `L/D/P/G` 股票基础库
   - 接入“最近 120 个交易日”增量行情同步
   - `/api/stocks` 支持关键词搜索（名称/代码/TS Code）与显式状态筛选
   - `/api/stocks/{ts_code}` 提供股票详情与最新快照
-  - `/api/stocks/{ts_code}/daily` 返回最近日线数据
+  - `/api/stocks/{ts_code}/daily` 支持 `daily/weekly/monthly` 周期，先查库再回源并带 10 分钟缓存
   - `POST /api/stocks/sync/full` 支持登录态触发股票基础信息全量更新
 
 ### 前端能力
@@ -144,6 +144,9 @@ uv run fastapi dev main.py
 - `CORS_ALLOW_ORIGIN_REGEX`（默认放行 `localhost/127.0.0.1` 任意端口，避免 Vite 端口漂移导致预检失败）
 - `TUSHARE_TOKEN`（Tushare Pro token，用于行情同步）
 - `STOCK_SYNC_TRADE_DAYS`（增量同步交易日窗口，默认 `120`）
+- `STOCK_DAILY_CACHE_TTL_SECONDS`（股票日线缓存秒数，默认 `600`）
+- `STOCK_TRADE_CAL_CACHE_TTL_SECONDS`（交易日历缓存秒数，默认 `86400`）
+- `STOCK_ADJ_FACTOR_CACHE_TTL_SECONDS`（复权因子缓存秒数，默认 `3600`）
 
 邮件服务参数（`backend/.env`）：
 
@@ -209,7 +212,9 @@ uv run python scripts/sync_stocks.py
 
 - `GET /api/stocks`（支持 `keyword/list_status/page/page_size`，默认 `list_status=L`，可显式传 `ALL` 或 `L,D,P,G`）
 - `GET /api/stocks/{ts_code}`
-- `GET /api/stocks/{ts_code}/daily`（支持 `limit`）
+- `GET /api/stocks/{ts_code}/daily`（支持 `limit/period/trade_date/start_date/end_date`，`period` 可选 `daily|weekly|monthly`）
+- `GET /api/stocks/trade-cal`（支持 `exchange/start_date/end_date/is_open`，先查库再回源）
+- `GET /api/stocks/{ts_code}/adj-factor`（支持 `limit/trade_date/start_date/end_date`，先查库再回源）
 - `POST /api/stocks/sync/full`（需登录态，用于触发股票基础信息全量更新）
 
 认证安全语义（重要）：

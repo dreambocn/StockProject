@@ -78,3 +78,20 @@ class StockBasicSyncResponse(BaseModel):
     created: int
     updated: int
     list_statuses: list[str]
+
+
+class StockTradeCalendarResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    exchange: str
+    cal_date: date
+    is_open: str
+    pretrade_date: date | None
+
+
+class StockAdjFactorResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ts_code: str
+    trade_date: date
+    adj_factor: float

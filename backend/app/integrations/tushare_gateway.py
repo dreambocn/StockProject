@@ -70,3 +70,101 @@ class TushareGateway:
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)
+
+    async def fetch_daily_by_range(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, str | float]]:
+        def _run() -> list[dict[str, str | float]]:
+            frame = self._client.daily(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields=(
+                    "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+                ),
+            )
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_weekly_by_range(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, str | float]]:
+        def _run() -> list[dict[str, str | float]]:
+            frame = self._client.weekly(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields=(
+                    "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+                ),
+            )
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_monthly_by_range(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, str | float]]:
+        def _run() -> list[dict[str, str | float]]:
+            frame = self._client.monthly(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields=(
+                    "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+                ),
+            )
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_trade_cal_by_range(
+        self,
+        *,
+        exchange: str,
+        start_date: str,
+        end_date: str,
+        is_open: str | None,
+    ) -> list[dict[str, str]]:
+        def _run() -> list[dict[str, str]]:
+            frame = self._client.trade_cal(
+                exchange=exchange,
+                start_date=start_date,
+                end_date=end_date,
+                is_open=is_open,
+                fields="exchange,cal_date,is_open,pretrade_date",
+            )
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_adj_factor_by_range(
+        self,
+        *,
+        ts_code: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, str | float]]:
+        def _run() -> list[dict[str, str | float]]:
+            frame = self._client.adj_factor(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields="ts_code,trade_date,adj_factor",
+            )
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)

@@ -1,22 +1,33 @@
-from typing import Annotated
+import asyncio
+import json
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from math import isnan
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import get_current_user
+from app.cache.redis import get_redis_client
 from app.core.settings import get_settings
 from app.db.session import get_db_session
 from app.integrations.tushare_gateway import TushareGateway
+from app.models.stock_adj_factor import StockAdjFactor
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
+from app.models.stock_kline_bar import StockKlineBar
+from app.models.stock_trade_calendar import StockTradeCalendar
 from app.models.user import User
 from app.schemas.stocks import (
+    StockAdjFactorResponse,
     StockBasicSyncResponse,
     StockDailySnapshotResponse,
     StockDetailResponse,
     StockInstrumentResponse,
     StockListItemResponse,
+    StockTradeCalendarResponse,
 )
 from app.services.stock_sync_service import (
     STOCK_BASIC_FULL_STATUSES,
@@ -25,6 +36,12 @@ from app.services.stock_sync_service import (
 
 
 router = APIRouter()
+_daily_cache_lock_guard = asyncio.Lock()
+_daily_cache_singleflight_locks: dict[str, asyncio.Lock] = {}
+TUSHARE_DAILY_CACHE_PREFIX = "stocks:daily:tushare"
+TUSHARE_TRADE_CAL_CACHE_PREFIX = "stocks:trade_cal:tushare"
+TUSHARE_ADJ_FACTOR_CACHE_PREFIX = "stocks:adj_factor:tushare"
+SUPPORTED_KLINE_PERIODS: tuple[str, ...] = ("daily", "weekly", "monthly")
 
 
 def _parse_list_status_filter(value: str) -> list[str]:
@@ -90,6 +107,456 @@ def _to_daily_snapshot_response(
         pb=_to_float(snapshot.pb),
         total_mv=_to_float(snapshot.total_mv),
         circ_mv=_to_float(snapshot.circ_mv),
+    )
+
+
+def _parse_yyyymmdd(value: str) -> date:
+    try:
+        return datetime.strptime(value, "%Y%m%d").date()  # noqa: DTZ007
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="invalid date format, expected YYYYMMDD",
+        ) from exc
+
+
+def _to_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and isnan(value):
+        return None
+
+    normalized_value = str(value).strip()
+    if not normalized_value:
+        return None
+    try:
+        return float(normalized_value)
+    except ValueError:
+        return None
+
+
+def _to_optional_date(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, float) and isnan(value):
+        return None
+
+    normalized_value = str(value).strip()
+    if not normalized_value:
+        return None
+
+    for format_value in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(normalized_value, format_value).date()  # noqa: DTZ007
+        except ValueError:
+            continue
+
+    return None
+
+
+async def _load_daily_rows_from_db(
+    *, session: AsyncSession, ts_code: str, limit: int
+) -> list[StockDailySnapshotResponse]:
+    statement = (
+        select(StockDailySnapshot)
+        .where(StockDailySnapshot.ts_code == ts_code)
+        .order_by(StockDailySnapshot.trade_date.desc())
+        .limit(limit)
+    )
+    snapshots = (await session.execute(statement)).scalars().all()
+    return [_to_daily_snapshot_response(snapshot) for snapshot in snapshots]
+
+
+def _parse_period(value: str) -> str:
+    normalized_value = value.strip().lower()
+    if normalized_value in SUPPORTED_KLINE_PERIODS:
+        return normalized_value
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="invalid period, expected daily, weekly, or monthly",
+    )
+
+
+def _to_optional_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and isnan(value):
+        return None
+
+    normalized_value = str(value).strip()
+    if not normalized_value:
+        return None
+    try:
+        return Decimal(normalized_value)
+    except Exception:
+        return None
+
+
+def _parse_is_open(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized_value = value.strip()
+    if not normalized_value:
+        return None
+    if normalized_value in {"0", "1"}:
+        return normalized_value
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="invalid is_open, expected 0 or 1",
+    )
+
+
+def _resolve_calendar_date_range(
+    *,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[str, str]:
+    resolved_end = _parse_yyyymmdd(end_date) if end_date else date.today()
+    resolved_start = (
+        _parse_yyyymmdd(start_date)
+        if start_date
+        else resolved_end - timedelta(days=400)
+    )
+    if resolved_start > resolved_end:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="start_date must be earlier than or equal to end_date",
+        )
+
+    return resolved_start.strftime("%Y%m%d"), resolved_end.strftime("%Y%m%d")
+
+
+def _to_trade_cal_cache_key(
+    *,
+    exchange: str,
+    start_date: str,
+    end_date: str,
+    is_open: str | None,
+) -> str:
+    cache_is_open = is_open or "ALL"
+    return f"{TUSHARE_TRADE_CAL_CACHE_PREFIX}:{exchange}:{start_date}:{end_date}:{cache_is_open}"
+
+
+def _to_adj_factor_cache_key(
+    *,
+    ts_code: str,
+    start_date: str,
+    end_date: str,
+    limit: int,
+    trade_date: str | None,
+) -> str:
+    cache_trade_date = trade_date or "ALL"
+    return (
+        f"{TUSHARE_ADJ_FACTOR_CACHE_PREFIX}:"
+        f"{ts_code}:{start_date}:{end_date}:{limit}:{cache_trade_date}"
+    )
+
+
+def _to_trade_calendar_response(
+    calendar: StockTradeCalendar,
+) -> StockTradeCalendarResponse:
+    return StockTradeCalendarResponse(
+        exchange=calendar.exchange,
+        cal_date=calendar.cal_date,
+        is_open=calendar.is_open,
+        pretrade_date=calendar.pretrade_date,
+    )
+
+
+def _to_adj_factor_response(adj_factor: StockAdjFactor) -> StockAdjFactorResponse:
+    return StockAdjFactorResponse(
+        ts_code=adj_factor.ts_code,
+        trade_date=adj_factor.trade_date,
+        adj_factor=float(adj_factor.adj_factor),
+    )
+
+
+def _to_kline_snapshot_response(row: StockKlineBar) -> StockDailySnapshotResponse:
+    return StockDailySnapshotResponse(
+        ts_code=row.ts_code,
+        trade_date=row.trade_date,
+        open=_to_float(row.open),
+        high=_to_float(row.high),
+        low=_to_float(row.low),
+        close=_to_float(row.close),
+        pre_close=_to_float(row.pre_close),
+        change=_to_float(row.change),
+        pct_chg=_to_float(row.pct_chg),
+        vol=_to_float(row.vol),
+        amount=_to_float(row.amount),
+        turnover_rate=None,
+        volume_ratio=None,
+        pe=None,
+        pb=None,
+        total_mv=None,
+        circ_mv=None,
+    )
+
+
+async def _load_kline_rows_from_db(
+    *,
+    session: AsyncSession,
+    ts_code: str,
+    period: str,
+    start_date: str,
+    end_date: str,
+    limit: int,
+) -> list[StockDailySnapshotResponse]:
+    statement = (
+        select(StockKlineBar)
+        .where(StockKlineBar.ts_code == ts_code)
+        .where(StockKlineBar.period == period)
+        .where(StockKlineBar.trade_date >= _parse_yyyymmdd(start_date))
+        .where(StockKlineBar.trade_date <= _parse_yyyymmdd(end_date))
+        .order_by(StockKlineBar.trade_date.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(statement)).scalars().all()
+    return [_to_kline_snapshot_response(item) for item in rows]
+
+
+async def _upsert_kline_rows(
+    *,
+    session: AsyncSession,
+    ts_code: str,
+    period: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    for raw_row in rows:
+        trade_date = _to_optional_date(raw_row.get("trade_date"))
+        if trade_date is None:
+            continue
+
+        bar = await session.get(StockKlineBar, (ts_code, period, trade_date))
+        if bar is None:
+            bar = StockKlineBar(ts_code=ts_code, period=period, trade_date=trade_date)
+            session.add(bar)
+
+        bar.end_date = _to_optional_date(raw_row.get("end_date"))
+        bar.open = _to_optional_decimal(raw_row.get("open"))
+        bar.high = _to_optional_decimal(raw_row.get("high"))
+        bar.low = _to_optional_decimal(raw_row.get("low"))
+        bar.close = _to_optional_decimal(raw_row.get("close"))
+        bar.pre_close = _to_optional_decimal(raw_row.get("pre_close"))
+        bar.change = _to_optional_decimal(raw_row.get("change"))
+        bar.pct_chg = _to_optional_decimal(raw_row.get("pct_chg"))
+        bar.vol = _to_optional_decimal(raw_row.get("vol"))
+        bar.amount = _to_optional_decimal(raw_row.get("amount"))
+
+
+async def _load_trade_cal_rows_from_db(
+    *,
+    session: AsyncSession,
+    exchange: str,
+    start_date: str,
+    end_date: str,
+    is_open: str | None,
+) -> list[StockTradeCalendarResponse]:
+    statement = (
+        select(StockTradeCalendar)
+        .where(StockTradeCalendar.exchange == exchange)
+        .where(StockTradeCalendar.cal_date >= _parse_yyyymmdd(start_date))
+        .where(StockTradeCalendar.cal_date <= _parse_yyyymmdd(end_date))
+    )
+    if is_open is not None:
+        statement = statement.where(StockTradeCalendar.is_open == is_open)
+
+    statement = statement.order_by(StockTradeCalendar.cal_date.desc())
+    rows = (await session.execute(statement)).scalars().all()
+    return [_to_trade_calendar_response(item) for item in rows]
+
+
+async def _upsert_trade_cal_rows(
+    *,
+    session: AsyncSession,
+    exchange: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    for raw_row in rows:
+        cal_date = _to_optional_date(raw_row.get("cal_date"))
+        if cal_date is None:
+            continue
+
+        calendar = await session.get(StockTradeCalendar, (exchange, cal_date))
+        if calendar is None:
+            calendar = StockTradeCalendar(
+                exchange=exchange, cal_date=cal_date, is_open="0"
+            )
+            session.add(calendar)
+
+        calendar.is_open = str(raw_row.get("is_open") or "0").strip()[:1] or "0"
+        calendar.pretrade_date = _to_optional_date(raw_row.get("pretrade_date"))
+
+
+async def _load_adj_factor_rows_from_db(
+    *,
+    session: AsyncSession,
+    ts_code: str,
+    start_date: str,
+    end_date: str,
+    trade_date: str | None,
+    limit: int,
+) -> list[StockAdjFactorResponse]:
+    statement = (
+        select(StockAdjFactor)
+        .where(StockAdjFactor.ts_code == ts_code)
+        .where(StockAdjFactor.trade_date >= _parse_yyyymmdd(start_date))
+        .where(StockAdjFactor.trade_date <= _parse_yyyymmdd(end_date))
+    )
+    if trade_date:
+        statement = statement.where(
+            StockAdjFactor.trade_date == _parse_yyyymmdd(trade_date)
+        )
+
+    statement = statement.order_by(StockAdjFactor.trade_date.desc()).limit(limit)
+    rows = (await session.execute(statement)).scalars().all()
+    return [_to_adj_factor_response(item) for item in rows]
+
+
+async def _upsert_adj_factor_rows(
+    *,
+    session: AsyncSession,
+    ts_code: str,
+    rows: list[dict[str, Any]],
+) -> None:
+    for raw_row in rows:
+        trade_date = _to_optional_date(raw_row.get("trade_date"))
+        adj_factor = _to_optional_decimal(raw_row.get("adj_factor"))
+        if trade_date is None or adj_factor is None:
+            continue
+
+        row = await session.get(StockAdjFactor, (ts_code, trade_date))
+        if row is None:
+            row = StockAdjFactor(
+                ts_code=ts_code, trade_date=trade_date, adj_factor=adj_factor
+            )
+            session.add(row)
+            continue
+
+        row.adj_factor = adj_factor
+
+
+async def _read_cached_daily_rows(
+    cache_key: str,
+) -> list[StockDailySnapshotResponse] | None:
+    try:
+        raw_payload = await get_redis_client().get(cache_key)
+    except Exception:
+        return None
+
+    if raw_payload is None:
+        return None
+
+    try:
+        payload = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        try:
+            await get_redis_client().delete(cache_key)
+        except Exception:
+            pass
+        return None
+
+    return [StockDailySnapshotResponse.model_validate(item) for item in payload]
+
+
+async def _write_cached_daily_rows(
+    cache_key: str,
+    rows: list[StockDailySnapshotResponse],
+    ttl_seconds: int,
+) -> None:
+    cache_payload = [item.model_dump(mode="json") for item in rows]
+    try:
+        await get_redis_client().set(
+            cache_key,
+            json.dumps(cache_payload, ensure_ascii=False),
+            ex=ttl_seconds,
+        )
+    except Exception:
+        return
+
+
+async def _get_singleflight_lock(cache_key: str) -> asyncio.Lock:
+    async with _daily_cache_lock_guard:
+        existing_lock = _daily_cache_singleflight_locks.get(cache_key)
+        if existing_lock is None:
+            existing_lock = asyncio.Lock()
+            _daily_cache_singleflight_locks[cache_key] = existing_lock
+        return existing_lock
+
+
+def _resolve_tushare_kline_date_range(
+    *,
+    limit: int,
+    trade_date: str | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[str, str]:
+    if trade_date:
+        trade_day = _parse_yyyymmdd(trade_date)
+        resolved = trade_day.strftime("%Y%m%d")
+        return resolved, resolved
+
+    resolved_end = _parse_yyyymmdd(end_date) if end_date else date.today()
+    resolved_start = (
+        _parse_yyyymmdd(start_date)
+        if start_date
+        else resolved_end - timedelta(days=limit * 3)
+    )
+
+    if resolved_start > resolved_end:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="start_date must be earlier than or equal to end_date",
+        )
+
+    return resolved_start.strftime("%Y%m%d"), resolved_end.strftime("%Y%m%d")
+
+
+def _to_tushare_daily_cache_key(
+    *,
+    ts_code: str,
+    period: str,
+    start_date: str,
+    end_date: str,
+    limit: int,
+) -> str:
+    return (
+        f"{TUSHARE_DAILY_CACHE_PREFIX}:"
+        f"{ts_code}:{period}:{start_date}:{end_date}:{limit}"
+    )
+
+
+def _map_tushare_daily_row_to_snapshot_response(
+    *,
+    ts_code: str,
+    row: dict[str, object],
+) -> StockDailySnapshotResponse | None:
+    trade_date = _to_optional_date(row.get("trade_date"))
+    if trade_date is None:
+        return None
+
+    return StockDailySnapshotResponse(
+        ts_code=ts_code,
+        trade_date=trade_date,
+        open=_to_optional_float(row.get("open")),
+        high=_to_optional_float(row.get("high")),
+        low=_to_optional_float(row.get("low")),
+        close=_to_optional_float(row.get("close")),
+        pre_close=_to_optional_float(row.get("pre_close")),
+        change=_to_optional_float(row.get("change")),
+        pct_chg=_to_optional_float(row.get("pct_chg")),
+        vol=_to_optional_float(row.get("vol")),
+        amount=_to_optional_float(row.get("amount")),
+        turnover_rate=None,
+        volume_ratio=None,
+        pe=None,
+        pb=None,
+        total_mv=None,
+        circ_mv=None,
     )
 
 
@@ -185,6 +652,104 @@ async def trigger_stock_basic_full_sync(
     )
 
 
+@router.get(
+    "/stocks/trade-cal",
+    response_model=list[StockTradeCalendarResponse],
+)
+async def get_trade_calendar(
+    exchange: str = Query(default="SSE"),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    is_open: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[StockTradeCalendarResponse]:
+    normalized_exchange = exchange.strip().upper() or "SSE"
+    normalized_is_open = _parse_is_open(is_open)
+    resolved_start_date, resolved_end_date = _resolve_calendar_date_range(
+        start_date=start_date,
+        end_date=end_date,
+    )
+    cache_key = _to_trade_cal_cache_key(
+        exchange=normalized_exchange,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+        is_open=normalized_is_open,
+    )
+
+    try:
+        raw_payload = await get_redis_client().get(cache_key)
+    except Exception:
+        raw_payload = None
+    if raw_payload is not None:
+        try:
+            payload = json.loads(raw_payload)
+            return [StockTradeCalendarResponse.model_validate(item) for item in payload]
+        except Exception:
+            pass
+
+    db_rows = await _load_trade_cal_rows_from_db(
+        session=session,
+        exchange=normalized_exchange,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+        is_open=normalized_is_open,
+    )
+    if db_rows:
+        try:
+            await get_redis_client().set(
+                cache_key,
+                json.dumps(
+                    [item.model_dump(mode="json") for item in db_rows],
+                    ensure_ascii=False,
+                ),
+                ex=get_settings().stock_trade_cal_cache_ttl_seconds,
+            )
+        except Exception:
+            pass
+        return db_rows
+
+    singleflight_lock = await _get_singleflight_lock(cache_key)
+    async with singleflight_lock:
+        settings = get_settings()
+        try:
+            gateway = TushareGateway(settings.tushare_token)
+            tushare_rows = await gateway.fetch_trade_cal_by_range(
+                exchange=normalized_exchange,
+                start_date=resolved_start_date,
+                end_date=resolved_end_date,
+                is_open=normalized_is_open,
+            )
+            # 关键流程：交易日历属于低频基础数据，回源成功后直接持久化，后续优先走数据库。
+            await _upsert_trade_cal_rows(
+                session=session,
+                exchange=normalized_exchange,
+                rows=tushare_rows,
+            )
+            await session.commit()
+
+            result_rows = await _load_trade_cal_rows_from_db(
+                session=session,
+                exchange=normalized_exchange,
+                start_date=resolved_start_date,
+                end_date=resolved_end_date,
+                is_open=normalized_is_open,
+            )
+            try:
+                await get_redis_client().set(
+                    cache_key,
+                    json.dumps(
+                        [item.model_dump(mode="json") for item in result_rows],
+                        ensure_ascii=False,
+                    ),
+                    ex=settings.stock_trade_cal_cache_ttl_seconds,
+                )
+            except Exception:
+                pass
+            return result_rows
+        except Exception:
+            return db_rows
+
+
 @router.get("/stocks/{ts_code}", response_model=StockDetailResponse)
 async def get_stock_detail(
     ts_code: str,
@@ -213,6 +778,10 @@ async def get_stock_detail(
 async def get_stock_daily(
     ts_code: str,
     limit: int = Query(default=60, ge=1, le=240),
+    period: str = Query(default="daily"),
+    trade_date: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[StockDailySnapshotResponse]:
     normalized_ts_code = ts_code.strip().upper()
@@ -223,11 +792,225 @@ async def get_stock_daily(
             detail="stock not found",
         )
 
-    statement = (
-        select(StockDailySnapshot)
-        .where(StockDailySnapshot.ts_code == normalized_ts_code)
-        .order_by(StockDailySnapshot.trade_date.desc())
-        .limit(limit)
+    normalized_period = _parse_period(period)
+    resolved_start_date, resolved_end_date = _resolve_tushare_kline_date_range(
+        limit=limit,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
     )
-    snapshots = (await session.execute(statement)).scalars().all()
-    return [_to_daily_snapshot_response(snapshot) for snapshot in snapshots]
+    cache_key = _to_tushare_daily_cache_key(
+        ts_code=normalized_ts_code,
+        period=normalized_period,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+        limit=limit,
+    )
+    cached_rows = await _read_cached_daily_rows(cache_key)
+    if cached_rows is not None:
+        return cached_rows
+
+    db_rows = await _load_kline_rows_from_db(
+        session=session,
+        ts_code=normalized_ts_code,
+        period=normalized_period,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+        limit=limit,
+    )
+    # 关键流程：先查数据库历史，命中即返回，避免每次页面切换都访问三方接口。
+    has_enough_db_rows = len(db_rows) > 0 if trade_date else len(db_rows) >= limit
+    if has_enough_db_rows:
+        await _write_cached_daily_rows(
+            cache_key,
+            db_rows,
+            get_settings().stock_daily_cache_ttl_seconds,
+        )
+        return db_rows
+
+    singleflight_lock = await _get_singleflight_lock(cache_key)
+    async with singleflight_lock:
+        cached_rows_after_lock = await _read_cached_daily_rows(cache_key)
+        if cached_rows_after_lock is not None:
+            return cached_rows_after_lock
+
+        settings = get_settings()
+        try:
+            gateway = TushareGateway(settings.tushare_token)
+        except ValueError:
+            if db_rows:
+                return db_rows
+            return await _load_daily_rows_from_db(
+                session=session,
+                ts_code=normalized_ts_code,
+                limit=limit,
+            )
+
+        try:
+            if normalized_period == "weekly":
+                tushare_rows = await gateway.fetch_weekly_by_range(
+                    ts_code=normalized_ts_code,
+                    start_date=resolved_start_date,
+                    end_date=resolved_end_date,
+                )
+            elif normalized_period == "monthly":
+                tushare_rows = await gateway.fetch_monthly_by_range(
+                    ts_code=normalized_ts_code,
+                    start_date=resolved_start_date,
+                    end_date=resolved_end_date,
+                )
+            else:
+                tushare_rows = await gateway.fetch_daily_by_range(
+                    ts_code=normalized_ts_code,
+                    start_date=resolved_start_date,
+                    end_date=resolved_end_date,
+                )
+
+            # 关键状态流转：三方回源成功后立即落库，后续同参数请求可直接走数据库。
+            await _upsert_kline_rows(
+                session=session,
+                ts_code=normalized_ts_code,
+                period=normalized_period,
+                rows=tushare_rows,
+            )
+            await session.commit()
+
+            mapped_rows: list[StockDailySnapshotResponse] = []
+            for row in tushare_rows:
+                mapped_row = _map_tushare_daily_row_to_snapshot_response(
+                    ts_code=normalized_ts_code,
+                    row=row,
+                )
+                if mapped_row is None:
+                    continue
+                mapped_rows.append(mapped_row)
+
+            mapped_rows.sort(key=lambda item: item.trade_date, reverse=True)
+            result_rows = mapped_rows[:limit]
+            await _write_cached_daily_rows(
+                cache_key,
+                result_rows,
+                settings.stock_daily_cache_ttl_seconds,
+            )
+            return result_rows
+        except Exception:
+            # 降级分支：第三方行情接口异常时，回退本地历史快照，保证详情页可用性。
+            if db_rows:
+                return db_rows
+            if normalized_period != "daily":
+                return []
+            return await _load_daily_rows_from_db(
+                session=session,
+                ts_code=normalized_ts_code,
+                limit=limit,
+            )
+
+
+@router.get(
+    "/stocks/{ts_code}/adj-factor",
+    response_model=list[StockAdjFactorResponse],
+)
+async def get_adj_factor(
+    ts_code: str,
+    limit: int = Query(default=240, ge=1, le=2000),
+    trade_date: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[StockAdjFactorResponse]:
+    normalized_ts_code = ts_code.strip().upper()
+    instrument = await session.get(StockInstrument, normalized_ts_code)
+    if instrument is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="stock not found",
+        )
+
+    resolved_start_date, resolved_end_date = _resolve_tushare_kline_date_range(
+        limit=limit,
+        trade_date=trade_date,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    cache_key = _to_adj_factor_cache_key(
+        ts_code=normalized_ts_code,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+        limit=limit,
+        trade_date=trade_date,
+    )
+
+    try:
+        raw_payload = await get_redis_client().get(cache_key)
+    except Exception:
+        raw_payload = None
+    if raw_payload is not None:
+        try:
+            payload = json.loads(raw_payload)
+            return [StockAdjFactorResponse.model_validate(item) for item in payload]
+        except Exception:
+            pass
+
+    db_rows = await _load_adj_factor_rows_from_db(
+        session=session,
+        ts_code=normalized_ts_code,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+        trade_date=trade_date,
+        limit=limit,
+    )
+    has_enough_db_rows = len(db_rows) > 0 if trade_date else len(db_rows) >= limit
+    if has_enough_db_rows:
+        try:
+            await get_redis_client().set(
+                cache_key,
+                json.dumps(
+                    [item.model_dump(mode="json") for item in db_rows],
+                    ensure_ascii=False,
+                ),
+                ex=get_settings().stock_adj_factor_cache_ttl_seconds,
+            )
+        except Exception:
+            pass
+        return db_rows
+
+    singleflight_lock = await _get_singleflight_lock(cache_key)
+    async with singleflight_lock:
+        settings = get_settings()
+        try:
+            gateway = TushareGateway(settings.tushare_token)
+            tushare_rows = await gateway.fetch_adj_factor_by_range(
+                ts_code=normalized_ts_code,
+                start_date=resolved_start_date,
+                end_date=resolved_end_date,
+            )
+            # 关键流程：复权因子是可复用的长期数据，回源后立即落库，后续优先 DB 命中。
+            await _upsert_adj_factor_rows(
+                session=session,
+                ts_code=normalized_ts_code,
+                rows=tushare_rows,
+            )
+            await session.commit()
+
+            result_rows = await _load_adj_factor_rows_from_db(
+                session=session,
+                ts_code=normalized_ts_code,
+                start_date=resolved_start_date,
+                end_date=resolved_end_date,
+                trade_date=trade_date,
+                limit=limit,
+            )
+            try:
+                await get_redis_client().set(
+                    cache_key,
+                    json.dumps(
+                        [item.model_dump(mode="json") for item in result_rows],
+                        ensure_ascii=False,
+                    ),
+                    ex=settings.stock_adj_factor_cache_ttl_seconds,
+                )
+            except Exception:
+                pass
+            return result_rows
+        except Exception:
+            return db_rows

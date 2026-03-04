@@ -16,6 +16,25 @@ from app.models.stock_instrument import StockInstrument
 from app.models.user import User
 
 
+class FakeRedisClient:
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self._store.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+        _ = ex
+        self._store[key] = value
+        return True
+
+    async def delete(self, key: str) -> int:
+        if key in self._store:
+            del self._store[key]
+            return 1
+        return 0
+
+
 @pytest.fixture
 def stock_client(tmp_path: Path) -> TestClient:
     db_path = tmp_path / "stock-test.db"
@@ -198,14 +217,306 @@ def test_stock_detail_returns_latest_snapshot(stock_client: TestClient) -> None:
     assert payload["latest_snapshot"]["close"] == 8.25
 
 
-def test_stock_daily_returns_recent_records(stock_client: TestClient) -> None:
-    response = stock_client.get("/api/stocks/000001.SZ/daily", params={"limit": 20})
+def test_stock_daily_returns_recent_records(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called: dict[str, object] = {
+        "count": 0,
+    }
+
+    class FakeTushareGateway:
+        def __init__(self, token: str) -> None:
+            called["token"] = token
+
+        async def fetch_daily_by_range(
+            self,
+            *,
+            ts_code: str,
+            start_date: str,
+            end_date: str,
+        ) -> list[dict[str, object]]:
+            called["count"] = int(called["count"]) + 1
+            called["ts_code"] = ts_code
+            called["start_date"] = start_date
+            called["end_date"] = end_date
+            return [
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20260303",
+                    "open": 11.0,
+                    "high": 11.2,
+                    "low": 10.8,
+                    "close": 11.1,
+                    "pre_close": 10.95,
+                    "change": 0.15,
+                    "pct_chg": 1.37,
+                    "vol": 123456,
+                    "amount": 789012,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "20260302",
+                    "open": 10.9,
+                    "high": 11.0,
+                    "low": 10.7,
+                    "close": 10.95,
+                    "pre_close": 10.9,
+                    "change": 0.05,
+                    "pct_chg": 0.46,
+                    "vol": 100000,
+                    "amount": 680000,
+                },
+            ]
+
+    fake_redis = FakeRedisClient()
+    monkeypatch.setattr("app.api.routes.stocks.TushareGateway", FakeTushareGateway)
+    monkeypatch.setattr("app.api.routes.stocks.get_redis_client", lambda: fake_redis)
+
+    response = stock_client.get(
+        "/api/stocks/000001.SZ/daily",
+        params={"limit": 1, "start_date": "20260301", "end_date": "20260303"},
+    )
 
     assert response.status_code == 200
     payload = response.json()
     assert len(payload) == 1
     assert payload[0]["trade_date"] == "2026-03-03"
     assert payload[0]["pct_chg"] == 1.37
+    assert payload[0]["ts_code"] == "000001.SZ"
+    assert called["count"] == 1
+    assert called["ts_code"] == "000001.SZ"
+    assert called["start_date"] == "20260301"
+    assert called["end_date"] == "20260303"
+
+    response_cached = stock_client.get(
+        "/api/stocks/000001.SZ/daily",
+        params={"limit": 1, "start_date": "20260301", "end_date": "20260303"},
+    )
+    assert response_cached.status_code == 200
+    cached_payload = response_cached.json()
+    assert len(cached_payload) == 1
+    assert cached_payload[0]["trade_date"] == "2026-03-03"
+    assert called["count"] == 1
+
+
+def test_stock_daily_supports_weekly_period_and_prefers_db(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called: dict[str, object] = {
+        "count": 0,
+    }
+
+    class FakeTushareGateway:
+        def __init__(self, token: str) -> None:
+            called["token"] = token
+
+        async def fetch_weekly_by_range(
+            self,
+            *,
+            ts_code: str,
+            start_date: str,
+            end_date: str,
+        ) -> list[dict[str, object]]:
+            called["count"] = int(called["count"]) + 1
+            called["ts_code"] = ts_code
+            called["start_date"] = start_date
+            called["end_date"] = end_date
+            return [
+                {
+                    "ts_code": ts_code,
+                    "trade_date": "20260306",
+                    "open": 11.0,
+                    "high": 11.8,
+                    "low": 10.7,
+                    "close": 11.5,
+                    "pre_close": 10.9,
+                    "change": 0.6,
+                    "pct_chg": 5.5,
+                    "vol": 900000,
+                    "amount": 1000000,
+                }
+            ]
+
+    fake_redis = FakeRedisClient()
+    monkeypatch.setattr("app.api.routes.stocks.TushareGateway", FakeTushareGateway)
+    monkeypatch.setattr("app.api.routes.stocks.get_redis_client", lambda: fake_redis)
+
+    response = stock_client.get(
+        "/api/stocks/000001.SZ/daily",
+        params={
+            "period": "weekly",
+            "limit": 1,
+            "start_date": "20260301",
+            "end_date": "20260310",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["trade_date"] == "2026-03-06"
+    assert called["count"] == 1
+
+    fake_redis._store.clear()
+
+    response_from_db = stock_client.get(
+        "/api/stocks/000001.SZ/daily",
+        params={
+            "period": "weekly",
+            "limit": 1,
+            "start_date": "20260301",
+            "end_date": "20260310",
+        },
+    )
+
+    assert response_from_db.status_code == 200
+    payload_from_db = response_from_db.json()
+    assert len(payload_from_db) == 1
+    assert payload_from_db[0]["trade_date"] == "2026-03-06"
+    assert called["count"] == 1
+
+
+def test_trade_calendar_prefers_db_then_falls_back_to_tushare(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called: dict[str, object] = {
+        "count": 0,
+    }
+
+    class FakeTushareGateway:
+        def __init__(self, token: str) -> None:
+            called["token"] = token
+
+        async def fetch_trade_cal_by_range(
+            self,
+            *,
+            exchange: str,
+            start_date: str,
+            end_date: str,
+            is_open: str | None,
+        ) -> list[dict[str, object]]:
+            called["count"] = int(called["count"]) + 1
+            called["exchange"] = exchange
+            called["start_date"] = start_date
+            called["end_date"] = end_date
+            called["is_open"] = is_open
+            return [
+                {
+                    "exchange": exchange,
+                    "cal_date": "20260303",
+                    "is_open": "1",
+                    "pretrade_date": "20260302",
+                }
+            ]
+
+    fake_redis = FakeRedisClient()
+    monkeypatch.setattr("app.api.routes.stocks.TushareGateway", FakeTushareGateway)
+    monkeypatch.setattr("app.api.routes.stocks.get_redis_client", lambda: fake_redis)
+
+    response = stock_client.get(
+        "/api/stocks/trade-cal",
+        params={
+            "exchange": "SSE",
+            "start_date": "20260301",
+            "end_date": "20260305",
+            "is_open": "1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["exchange"] == "SSE"
+    assert payload[0]["cal_date"] == "2026-03-03"
+    assert payload[0]["is_open"] == "1"
+    assert called["count"] == 1
+
+    fake_redis._store.clear()
+
+    response_from_db = stock_client.get(
+        "/api/stocks/trade-cal",
+        params={
+            "exchange": "SSE",
+            "start_date": "20260301",
+            "end_date": "20260305",
+            "is_open": "1",
+        },
+    )
+
+    assert response_from_db.status_code == 200
+    payload_from_db = response_from_db.json()
+    assert len(payload_from_db) == 1
+    assert payload_from_db[0]["cal_date"] == "2026-03-03"
+    assert called["count"] == 1
+
+
+def test_adj_factor_prefers_db_then_falls_back_to_tushare(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called: dict[str, object] = {
+        "count": 0,
+    }
+
+    class FakeTushareGateway:
+        def __init__(self, token: str) -> None:
+            called["token"] = token
+
+        async def fetch_adj_factor_by_range(
+            self,
+            *,
+            ts_code: str,
+            start_date: str,
+            end_date: str,
+        ) -> list[dict[str, object]]:
+            called["count"] = int(called["count"]) + 1
+            called["ts_code"] = ts_code
+            called["start_date"] = start_date
+            called["end_date"] = end_date
+            return [
+                {
+                    "ts_code": ts_code,
+                    "trade_date": "20260303",
+                    "adj_factor": 1.2345,
+                }
+            ]
+
+    fake_redis = FakeRedisClient()
+    monkeypatch.setattr("app.api.routes.stocks.TushareGateway", FakeTushareGateway)
+    monkeypatch.setattr("app.api.routes.stocks.get_redis_client", lambda: fake_redis)
+
+    response = stock_client.get(
+        "/api/stocks/000001.SZ/adj-factor",
+        params={
+            "limit": 1,
+            "start_date": "20260301",
+            "end_date": "20260305",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["ts_code"] == "000001.SZ"
+    assert payload[0]["trade_date"] == "2026-03-03"
+    assert payload[0]["adj_factor"] == 1.2345
+    assert called["count"] == 1
+
+    fake_redis._store.clear()
+
+    response_from_db = stock_client.get(
+        "/api/stocks/000001.SZ/adj-factor",
+        params={
+            "limit": 1,
+            "start_date": "20260301",
+            "end_date": "20260305",
+        },
+    )
+
+    assert response_from_db.status_code == 200
+    payload_from_db = response_from_db.json()
+    assert len(payload_from_db) == 1
+    assert payload_from_db[0]["adj_factor"] == 1.2345
+    assert called["count"] == 1
 
 
 def test_trigger_stock_basic_full_sync_endpoint(

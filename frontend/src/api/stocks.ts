@@ -61,6 +61,15 @@ export type StockDetail = {
 }
 
 
+export type StockDailyQueryOptions = {
+  limit?: number
+  period?: 'daily' | 'weekly' | 'monthly'
+  tradeDate?: string
+  startDate?: string
+  endDate?: string
+}
+
+
 const buildQueryString = (params: Record<string, string | number | undefined>) => {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
@@ -87,8 +96,14 @@ export const stocksApi = {
   async getStockDetail(tsCode: string) {
     return requestJson<StockDetail>(`/api/stocks/${encodeURIComponent(tsCode)}`)
   },
-  async getStockDaily(tsCode: string, limit = 60) {
-    const query = buildQueryString({ limit })
+  async getStockDaily(tsCode: string, options?: StockDailyQueryOptions) {
+    const query = buildQueryString({
+      limit: options?.limit ?? 60,
+      period: options?.period ?? 'daily',
+      trade_date: options?.tradeDate,
+      start_date: options?.startDate,
+      end_date: options?.endDate,
+    })
     return requestJson<StockDailySnapshot[]>(
       `/api/stocks/${encodeURIComponent(tsCode)}/daily${query}`,
     )

@@ -100,6 +100,20 @@ Last update: 2026-03-04
   - Stabilized card rendering by deduplicating appended pages by `ts_code` to avoid old-card mutation on scroll
   - Reworked home stock cards to horizontal list arrangement while keeping vertical content flow inside each card
   - Reduced scroll repaint cost by simplifying fixed background layers and removing heavy visual effects
+- Upgraded stock detail history source and frequency control:
+  - `GET /api/stocks/{ts_code}/daily` now fetches Tushare `daily` history data
+  - Added 10-minute Redis cache + singleflight lock to reduce third-party request frequency
+  - Added fallback to local `stock_daily_snapshots` when third-party fetch fails
+- Upgraded kline persistence and period query strategy:
+  - Added `stock_kline_bars` table for period-based historical bars (`daily/weekly/monthly`)
+  - `GET /api/stocks/{ts_code}/daily` now supports `period` and applies DB-first read before Tushare fallback
+  - Successful third-party responses are persisted to DB for subsequent direct DB hits
+  - Frontend stock detail period switches now trigger real backend period requests
+- Added DB-first persistence for shared stock metadata endpoints:
+  - Added `stock_trade_calendars` and `stock_adj_factors` tables for long-term storage
+  - Added `GET /api/stocks/trade-cal` with DB-first + Tushare fallback + write-through persistence
+  - Added `GET /api/stocks/{ts_code}/adj-factor` with DB-first + Tushare fallback + write-through persistence
+  - Added route tests covering fallback and second-request DB hit behavior
 
 ## In Progress
 

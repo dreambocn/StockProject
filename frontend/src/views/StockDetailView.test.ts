@@ -21,16 +21,15 @@ const jsonResponse = (payload: unknown) => ({
 
 describe('StockDetailView', () => {
   it('loads stock detail and recent daily data', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
+    const fetchMock = vi
+      .fn()
         .mockResolvedValueOnce(
           jsonResponse({
             instrument: {
               ts_code: '600000.SH',
               symbol: '600000',
               name: '浦发银行',
+              fullname: '上海浦东发展银行股份有限公司',
               area: '上海',
               industry: '银行',
               market: '主板',
@@ -46,10 +45,10 @@ describe('StockDetailView', () => {
               open: 8.1,
               high: 8.3,
               low: 8.0,
-              close: 8.25,
+              close: 7.9,
               pre_close: 8.05,
-              change: 0.2,
-              pct_chg: 2.48,
+              change: -0.15,
+              pct_chg: -1.88,
               vol: 654321,
               amount: 321098,
               turnover_rate: 1.8,
@@ -75,16 +74,35 @@ describe('StockDetailView', () => {
               pct_chg: 2.48,
               vol: 654321,
               amount: 321098,
-              turnover_rate: 1.8,
-              volume_ratio: 1.1,
-              pe: 5.8,
-              pb: 0.62,
-              total_mv: 2000000,
-              circ_mv: 1800000,
+              turnover_rate: null,
+              volume_ratio: null,
+              pe: null,
+              pb: null,
+              total_mv: null,
+              circ_mv: null,
+            },
+            {
+              ts_code: '600000.SH',
+              trade_date: '2026-03-02',
+              open: 8.0,
+              high: 8.2,
+              low: 7.9,
+              close: 8.05,
+              pre_close: 7.95,
+              change: 0.1,
+              pct_chg: 1.26,
+              vol: 520000,
+              amount: 280000,
+              turnover_rate: null,
+              volume_ratio: null,
+              pe: null,
+              pb: null,
+              total_mv: null,
+              circ_mv: null,
             },
           ]),
-        ),
-    )
+        )
+    vi.stubGlobal('fetch', fetchMock)
 
     setAppLocale('zh-CN')
     const router = createRouter({
@@ -104,7 +122,31 @@ describe('StockDetailView', () => {
 
     expect(wrapper.text()).toContain('浦发银行')
     expect(wrapper.text()).toContain('600000.SH')
+    expect(wrapper.text()).toContain('上海浦东发展银行股份有限公司')
     expect(wrapper.text()).toContain('8.25')
     expect(wrapper.text()).toContain('2026-03-03')
+    expect(wrapper.find('[data-testid="kline-chart"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kline-period-daily"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kline-period-weekly"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kline-period-monthly"]').exists()).toBe(true)
+
+    const latestClose = wrapper.get('[data-testid="latest-close-value"]').text()
+    const latestChange = wrapper.get('[data-testid="latest-change-value"]').text()
+    expect(latestClose).toBe('8.25')
+    expect(latestChange).toBe('+2.48%')
+
+    expect(wrapper.find('[data-testid="kline-tooltip"]').exists()).toBe(false)
+    const interactiveLayer = wrapper.get('[data-testid="kline-interaction-layer"]')
+    await interactiveLayer.trigger('mousemove', { clientX: 200, clientY: 120 })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="kline-tooltip"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('2026-03-03')
+    expect(wrapper.text()).toContain('¥8.25')
+
+    const dailyRequest = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(dailyRequest[0]).toContain('/api/stocks/600000.SH/daily?')
+    expect(dailyRequest[0]).toContain('limit=60')
+    expect(dailyRequest[0]).toContain('period=daily')
+    expect(dailyRequest[0]).not.toContain('adjust=')
   })
 })
