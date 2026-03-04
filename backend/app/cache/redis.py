@@ -115,6 +115,18 @@ class RedisEmailVerificationStore(EmailVerificationStore):
         normalized_email = email.strip().lower()
         return f"auth:email_code_cooldown:{scene}:{normalized_email}"
 
+    def _build_ip_minute_limit_key(self, scene: str, ip: str) -> str:
+        normalized_ip = ip.strip().lower()
+        return f"auth:email_code:ip:{scene}:{normalized_ip}"
+
+    def _build_ip_day_limit_key(self, scene: str, ip: str) -> str:
+        normalized_ip = ip.strip().lower()
+        return f"auth:email_code:ip_day:{scene}:{normalized_ip}"
+
+    def _build_ip_block_key(self, ip: str) -> str:
+        normalized_ip = ip.strip().lower()
+        return f"auth:block_ip:{normalized_ip}"
+
     async def try_acquire_send_cooldown(
         self, scene: str, email: str, cooldown_seconds: int
     ) -> bool:
@@ -144,3 +156,34 @@ class RedisEmailVerificationStore(EmailVerificationStore):
         # 验证码消费后立即删除，防止重放攻击。
         key = self._build_code_key(scene, email)
         await self.client.delete(key)
+
+    async def is_ip_blocked(self, ip: str) -> bool:
+        # 拉黑名单优先检查，命中后直接拒绝，避免继续消耗风控/邮件资源。
+        block_key = self._build_ip_block_key(ip)
+        return bool(await self.client.exists(block_key))
+
+    async def check_and_increment_ip_limits(
+        self,
+        scene: str,
+        ip: str,
+        minute_limit: int,
+        day_limit: int,
+        block_seconds: int,
+    ) -> bool:
+        minute_key = self._build_ip_minute_limit_key(scene, ip)
+        day_key = self._build_ip_day_limit_key(scene, ip)
+
+        minute_count = int(await self.client.incr(minute_key))
+        if minute_count == 1:
+            await self.client.expire(minute_key, 60)
+
+        day_count = int(await self.client.incr(day_key))
+        if day_count == 1:
+            await self.client.expire(day_key, 24 * 60 * 60)
+
+        # 任一窗口超限都进入 IP 拉黑，短时间内阻断持续刷接口行为。
+        if minute_count > minute_limit or day_count > day_limit:
+            await self.client.set(self._build_ip_block_key(ip), "1", ex=block_seconds)
+            return False
+
+        return True

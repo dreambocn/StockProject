@@ -18,3 +18,14 @@ class EmailVerificationStore(Protocol):
     ) -> bool: ...
 
     async def consume_email_verification_code(self, scene: str, email: str) -> None: ...
+
+    async def is_ip_blocked(self, ip: str) -> bool: ...
+
+    async def check_and_increment_ip_limits(
+        self,
+        scene: str,
+        ip: str,
+        minute_limit: int,
+        day_limit: int,
+        block_seconds: int,
+    ) -> bool: ...

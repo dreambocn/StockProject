@@ -83,9 +83,15 @@ class InMemoryEmailVerificationStore:
     def __init__(self) -> None:
         self.codes: dict[tuple[str, str], str] = {}
         self.cooldowns: set[tuple[str, str]] = set()
+        self.ip_minute_counts: dict[tuple[str, str], int] = {}
+        self.ip_day_counts: dict[tuple[str, str], int] = {}
+        self.blocked_ips: set[str] = set()
 
     def _key(self, scene: str, email: str) -> tuple[str, str]:
         return (scene, email.strip().lower())
+
+    def _ip_key(self, scene: str, ip: str) -> tuple[str, str]:
+        return (scene, ip.strip().lower())
 
     async def try_acquire_send_cooldown(
         self, scene: str, email: str, cooldown_seconds: int
@@ -111,6 +117,30 @@ class InMemoryEmailVerificationStore:
 
     async def consume_email_verification_code(self, scene: str, email: str) -> None:
         self.codes.pop(self._key(scene, email), None)
+
+    async def is_ip_blocked(self, ip: str) -> bool:
+        return ip.strip().lower() in self.blocked_ips
+
+    async def check_and_increment_ip_limits(
+        self,
+        scene: str,
+        ip: str,
+        minute_limit: int,
+        day_limit: int,
+        block_seconds: int,
+    ) -> bool:
+        ip_key = self._ip_key(scene, ip)
+
+        minute_count = self.ip_minute_counts.get(ip_key, 0) + 1
+        day_count = self.ip_day_counts.get(ip_key, 0) + 1
+        self.ip_minute_counts[ip_key] = minute_count
+        self.ip_day_counts[ip_key] = day_count
+
+        if minute_count > minute_limit or day_count > day_limit:
+            self.blocked_ips.add(ip.strip().lower())
+            return False
+
+        return True
 
 
 class InMemoryEmailSender:
@@ -671,3 +701,46 @@ def test_reset_password_flow_with_email_code(auth_client: TestClient) -> None:
         json={"account": "kate", "password": "N3wPass!456"},
     )
     assert new_login_response.status_code == 200
+
+
+def test_register_email_code_ip_rate_limit_blocks_after_threshold(
+    auth_client: TestClient,
+) -> None:
+    responses = [
+        auth_client.post(
+            "/api/auth/register/email-code",
+            json={"email": f"limit-{index}@example.com"},
+        )
+        for index in range(1, 12)
+    ]
+
+    for response in responses[:10]:
+        assert response.status_code == 200
+    assert responses[10].status_code == 429
+
+    email_sender = app.dependency_overrides[get_email_sender]()
+    assert len(email_sender.sent_verification) == 10
+
+
+def test_blocked_ip_is_rejected_on_reset_password_email_code(
+    auth_client: TestClient,
+) -> None:
+    responses = [
+        auth_client.post(
+            "/api/auth/register/email-code",
+            json={"email": f"block-{index}@example.com"},
+        )
+        for index in range(1, 12)
+    ]
+    blocked_reset_response = auth_client.post(
+        "/api/auth/reset-password/email-code",
+        json={"email": "nobody@example.com"},
+    )
+
+    for response in responses[:10]:
+        assert response.status_code == 200
+    assert responses[10].status_code == 429
+    assert blocked_reset_response.status_code == 429
+
+    email_sender = app.dependency_overrides[get_email_sender]()
+    assert len(email_sender.sent_verification) == 10

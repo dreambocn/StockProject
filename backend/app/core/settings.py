@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     email_code_ttl_seconds: int = 300
     email_code_cooldown_seconds: int = 60
     email_code_length: int = 6
+    email_code_ip_limit_per_minute: int = 10
+    email_code_ip_limit_per_day: int = 200
+    email_code_ip_block_seconds: int = 900
+    trust_proxy_headers: bool = False
+    trusted_proxy_ips: str = ""
     smtp_host: str = ""
     smtp_username: str = ""
     smtp_password: str = ""
@@ -151,6 +156,22 @@ class Settings(BaseSettings):
             )
 
         return parsed_origins
+
+    @property
+    def trusted_proxy_ips_list(self) -> list[str]:
+        parsed_proxies: list[str] = []
+        seen_proxies: set[str] = set()
+        for raw_proxy in self.trusted_proxy_ips.split(","):
+            normalized_proxy = raw_proxy.strip()
+            if not normalized_proxy:
+                continue
+            if normalized_proxy in seen_proxies:
+                continue
+
+            seen_proxies.add(normalized_proxy)
+            parsed_proxies.append(normalized_proxy)
+
+        return parsed_proxies
 
 
 @lru_cache

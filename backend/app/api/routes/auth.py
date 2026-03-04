@@ -66,6 +66,56 @@ def _build_login_identity_key(account: str, client_ip: str) -> str:
     return hashlib.sha256(raw_value.encode("utf-8")).hexdigest()
 
 
+def _extract_client_ip(request: Request) -> str:
+    direct_client_ip = request.client.host if request.client else "unknown"
+
+    # 仅在显式开启且来源是受信代理时才读取转发头，防止伪造 X-Forwarded-For 绕过限流。
+    if not settings.trust_proxy_headers:
+        return direct_client_ip
+
+    trusted_proxy_ips = settings.trusted_proxy_ips_list
+    if not trusted_proxy_ips:
+        return direct_client_ip
+
+    if direct_client_ip not in trusted_proxy_ips:
+        return direct_client_ip
+
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    forwarded_ip = forwarded_for.split(",", 1)[0].strip()
+    if not forwarded_ip:
+        return direct_client_ip
+
+    return forwarded_ip
+
+
+async def _enforce_email_code_ip_risk_control(
+    scene: str,
+    request: Request,
+    email_verification_store: EmailVerificationStore,
+) -> None:
+    client_ip = _extract_client_ip(request)
+
+    # 风控顺序：先黑名单、再计数限流、最后才进入邮箱冷却与发信逻辑，避免高风险请求继续消耗资源。
+    if await email_verification_store.is_ip_blocked(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email verification code send too frequent",
+        )
+
+    is_allowed = await email_verification_store.check_and_increment_ip_limits(
+        scene,
+        client_ip,
+        settings.email_code_ip_limit_per_minute,
+        settings.email_code_ip_limit_per_day,
+        settings.email_code_ip_block_seconds,
+    )
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="email verification code send too frequent",
+        )
+
+
 @router.post(
     "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
 )
@@ -118,11 +168,18 @@ async def register(
 @router.post("/register/email-code", response_model=EmailCodeSendResponse)
 async def send_register_email_code(
     payload: RegisterEmailCodeRequest,
+    request: Request,
     email_verification_store: Annotated[
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> EmailCodeSendResponse:
+    await _enforce_email_code_ip_risk_control(
+        REGISTER_EMAIL_SCENE,
+        request,
+        email_verification_store,
+    )
+
     # 先抢占冷却窗口，再发送邮件，避免并发请求绕过前端倒计时而刷接口。
     is_allowed = await email_verification_store.try_acquire_send_cooldown(
         REGISTER_EMAIL_SCENE,
@@ -339,11 +396,18 @@ async def update_password(
 @router.post("/change-password/email-code", response_model=EmailCodeSendResponse)
 async def send_change_password_email_code(
     current_user: Annotated[User, Depends(get_current_user)],
+    request: Request,
     email_verification_store: Annotated[
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> EmailCodeSendResponse:
+    await _enforce_email_code_ip_risk_control(
+        CHANGE_PASSWORD_EMAIL_SCENE,
+        request,
+        email_verification_store,
+    )
+
     # 改密验证码同样受冷却限制，防止恶意频繁触发邮件。
     is_allowed = await email_verification_store.try_acquire_send_cooldown(
         CHANGE_PASSWORD_EMAIL_SCENE,
@@ -390,12 +454,19 @@ async def send_change_password_email_code(
 @router.post("/reset-password/email-code", response_model=EmailCodeSendResponse)
 async def send_reset_password_email_code(
     payload: ResetPasswordEmailCodeRequest,
+    request: Request,
     email_verification_store: Annotated[
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> EmailCodeSendResponse:
+    await _enforce_email_code_ip_risk_control(
+        RESET_PASSWORD_EMAIL_SCENE,
+        request,
+        email_verification_store,
+    )
+
     # 忘记密码场景也要做发送冷却，避免接口被刷。
     is_allowed = await email_verification_store.try_acquire_send_cooldown(
         RESET_PASSWORD_EMAIL_SCENE,

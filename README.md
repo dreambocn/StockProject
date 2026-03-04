@@ -26,6 +26,7 @@
   - 历史会话无法继续通过 `/api/auth/refresh` 获取新令牌
   - 已签发 `access token` 仍按原过期时间自然失效
 - 新增 CORS 环境白名单控制：仅允许配置来源跨域，并在 `CORS_ALLOW_CREDENTIALS=true` 时禁止 `*` 通配。
+- 新增发码接口 IP 风控：支持按场景分钟/天阈值限流，并在超限后写入临时黑名单。
 - 升级健康检查为真实探针：
   - `GET /api/health/liveness` 提供进程级存活检查
   - `GET /api/health/readiness` 检查 PostgreSQL(`SELECT 1`)、Redis(`PING`) 与 SMTP 配置完整性
@@ -102,6 +103,11 @@ uv run fastapi dev main.py
 - `EMAIL_CODE_TTL_SECONDS`（默认 `300`）
 - `EMAIL_CODE_COOLDOWN_SECONDS`（默认 `60`）
 - `EMAIL_CODE_LENGTH`（默认 `6`）
+- `EMAIL_CODE_IP_LIMIT_PER_MINUTE`（默认 `10`）
+- `EMAIL_CODE_IP_LIMIT_PER_DAY`（默认 `200`）
+- `EMAIL_CODE_IP_BLOCK_SECONDS`（默认 `900`）
+- `TRUST_PROXY_HEADERS`（默认 `false`；仅在受信代理部署场景开启）
+- `TRUSTED_PROXY_IPS`（逗号分隔受信代理 IP；仅在 `TRUST_PROXY_HEADERS=true` 时生效）
 - `CORS_ALLOW_ORIGINS`（逗号分隔白名单，例如 `http://localhost:5173,https://app.example.com`）
 - `CORS_ALLOW_CREDENTIALS`（默认 `true`；当为 `true` 时禁止在白名单中使用 `*`）
 

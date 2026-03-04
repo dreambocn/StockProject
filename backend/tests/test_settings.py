@@ -54,6 +54,11 @@ def test_settings_captcha_defaults() -> None:
     assert settings.email_code_ttl_seconds == 300
     assert settings.email_code_cooldown_seconds == 60
     assert settings.email_code_length == 6
+    assert settings.email_code_ip_limit_per_minute == 10
+    assert settings.email_code_ip_limit_per_day == 200
+    assert settings.email_code_ip_block_seconds == 900
+    assert settings.trust_proxy_headers is False
+    assert settings.trusted_proxy_ips_list == []
 
 
 def test_settings_parse_cors_allow_origins_normalization() -> None:
@@ -84,3 +89,11 @@ def test_settings_allow_empty_origins_with_credentials_enabled() -> None:
     )
 
     assert settings.cors_allow_origins_list == []
+
+
+def test_settings_parse_trusted_proxy_ips_normalization() -> None:
+    settings = Settings(
+        trusted_proxy_ips=" 10.0.0.1, 10.0.0.2 ,10.0.0.1 ",
+    )
+
+    assert settings.trusted_proxy_ips_list == ["10.0.0.1", "10.0.0.2"]
