@@ -1,3 +1,5 @@
+import pytest
+
 from app.core.settings import Settings
 
 
@@ -52,3 +54,33 @@ def test_settings_captcha_defaults() -> None:
     assert settings.email_code_ttl_seconds == 300
     assert settings.email_code_cooldown_seconds == 60
     assert settings.email_code_length == 6
+
+
+def test_settings_parse_cors_allow_origins_normalization() -> None:
+    settings = Settings(
+        cors_allow_origins=" http://localhost:5173, https://app.example.com ,http://localhost:5173 ",
+    )
+
+    assert settings.cors_allow_origins_list == [
+        "http://localhost:5173",
+        "https://app.example.com",
+    ]
+
+
+def test_settings_reject_wildcard_with_credentials_enabled() -> None:
+    settings = Settings(
+        cors_allow_origins="https://app.example.com,*",
+        cors_allow_credentials=True,
+    )
+
+    with pytest.raises(ValueError, match="CORS_ALLOW_ORIGINS"):
+        _ = settings.cors_allow_origins_list
+
+
+def test_settings_allow_empty_origins_with_credentials_enabled() -> None:
+    settings = Settings(
+        cors_allow_origins="",
+        cors_allow_credentials=True,
+    )
+
+    assert settings.cors_allow_origins_list == []

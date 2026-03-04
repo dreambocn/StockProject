@@ -22,6 +22,7 @@
   - 修改密码前必须先获取并提交邮箱验证码（与当前密码双校验）
   - 修改密码成功后发送邮箱通知
   - 新增忘记密码重置流程（邮箱验证码 + 新密码）
+- 新增 CORS 环境白名单控制：仅允许配置来源跨域，并在 `CORS_ALLOW_CREDENTIALS=true` 时禁止 `*` 通配。
 - 启动时支持自动检查/创建数据库、表与 schema（可配置）。
 - 完成请求级日志能力（含 `X-Request-ID`）。
 
@@ -94,6 +95,8 @@ uv run fastapi dev main.py
 - `EMAIL_CODE_TTL_SECONDS`（默认 `300`）
 - `EMAIL_CODE_COOLDOWN_SECONDS`（默认 `60`）
 - `EMAIL_CODE_LENGTH`（默认 `6`）
+- `CORS_ALLOW_ORIGINS`（逗号分隔白名单，例如 `http://localhost:5173,https://app.example.com`）
+- `CORS_ALLOW_CREDENTIALS`（默认 `true`；当为 `true` 时禁止在白名单中使用 `*`）
 
 邮件服务参数（`backend/.env`）：
 

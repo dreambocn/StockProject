@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_port: int = 465
     smtp_use_ssl: bool = True
+    cors_allow_origins: str = ""
+    cors_allow_credentials: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -127,6 +129,28 @@ class Settings(BaseSettings):
             return self.smtp_username
 
         return self.smtp_from
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        parsed_origins: list[str] = []
+        seen_origins: set[str] = set()
+        for raw_origin in self.cors_allow_origins.split(","):
+            normalized_origin = raw_origin.strip()
+            if not normalized_origin:
+                continue
+            if normalized_origin in seen_origins:
+                continue
+
+            seen_origins.add(normalized_origin)
+            parsed_origins.append(normalized_origin)
+
+        # 鉴权安全边界：允许凭证跨域时，禁止使用通配符，避免任意站点携带用户会话。
+        if self.cors_allow_credentials and "*" in parsed_origins:
+            raise ValueError(
+                "Invalid CORS_ALLOW_ORIGINS: wildcard '*' is not allowed when CORS_ALLOW_CREDENTIALS=true"
+            )
+
+        return parsed_origins
 
 
 @lru_cache
