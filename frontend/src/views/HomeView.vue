@@ -13,6 +13,7 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 const { t } = useI18n()
 const loading = ref(false)
 const stocks = ref<Stock[]>([
+  // 首屏提供降级占位数据，避免接口波动时页面完全空白。
   { symbol: 'AAPL', name: 'Apple', price: 213.48, change: 1.42 },
   { symbol: 'TSLA', name: 'Tesla', price: 256.74, change: -0.95 },
   { symbol: 'NVDA', name: 'NVIDIA', price: 917.32, change: 2.16 },
@@ -23,11 +24,13 @@ const refreshStocks = async () => {
   try {
     const response = await fetch(`${apiBaseUrl}/api/stocks`)
     if (!response.ok) {
+      // 请求失败时保留当前数据，不打断页面主流程。
       return
     }
 
     const payload = await response.json()
     if (Array.isArray(payload) && payload.length > 0) {
+      // 仅在拿到有效列表时更新，避免异常 payload 覆盖现有数据。
       stocks.value = payload as Stock[]
     }
   } catch {

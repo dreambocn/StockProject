@@ -3,6 +3,7 @@ import { ApiError } from '../api/http'
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
 const API_ERROR_KEY_MAP: Record<string, string> = {
+  // 后端稳定错误文案到 i18n key 的映射表，避免页面层散落硬编码。
   'invalid credentials': 'errors.invalidCredentials',
   'inactive user': 'errors.inactiveUser',
   'username or email already exists': 'errors.usernameOrEmailExists',
@@ -57,6 +58,7 @@ const mapValidationDetailItem = (
   detail: ValidationDetailItem,
   t: Translate,
 ): string | null => {
+  // 优先按 pydantic 错误类型结构化翻译，保证 422 提示可读。
   const type = typeof detail.type === 'string' ? detail.type : ''
   const message = typeof detail.msg === 'string' ? detail.msg : ''
   const field = resolveValidationFieldName(detail, t)
@@ -123,6 +125,7 @@ export const mapApiErrorMessage = (
   t: Translate,
   fallbackKey: string,
 ): string => {
+  // 统一错误出口：优先使用结构化信息，其次映射，最后回退默认文案。
   if (!(error instanceof ApiError)) {
     if (error instanceof Error && error.message) return error.message
     return t(fallbackKey)

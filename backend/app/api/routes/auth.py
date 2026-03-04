@@ -59,6 +59,8 @@ settings = get_settings()
 
 
 def _build_login_identity_key(account: str, client_ip: str) -> str:
+    # 基于账号+IP做哈希，避免在 Redis key 或日志中暴露原始登录标识。
+    # 该 key 用于登录失败计数，直接影响验证码风控触发。
     normalized_account = account.strip().lower()
     raw_value = f"{normalized_account}|{client_ip}"
     return hashlib.sha256(raw_value.encode("utf-8")).hexdigest()
@@ -74,6 +76,8 @@ async def register(
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
 ) -> UserResponse:
+    # 注册安全边界：必须先验证邮箱验证码，再进入用户创建流程。
+    # 这样可以把“邮箱所有权校验”前置，降低恶意批量注册风险。
     is_email_code_valid = (
         await email_verification_store.validate_email_verification_code(
             REGISTER_EMAIL_SCENE,
@@ -102,6 +106,7 @@ async def register(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    # 关键状态收敛：注册成功后立即消费验证码，防止同验证码被重复使用。
     await email_verification_store.consume_email_verification_code(
         REGISTER_EMAIL_SCENE,
         payload.email,
@@ -118,6 +123,7 @@ async def send_register_email_code(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> EmailCodeSendResponse:
+    # 先抢占冷却窗口，再发送邮件，避免并发请求绕过前端倒计时而刷接口。
     is_allowed = await email_verification_store.try_acquire_send_cooldown(
         REGISTER_EMAIL_SCENE,
         payload.email,
@@ -143,6 +149,7 @@ async def send_register_email_code(
             settings.email_code_ttl_seconds,
         )
     except RuntimeError as exc:
+        # 失败回滚：邮件发送失败时释放冷却锁，避免用户被错误冷却“锁死”。
         await email_verification_store.release_send_cooldown(
             REGISTER_EMAIL_SCENE,
             payload.email,
@@ -175,6 +182,7 @@ async def login(
         identity_key
     )
 
+    # 风控分支：失败次数达到阈值后，必须先通过验证码，防止撞库持续尝试。
     if failed_login_count >= settings.login_captcha_threshold:
         if not payload.captcha_id or not payload.captcha_code:
             raise HTTPException(
@@ -204,6 +212,7 @@ async def login(
         user = await authenticate_user(session, payload.account, payload.password)
         tokens = await issue_token_pair(user, token_store)
     except AuthError as exc:
+        # 鉴权失败时累计失败次数；达到阈值后，响应中显式通知前端拉起验证码流程。
         current_count = await login_challenge_store.record_failed_login(
             identity_key,
             settings.login_fail_window_seconds,
@@ -223,6 +232,7 @@ async def login(
 
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    # 成功登录后清理风控状态，避免后续正常登录被历史失败次数误伤。
     await login_challenge_store.reset_failed_login_count(identity_key)
     if payload.captcha_id:
         await login_challenge_store.revoke_captcha_challenge(payload.captcha_id)
@@ -237,6 +247,8 @@ async def get_captcha_challenge(
         LoginChallengeStore, Depends(get_login_challenge_store)
     ],
 ) -> CaptchaChallengeResponse:
+    # 验证码答案仅存储在服务端缓存，前端只拿图片与挑战 ID。
+    # 这样可以避免把答案或可逆信息暴露给客户端。
     challenge = generate_captcha_challenge(settings.captcha_length)
     await login_challenge_store.set_captcha_challenge(
         challenge.captcha_id,
@@ -275,6 +287,7 @@ async def update_password(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> MessageResponse:
+    # 已登录改密仍要求邮箱验证码，形成“登录态 + 当前密码 + 邮箱所有权”三重校验。
     is_email_code_valid = (
         await email_verification_store.validate_email_verification_code(
             CHANGE_PASSWORD_EMAIL_SCENE,
@@ -303,6 +316,7 @@ async def update_password(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    # 改密成功后消费验证码，阻断验证码重放。
     await email_verification_store.consume_email_verification_code(
         CHANGE_PASSWORD_EMAIL_SCENE,
         current_user.email,
@@ -310,6 +324,7 @@ async def update_password(
     try:
         await email_sender.send_password_changed_notice(current_user.email)
     except RuntimeError:
+        # 通知邮件失败不应影响主流程结果，避免“密码已改但接口报错”的一致性问题。
         logger.warning(
             "event=auth.password_change.notice_failed user_id=%s reason=email_service_unavailable",
             current_user.id,
@@ -327,6 +342,7 @@ async def send_change_password_email_code(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> EmailCodeSendResponse:
+    # 改密验证码同样受冷却限制，防止恶意频繁触发邮件。
     is_allowed = await email_verification_store.try_acquire_send_cooldown(
         CHANGE_PASSWORD_EMAIL_SCENE,
         current_user.email,
@@ -352,6 +368,7 @@ async def send_change_password_email_code(
             settings.email_code_ttl_seconds,
         )
     except RuntimeError as exc:
+        # 发送失败回滚冷却，避免用户必须等待冷却后才能重试。
         await email_verification_store.release_send_cooldown(
             CHANGE_PASSWORD_EMAIL_SCENE,
             current_user.email,
@@ -377,6 +394,7 @@ async def send_reset_password_email_code(
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> EmailCodeSendResponse:
+    # 忘记密码场景也要做发送冷却，避免接口被刷。
     is_allowed = await email_verification_store.try_acquire_send_cooldown(
         RESET_PASSWORD_EMAIL_SCENE,
         payload.email,
@@ -390,6 +408,7 @@ async def send_reset_password_email_code(
 
     user = await get_user_by_email(session, payload.email)
     if user is None:
+        # 防枚举策略：邮箱不存在时返回与成功一致的响应，不暴露账号存在性。
         return EmailCodeSendResponse(
             message="email code sent",
             expires_in=settings.email_code_ttl_seconds,
@@ -410,6 +429,7 @@ async def send_reset_password_email_code(
             settings.email_code_ttl_seconds,
         )
     except RuntimeError as exc:
+        # 发送失败时释放冷却，保障用户可立即重试。
         await email_verification_store.release_send_cooldown(
             RESET_PASSWORD_EMAIL_SCENE,
             payload.email,
@@ -435,6 +455,7 @@ async def reset_password(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> MessageResponse:
+    # 未登录重置密码的安全边界：必须通过邮箱验证码校验。
     is_email_code_valid = (
         await email_verification_store.validate_email_verification_code(
             RESET_PASSWORD_EMAIL_SCENE,
@@ -457,6 +478,7 @@ async def reset_password(
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    # 重置成功后消费验证码，防止同验证码重复改密。
     await email_verification_store.consume_email_verification_code(
         RESET_PASSWORD_EMAIL_SCENE,
         payload.email,
@@ -464,6 +486,7 @@ async def reset_password(
     try:
         await email_sender.send_password_changed_notice(payload.email)
     except RuntimeError:
+        # 通知邮件失败不回滚已完成的密码重置，保持主事务结果稳定。
         logger.warning(
             "event=auth.password_reset.notice_failed email=%s reason=email_service_unavailable",
             payload.email,

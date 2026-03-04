@@ -30,6 +30,7 @@ const errorMessage = ref('')
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 const startCodeCountdown = (seconds: number) => {
+  // 倒计时作为前端节流提示；真实防刷仍以后端冷却校验为准。
   codeCountdown.value = seconds
   if (countdownTimer) {
     clearInterval(countdownTimer)
@@ -107,6 +108,7 @@ const submitRegister = async () => {
 
   loading.value = true
   try {
+    // 关键链路：注册请求必须携带邮箱验证码，后端才允许创建账号。
     await authStore.register(form.username, form.email, form.password, form.emailCode.trim())
     await router.push('/')
   } catch (error) {

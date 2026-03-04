@@ -16,6 +16,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => Boolean(accessToken.value))
 
   const persistTokens = () => {
+    // 统一收口 token 持久化，避免不同流程写入策略不一致。
     if (accessToken.value) {
       localStorage.setItem(ACCESS_TOKEN_KEY, accessToken.value)
     } else {
@@ -36,6 +37,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const clearAuth = () => {
+    // 会话清理必须同时清空内存态与本地存储，防止“伪登录态”。
     accessToken.value = null
     refreshToken.value = null
     user.value = null
@@ -62,6 +64,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     const tokens = await authApi.refresh(refreshToken.value)
     setTokens(tokens)
+    // 刷新成功后立即拉取用户信息，确保导航与页面状态同步。
     await fetchMe()
   }
 
@@ -80,6 +83,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       await fetchMe()
     } catch (error) {
+      // 冷启动兜底：access token 过期时尝试 refresh，失败则彻底登出。
       if (error instanceof ApiError && error.status === 401 && refreshToken.value) {
         try {
           await refreshSession()
@@ -99,6 +103,7 @@ export const useAuthStore = defineStore('auth', () => {
     password: string,
     captcha?: Pick<LoginPayload, 'captcha_id' | 'captcha_code'>,
   ) => {
+    // 验证码参数按需透传，避免在无验证码场景发送无意义字段。
     const tokens = await authApi.login({ account, password, ...captcha })
     setTokens(tokens)
     await fetchMe()
@@ -112,6 +117,7 @@ export const useAuthStore = defineStore('auth', () => {
     password: string,
     emailCode: string,
   ) => {
+    // 注册成功后直接登录，减少用户额外操作并复用统一会话建立逻辑。
     await authApi.register({ username, email, email_code: emailCode, password })
     await login(username, password)
   }
@@ -119,6 +125,7 @@ export const useAuthStore = defineStore('auth', () => {
   const logout = async () => {
     try {
       if (refreshToken.value) {
+        // 尽量通知后端撤销 refresh token；即使失败也要执行本地清理。
         await authApi.logout(refreshToken.value)
       }
     } finally {

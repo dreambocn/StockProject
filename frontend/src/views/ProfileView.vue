@@ -10,6 +10,7 @@ const router = useRouter()
 const { t } = useI18n()
 
 onMounted(async () => {
+  // 刷新直达个人中心时若内存态为空，主动补拉用户信息。
   if (!authStore.user) {
     await authStore.fetchMe()
   }

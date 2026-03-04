@@ -19,6 +19,7 @@ type RequestOptions = {
 }
 
 export const requestJson = async <T>(path: string, options: RequestOptions = {}) => {
+  // 统一 API 请求入口：集中处理鉴权头、JSON 解析和错误归一化。
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
@@ -35,10 +36,12 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
 
   const contentType =
     typeof response.headers?.get === 'function' ? response.headers.get('content-type') : null
+  // 部分异常响应可能不是 JSON，避免强行解析导致二次错误。
   const isJson = contentType?.includes('application/json') ?? true
   const payload = isJson ? await response.json() : null
 
   if (!response.ok) {
+    // 优先提取后端 detail/message，确保前端 i18n 映射有稳定输入。
     const detailValue = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null
     const detail =
       typeof detailValue === 'string'

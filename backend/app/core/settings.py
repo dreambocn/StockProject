@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _remove_jdbc_prefix(url: str) -> str:
+    # 兼容历史 JDBC 风格配置，内部统一转换为标准 URL 解析。
     if url.startswith("jdbc:"):
         return url[5:]
 
@@ -58,6 +59,7 @@ class Settings(BaseSettings):
     def postgres_database(self) -> str:
         path = urlparse(_remove_jdbc_prefix(self.postgres_jdbc_url)).path.lstrip("/")
         database_path = path or "postgres"
+        # 支持 database.schema 复合写法；数据库名取第一段。
         if "." in database_path:
             database_name, _schema_name = database_path.split(".", 1)
             return database_name or "postgres"
@@ -68,6 +70,7 @@ class Settings(BaseSettings):
     def postgres_schema(self) -> str | None:
         path = urlparse(_remove_jdbc_prefix(self.postgres_jdbc_url)).path.lstrip("/")
         database_path = path or "postgres"
+        # 当未显式提供 schema 时返回 None，保持默认 search_path。
         if "." not in database_path:
             return None
 
@@ -116,6 +119,7 @@ class Settings(BaseSettings):
 
     @property
     def smtp_from_address(self) -> str:
+        # 兼容空值或占位写法，统一回退到 SMTP_USERNAME 作为发件人。
         if not self.smtp_from:
             return self.smtp_username
 

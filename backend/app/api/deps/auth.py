@@ -27,18 +27,22 @@ settings = get_settings()
 
 
 def get_token_store() -> TokenStore:
+    # 通过依赖注入统一令牌存储实现，便于后续替换或测试覆盖。
     return RedisTokenStore(get_redis_client())
 
 
 def get_login_challenge_store() -> LoginChallengeStore:
+    # 登录风控与验证码挑战统一走缓存层，保证多实例下行为一致。
     return RedisLoginChallengeStore(get_redis_client())
 
 
 def get_email_verification_store() -> EmailVerificationStore:
+    # 邮箱验证码的读写统一从依赖注入获取，避免路由层直接耦合 Redis 细节。
     return RedisEmailVerificationStore(get_redis_client())
 
 
 def get_email_sender() -> EmailSender:
+    # 邮件发送实现在依赖层收口，后续可平滑切换第三方邮件服务。
     return SmtpEmailSender(settings)
 
 
@@ -46,6 +50,7 @@ async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> User:
+    # 认证边界：只接受 access token，refresh token 不允许访问业务接口。
     token = credentials.credentials
     try:
         payload = decode_token(token, expected_type="access")
@@ -58,6 +63,7 @@ async def get_current_user(
     user_id = str(payload["sub"])
     user = await get_user_by_id(session, user_id)
     if user is None or not user.is_active:
+        # 用户不存在或已禁用时统一拒绝，避免泄露具体状态给客户端。
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="user not found or inactive",

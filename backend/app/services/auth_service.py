@@ -40,6 +40,7 @@ async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
 
 
 async def get_user_by_account(session: AsyncSession, account: str) -> User | None:
+    # 登录同时支持用户名和邮箱，统一在服务层收口查询逻辑。
     statement = select(User).where(or_(User.email == account, User.username == account))
     result = await session.execute(statement)
     return result.scalar_one_or_none()
@@ -57,6 +58,7 @@ async def register_user(
     email: str,
     password: str,
 ) -> User:
+    # 先校验唯一性再创建，避免数据库约束错误直接暴露给上层。
     statement = select(User).where(or_(User.username == username, User.email == email))
     result = await session.execute(statement)
     existed = result.scalar_one_or_none()
@@ -71,6 +73,7 @@ async def register_user(
 
 
 async def authenticate_user(session: AsyncSession, account: str, password: str) -> User:
+    # 认证失败统一返回“invalid credentials”，减少对攻击者的账号探测信息泄露。
     user = await get_user_by_account(session, account)
     if user is None or not verify_password(password, user.password_hash):
         raise UnauthorizedError("invalid credentials")
@@ -78,6 +81,7 @@ async def authenticate_user(session: AsyncSession, account: str, password: str) 
     if not user.is_active:
         raise UnauthorizedError("inactive user")
 
+    # 登录成功时更新最后登录时间，作为审计和安全分析依据。
     user.last_login_at = datetime.now(UTC)
     await session.commit()
     await session.refresh(user)
@@ -85,6 +89,7 @@ async def authenticate_user(session: AsyncSession, account: str, password: str) 
 
 
 async def issue_token_pair(user: User, token_store: TokenStore) -> dict[str, str]:
+    # 访问令牌短期有效；刷新令牌必须落缓存，后续可撤销。
     access_token = create_access_token(user.id)
     refresh_token, jti, expires_seconds = create_refresh_token(user.id)
     await token_store.set_refresh_token(jti, user.id, expires_seconds)
@@ -108,6 +113,7 @@ async def refresh_token_pair(
     if not await token_store.validate_refresh_token(jti, user_id):
         raise UnauthorizedError("refresh token revoked")
 
+    # 旋转策略：先撤销旧 refresh token，再签发新 token，降低被窃取后的可用窗口。
     await token_store.revoke_refresh_token(jti)
 
     access_token = create_access_token(user_id)
@@ -133,6 +139,7 @@ async def change_password(
     if not verify_password(current_password, user.password_hash):
         raise UnauthorizedError("current password is incorrect")
 
+    # 服务层只负责密码哈希更新，验证码与鉴权边界由路由层先行校验。
     user.password_hash = hash_password(new_password)
     await session.commit()
 
@@ -144,6 +151,7 @@ async def logout(refresh_token: str, token_store: TokenStore) -> None:
         raise UnauthorizedError("invalid refresh token") from exc
 
     jti = str(payload["jti"])
+    # 登出语义是撤销 refresh token，后续刷新流程将被拒绝。
     await token_store.revoke_refresh_token(jti)
 
 
@@ -156,5 +164,6 @@ async def reset_password_by_email(
     if user is None:
         raise NotFoundError("user not found")
 
+    # 忘记密码链路只更新目标用户密码，邮箱验证码校验由上层完成。
     user.password_hash = hash_password(new_password)
     await session.commit()

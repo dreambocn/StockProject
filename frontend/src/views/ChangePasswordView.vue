@@ -25,6 +25,7 @@ const form = reactive({
 })
 
 const startCodeCountdown = (seconds: number) => {
+  // 倒计时仅用于交互反馈；后端冷却窗口才是最终安全边界。
   codeCountdown.value = seconds
   if (countdownTimer) {
     clearInterval(countdownTimer)
@@ -53,6 +54,7 @@ const sendEmailCode = async () => {
   successMessage.value = ''
   errorMessage.value = ''
   try {
+    // 已登录改密也要求邮箱验证码，形成双重身份校验。
     const result = await authStore.sendChangePasswordEmailCode()
     startCodeCountdown(result.cooldown_in)
   } catch (error) {
@@ -94,6 +96,7 @@ const submitChangePassword = async () => {
   }
 
   try {
+    // 关键提交：当前密码 + 新密码 + 邮箱验证码缺一不可。
     await authStore.changePassword(form.currentPassword, form.newPassword, form.emailCode.trim())
     successMessage.value = t('changePassword.success')
     form.currentPassword = ''

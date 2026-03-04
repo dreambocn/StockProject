@@ -2,6 +2,7 @@ from typing import Protocol
 
 
 class EmailVerificationStore(Protocol):
+    # 邮箱验证码存储协议：约束冷却、写入、校验、消费四个关键流程。
     async def try_acquire_send_cooldown(
         self, scene: str, email: str, cooldown_seconds: int
     ) -> bool: ...

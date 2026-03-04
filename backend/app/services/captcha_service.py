@@ -9,12 +9,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 @dataclass(frozen=True)
 class CaptchaChallenge:
+    # captcha_id 给前端回传；answer 只保留在服务端缓存用于校验。
     captcha_id: str
     answer: str
     image_base64: str
 
 
 def _build_answer(length: int) -> str:
+    # 验证码统一使用大写字母+数字，减少用户输入歧义。
     alphabet = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
@@ -26,9 +28,11 @@ def _render_captcha_png(answer: str) -> bytes:
     try:
         font = ImageFont.truetype("arial.ttf", 30)
     except OSError:
+        # 运行环境缺少字体时回退默认字体，确保验证码能力不中断。
         font = ImageFont.load_default()
 
     for _ in range(8):
+        # 随机干扰线用于提高 OCR 识别成本。
         x1 = secrets.randbelow(width)
         y1 = secrets.randbelow(height)
         x2 = secrets.randbelow(width)
@@ -41,6 +45,7 @@ def _render_captcha_png(answer: str) -> bytes:
         draw.line((x1, y1, x2, y2), fill=line_color, width=1)
 
     for _ in range(220):
+        # 噪点干扰与字符错位共同提高自动化攻击门槛。
         px = secrets.randbelow(width)
         py = secrets.randbelow(height)
         point_color = (
@@ -93,6 +98,7 @@ def _render_captcha_png(answer: str) -> bytes:
 
 
 def generate_captcha_challenge(length: int) -> CaptchaChallenge:
+    # challenge 一次一 id，避免验证码答案在不同请求之间复用。
     answer = _build_answer(length)
     image_bytes = _render_captcha_png(answer)
     image_base64 = base64.b64encode(image_bytes).decode("ascii")

@@ -151,6 +151,16 @@ Linting: no dedicated frontend lint command configured.
 - Use IBM Plex Sans + IBM Plex Mono pairing
 - For new frontend pages/features, add appropriate motion/transition effects when they improve clarity and perceived quality
 
+## 6.1) 中文注释规范（关键流程）
+- 所有新增或修改的"关键流程"代码必须补充中文注释，至少覆盖：
+  - 鉴权与安全边界（登录态、token、验证码、风控）
+  - 关键业务分支（成功/失败/回滚/降级）
+  - 易误用的状态流转与副作用（缓存、倒计时、重试、会话清理）
+- 注释应解释"为什么这样做"和"边界条件"，避免逐行翻译代码。
+- 优先在函数入口、关键分支、关键状态变更处添加注释；保持简洁。
+- 禁止无信息量注释（如“设置变量”“调用接口”）。
+- 代码评审与交付前需自查：本次功能点涉及的关键过程是否已补齐中文注释。
+
 ## 7) Testing Guidelines
 - Follow TDD: failing test first, then minimal implementation
 - Backend tests should stay isolated/deterministic

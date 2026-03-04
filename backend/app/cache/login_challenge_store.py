@@ -2,6 +2,7 @@ from typing import Protocol
 
 
 class LoginChallengeStore(Protocol):
+    # 登录风控存储协议：用于失败计数与验证码挑战，便于切换实现。
     async def record_failed_login(
         self, identity_key: str, window_seconds: int
     ) -> int: ...

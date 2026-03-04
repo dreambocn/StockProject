@@ -9,6 +9,8 @@ settings = get_settings()
 
 @router.get("/health")
 async def health() -> dict[str, object]:
+    # 当前健康检查返回配置视角信息，便于快速确认运行时参数。
+    # 注意：这不是底层连接探针，不代表 PostgreSQL/Redis 一定可连通。
     return {
         "status": "ok",
         "services": {

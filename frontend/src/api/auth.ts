@@ -33,6 +33,7 @@ export type EmailCodeSendResponse = {
 }
 
 export const authApi = {
+  // 认证相关接口统一在此收口，避免页面层散落路径与 payload 结构。
   sendRegisterEmailCode: (email: string) =>
     requestJson<EmailCodeSendResponse>('/api/auth/register/email-code', {
       method: 'POST',

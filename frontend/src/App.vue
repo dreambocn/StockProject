@@ -17,6 +17,7 @@ const localeOptions: Array<{ label: string; value: AppLocale }> = [
 
 const selectedLocale = computed({
   get: () => i18n.global.locale.value as AppLocale,
+  // 统一通过 setAppLocale 写入，确保语言切换与持久化行为一致。
   set: (value: AppLocale) => setAppLocale(value),
 })
 
@@ -34,10 +35,12 @@ const authActionLabel = computed(() =>
 )
 
 onMounted(async () => {
+  // 应用启动时先恢复会话，避免首屏出现登录态闪烁。
   await authStore.initialize()
 })
 
 const handleAuthAction = async () => {
+  // 顶部按钮根据当前登录态执行“登出”或“去登录”两种分支。
   if (authStore.isAuthenticated) {
     await authStore.logout()
     await router.push('/login')

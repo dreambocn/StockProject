@@ -46,6 +46,7 @@ const strengthStatus = computed(() => {
 })
 
 const startCodeCountdown = (seconds: number) => {
+  // 前端倒计时只做体验提示，真正防刷依赖后端冷却与限流策略。
   codeCountdown.value = seconds
   if (countdownTimer) {
     clearInterval(countdownTimer)
@@ -74,6 +75,7 @@ const sendEmailCode = async () => {
   errorMessage.value = ''
   successMessage.value = ''
   try {
+    // 忘记密码走独立验证码场景，避免与注册/改密验证码混用。
     const result = await authStore.sendResetPasswordEmailCode(form.email)
     startCodeCountdown(result.cooldown_in)
     successMessage.value = t('resetPassword.codeSent')
@@ -102,6 +104,7 @@ const submitResetPassword = async () => {
   }
 
   try {
+    // 未登录重置密码的关键校验：邮箱 + 验证码 + 新密码。
     await authStore.resetPassword(form.email, form.emailCode.trim(), form.newPassword)
     successMessage.value = t('resetPassword.success')
     setTimeout(() => {

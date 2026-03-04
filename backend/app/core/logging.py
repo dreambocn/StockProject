@@ -7,6 +7,7 @@ _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
 
 
 def setup_logging(level: str = "INFO") -> None:
+    # 全局统一日志格式，保证后端各模块日志可被同一规则检索和聚合。
     dictConfig(
         {
             "version": 1,
@@ -35,10 +36,12 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def set_request_id(request_id: str) -> Token[str]:
+    # 将 request_id 写入上下文，避免函数层层传参。
     return _request_id_ctx.set(request_id)
 
 
 def reset_request_id(token: Token[str]) -> None:
+    # 恢复上下文快照，避免异步任务间串号。
     _request_id_ctx.reset(token)
 
 
@@ -51,6 +54,7 @@ def log_request_started(
     method: str,
     path: str,
 ) -> None:
+    # 请求入口日志：用于统计流量与定位请求链路起点。
     logger.info(
         "event=request_started request_id=%s method=%s path=%s",
         get_request_id(),
@@ -66,6 +70,7 @@ def log_request_finished(
     status_code: int,
     duration_ms: float,
 ) -> None:
+    # 请求完成日志：记录状态码与耗时，便于 SLA 监控。
     logger.info(
         "event=request_finished request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
         get_request_id(),
@@ -83,6 +88,7 @@ def log_request_failed(
     duration_ms: float,
     error: Exception,
 ) -> None:
+    # 异常日志走 exception，保留堆栈以便故障定位。
     logger.exception(
         "event=request_failed request_id=%s method=%s path=%s duration_ms=%.2f error=%s",
         get_request_id(),

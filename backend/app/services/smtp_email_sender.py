@@ -79,6 +79,7 @@ class SmtpEmailSender(EmailSender):
     async def _send_email(
         self, to_email: str, subject: str, text_body: str, html_body: str
     ) -> None:
+        # 在发送前做配置硬校验，避免进入 SMTP 连接后才暴露低可读错误。
         self._ensure_smtp_configured()
 
         message = EmailMessage()
@@ -86,11 +87,14 @@ class SmtpEmailSender(EmailSender):
         message["To"] = to_email
         message["Subject"] = subject
         message.set_content(text_body)
+        # 保留 text + html 双格式，兼容不同邮箱客户端渲染能力。
         message.add_alternative(html_body, subtype="html")
 
         try:
+            # smtplib 是阻塞 I/O，放入线程池避免阻塞事件循环。
             await asyncio.to_thread(self._send_via_smtp, message)
         except Exception as exc:  # noqa: BLE001
+            # 日志保留最小可排障信息，不记录敏感凭据。
             logger.warning(
                 "event=email.send.failed host=%s port=%s to=%s reason=%s",
                 self.settings.smtp_host,
@@ -101,6 +105,7 @@ class SmtpEmailSender(EmailSender):
             raise RuntimeError("email service unavailable") from exc
 
     def _send_via_smtp(self, message: EmailMessage) -> None:
+        # 根据配置切换 SSL 与 STARTTLS，兼容常见 SMTP 服务商。
         if self.settings.smtp_use_ssl:
             with smtplib.SMTP_SSL(
                 self.settings.smtp_host,
@@ -121,6 +126,7 @@ class SmtpEmailSender(EmailSender):
             server.send_message(message)
 
     def _ensure_smtp_configured(self) -> None:
+        # 关键配置缺失时直接失败，避免出现“发送成功假象”。
         if (
             not self.settings.smtp_host
             or not self.settings.smtp_username
@@ -136,6 +142,7 @@ class SmtpEmailSender(EmailSender):
         code: str | None,
         tip: str,
     ) -> str:
+        # 验证码模块化插入，通知类邮件可复用同一模板但不展示 code 区块。
         code_block = ""
         if code:
             code_block = (

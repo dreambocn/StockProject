@@ -5,6 +5,7 @@ PASSWORD_POLICY_MESSAGE = "Password must be 8-128 chars and include uppercase, l
 
 
 def _is_strong_password(value: str) -> bool:
+    # 服务端密码策略兜底：即使前端校验被绕过，后端仍强制执行。
     has_upper = any(ch.isupper() for ch in value)
     has_lower = any(ch.islower() for ch in value)
     has_digit = any(ch.isdigit() for ch in value)
@@ -21,6 +22,7 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_strength(cls, value: str) -> str:
+        # 注册链路强制密码复杂度，降低弱口令风险。
         if not _is_strong_password(value):
             raise ValueError(PASSWORD_POLICY_MESSAGE)
 
@@ -46,6 +48,7 @@ class ChangePasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_new_password_strength(cls, value: str) -> str:
+        # 改密与注册采用同一策略，避免策略不一致导致安全缺口。
         if not _is_strong_password(value):
             raise ValueError(PASSWORD_POLICY_MESSAGE)
 
@@ -99,6 +102,7 @@ class ResetPasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_new_password_strength(cls, value: str) -> str:
+        # 重置密码同样执行强校验，防止通过找回流程降级密码强度。
         if not _is_strong_password(value):
             raise ValueError(PASSWORD_POLICY_MESSAGE)
 

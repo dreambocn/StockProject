@@ -2,6 +2,7 @@ from typing import Protocol
 
 
 class EmailSender(Protocol):
+    # 邮件能力协议：上层仅依赖业务语义方法，不耦合具体 SMTP/第三方实现。
     async def send_register_verification_code(
         self, email: str, code: str, expires_seconds: int
     ) -> None: ...

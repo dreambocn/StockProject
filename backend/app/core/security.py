@@ -16,6 +16,7 @@ class TokenError(Exception):
 
 
 def hash_password(password: str) -> str:
+    # 密码只以哈希形式落库，禁止任何明文存储。
     return password_hasher.hash(password)
 
 
@@ -26,6 +27,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 def _create_token(
     subject: str, token_type: str, expires_seconds: int, jti: str | None = None
 ) -> tuple[str, str]:
+    # jti 作为令牌唯一标识，配合缓存实现 refresh token 撤销能力。
     token_jti = jti or uuid4().hex
     issued_at = datetime.now(UTC)
     payload = {
@@ -63,9 +65,11 @@ def decode_token(token: str, expected_type: str) -> dict[str, str | int]:
     except jwt.PyJWTError as exc:
         raise TokenError("invalid token") from exc
 
+    # 强制校验 token 类型，阻止 access/refresh 混用。
     if payload.get("type") != expected_type:
         raise TokenError("invalid token type")
 
+    # sub 与 jti 是最小安全载荷，缺失即视为非法 token。
     if not payload.get("sub") or not payload.get("jti"):
         raise TokenError("invalid token payload")
 

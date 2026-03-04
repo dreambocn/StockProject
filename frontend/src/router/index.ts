@@ -58,6 +58,7 @@ export const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  // 每次导航都经由统一守卫，确保鉴权与重定向策略一致生效。
   const authStore = useAuthStore()
   const guard = createAuthGuard(authStore)
   return guard({

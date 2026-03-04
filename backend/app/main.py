@@ -28,6 +28,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     is_pytest = "pytest" in sys.modules
+    # 测试环境跳过自动建表，避免用例对真实基础设施产生副作用。
     if settings.db_auto_create_tables and not is_pytest:
         await ensure_database_schema()
 
@@ -51,6 +52,7 @@ app.include_router(auth.router, prefix="/api")
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
+    # 为每个请求分配独立 request_id，并写入上下文用于全链路日志关联。
     request_id = uuid4().hex
     token = set_request_id(request_id)
     started = time.perf_counter()
@@ -59,6 +61,7 @@ async def request_logging_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as exc:
+        # 异常分支也记录耗时和 request_id，确保故障排查时链路完整。
         duration_ms = (time.perf_counter() - started) * 1000
         log_request_failed(logger, request.method, request.url.path, duration_ms, exc)
         raise
@@ -74,4 +77,5 @@ async def request_logging_middleware(request: Request, call_next):
         response.headers["X-Request-ID"] = request_id
         return response
     finally:
+        # 请求结束后必须重置上下文，避免 request_id 污染后续协程。
         reset_request_id(token)

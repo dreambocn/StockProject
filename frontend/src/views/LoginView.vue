@@ -26,6 +26,7 @@ const captchaCode = ref('')
 const captchaImage = ref('')
 
 const refreshCaptcha = async () => {
+  // 验证码由后端生成并缓存答案，前端仅持有 challenge id + 图片。
   const challenge = await authApi.getCaptchaChallenge()
   captchaId.value = challenge.captcha_id
   captchaImage.value = challenge.image_base64
@@ -48,6 +49,7 @@ const submitLogin = async () => {
   errorMessage.value = ''
   loading.value = true
   try {
+    // 仅在被风控要求时才提交验证码字段，减少无关请求负担。
     await authStore.login(form.account, form.password, {
       captcha_id: captchaRequired.value ? captchaId.value : undefined,
       captcha_code: captchaRequired.value ? captchaCode.value.trim().toUpperCase() : undefined,
@@ -62,6 +64,7 @@ const submitLogin = async () => {
     if (error instanceof ApiError) {
       const captchaDetail = parseCaptchaDetail(error)
       if (captchaDetail?.captcha_required) {
+        // 当后端返回 captcha_required，前端立刻切换到验证码登录分支。
         captchaRequired.value = true
         await refreshCaptcha()
       }
