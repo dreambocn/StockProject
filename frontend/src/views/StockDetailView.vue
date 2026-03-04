@@ -597,53 +597,53 @@ onMounted(async () => {
       <div class="daily-header">
         <h2>{{ t('stockDetail.dailyTitle') }}</h2>
         <div class="daily-actions">
-          <el-button-group>
+          <el-button-group class="action-group">
             <el-button
               data-testid="kline-period-daily"
               :type="selectedPeriod === 'daily' ? 'primary' : 'default'"
               @click="selectPeriod('daily')"
             >
-              日K
+              {{ t('stockDetail.kline.periodDaily') }}
             </el-button>
             <el-button
               data-testid="kline-period-weekly"
               :type="selectedPeriod === 'weekly' ? 'primary' : 'default'"
               @click="selectPeriod('weekly')"
             >
-              周K
+              {{ t('stockDetail.kline.periodWeekly') }}
             </el-button>
             <el-button
               data-testid="kline-period-monthly"
               :type="selectedPeriod === 'monthly' ? 'primary' : 'default'"
               @click="selectPeriod('monthly')"
             >
-              月K
+              {{ t('stockDetail.kline.periodMonthly') }}
             </el-button>
           </el-button-group>
-          <el-button-group>
+          <el-button-group class="action-group">
             <el-button
               data-testid="kline-adjust-none"
               :type="selectedAdjustMode === 'none' ? 'primary' : 'default'"
               @click="selectAdjustMode('none')"
             >
-              不复权
+              {{ t('stockDetail.kline.adjustNone') }}
             </el-button>
             <el-button
               data-testid="kline-adjust-qfq"
               :type="selectedAdjustMode === 'qfq' ? 'primary' : 'default'"
               @click="selectAdjustMode('qfq')"
             >
-              前复权
+              {{ t('stockDetail.kline.adjustQfq') }}
             </el-button>
             <el-button
               data-testid="kline-adjust-hfq"
               :type="selectedAdjustMode === 'hfq' ? 'primary' : 'default'"
               @click="selectAdjustMode('hfq')"
             >
-              后复权
+              {{ t('stockDetail.kline.adjustHfq') }}
             </el-button>
           </el-button-group>
-          <el-button :loading="loading" @click="loadData">{{ t('home.refresh') }}</el-button>
+          <el-button class="action-refresh" :loading="loading" @click="loadData">{{ t('home.refresh') }}</el-button>
         </div>
       </div>
 
@@ -666,7 +666,7 @@ onMounted(async () => {
           </div>
           <p class="trend-window">
             {{ chartStats.firstDate }} → {{ chartStats.lastDate }}
-            <span class="adjust-badge">{{ selectedAdjustMode === 'none' ? 'RAW' : selectedAdjustMode.toUpperCase() }}</span>
+            <span class="adjust-badge">{{ selectedAdjustMode === 'none' ? t('stockDetail.kline.adjustRaw') : selectedAdjustMode.toUpperCase() }}</span>
           </p>
         </div>
 
@@ -782,13 +782,13 @@ onMounted(async () => {
           <div v-if="hoveredRow" data-testid="kline-tooltip" class="kline-tooltip" :style="{ left: activeTooltipLeft }">
             <p>{{ hoveredRow.tradeDateLabel }}</p>
             <div class="tooltip-grid">
-              <span>开: {{ formatNumber(hoveredRow.open) }}</span>
-              <span>收: {{ formatNumber(hoveredRow.close) }}</span>
-              <span>高: {{ formatNumber(hoveredRow.high) }}</span>
-              <span>低: {{ formatNumber(hoveredRow.low) }}</span>
-              <span>涨跌: {{ formatPercent(hoveredRow.pctChg) }}</span>
-              <span>量: {{ formatCompactNumber(hoveredRow.vol) }}</span>
-              <span>额: {{ formatCompactNumber(hoveredRow.amount) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.open') }}: {{ formatNumber(hoveredRow.open) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.close') }}: {{ formatNumber(hoveredRow.close) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.high') }}: {{ formatNumber(hoveredRow.high) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.low') }}: {{ formatNumber(hoveredRow.low) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.change') }}: {{ formatPercent(hoveredRow.pctChg) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.volume') }}: {{ formatCompactNumber(hoveredRow.vol) }}</span>
+              <span>{{ t('stockDetail.kline.tooltip.amount') }}: {{ formatCompactNumber(hoveredRow.amount) }}</span>
             </div>
             <strong>¥{{ formatNumber(hoveredRow.close) }}</strong>
           </div>
@@ -885,6 +885,23 @@ h1 {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 0.1rem;
+}
+
+.daily-actions :deep(.el-button) {
+  white-space: nowrap;
+}
+
+.action-group,
+.action-refresh {
+  flex-shrink: 0;
+}
+
+.daily-header h2 {
+  white-space: nowrap;
 }
 
 h2 {
@@ -1112,8 +1129,7 @@ h2 {
 
   .daily-actions {
     width: 100%;
-    flex-direction: column;
-    align-items: stretch;
+    justify-content: flex-start;
   }
 }
 </style>

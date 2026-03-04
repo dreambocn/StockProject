@@ -30,6 +30,24 @@ export default {
     exchange: '交易所',
     dailyTitle: '最近 60 个交易日',
     empty: '暂无日线数据',
+    kline: {
+      periodDaily: '日K',
+      periodWeekly: '周K',
+      periodMonthly: '月K',
+      adjustNone: '不复权',
+      adjustQfq: '前复权',
+      adjustHfq: '后复权',
+      adjustRaw: 'RAW',
+      tooltip: {
+        open: '开',
+        close: '收',
+        high: '高',
+        low: '低',
+        change: '涨跌',
+        volume: '量',
+        amount: '额',
+      },
+    },
   },
   auth: {
     login: {

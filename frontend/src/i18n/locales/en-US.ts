@@ -30,6 +30,24 @@ export default {
     exchange: 'Exchange',
     dailyTitle: 'Recent 60 Trading Days',
     empty: 'No daily data',
+    kline: {
+      periodDaily: 'Day K',
+      periodWeekly: 'Week K',
+      periodMonthly: 'Month K',
+      adjustNone: 'Raw',
+      adjustQfq: 'Fwd Adj',
+      adjustHfq: 'Back Adj',
+      adjustRaw: 'RAW',
+      tooltip: {
+        open: 'Open',
+        close: 'Close',
+        high: 'High',
+        low: 'Low',
+        change: 'Change',
+        volume: 'Volume',
+        amount: 'Amount',
+      },
+    },
   },
   auth: {
     login: {
