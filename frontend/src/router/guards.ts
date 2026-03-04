@@ -3,13 +3,19 @@ type RouteLike = {
   query: Record<string, unknown>
   meta: {
     requiresAuth?: boolean
+    requiresAdmin?: boolean
     guestOnly?: boolean
   }
+}
+
+type GuardUserLike = {
+  user_level: 'user' | 'admin'
 }
 
 type GuardStoreLike = {
   initialized: boolean
   isAuthenticated: boolean
+  user: GuardUserLike | null
   initialize: () => Promise<void>
 }
 
@@ -25,6 +31,20 @@ export const createAuthGuard = (authStore: GuardStoreLike) => {
       return {
         path: '/login',
         query: { redirect: to.fullPath },
+      }
+    }
+
+    // 权限边界：后台管理页要求 admin 角色，未登录先回登录，已登录但非 admin 回首页。
+    if (to.meta.requiresAdmin) {
+      if (!authStore.isAuthenticated) {
+        return {
+          path: '/login',
+          query: { redirect: to.fullPath },
+        }
+      }
+
+      if (authStore.user?.user_level !== 'admin') {
+        return { path: '/' }
       }
     }
 

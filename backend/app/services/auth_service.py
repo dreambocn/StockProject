@@ -12,7 +12,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.user import User
+from app.models.user import USER_LEVEL_USER, User
 
 
 class AuthError(Exception):
@@ -57,6 +57,7 @@ async def register_user(
     username: str,
     email: str,
     password: str,
+    user_level: str = USER_LEVEL_USER,
 ) -> User:
     # 先校验唯一性再创建，避免数据库约束错误直接暴露给上层。
     statement = select(User).where(or_(User.username == username, User.email == email))
@@ -65,7 +66,12 @@ async def register_user(
     if existed:
         raise ConflictError("username or email already exists")
 
-    user = User(username=username, email=email, password_hash=hash_password(password))
+    user = User(
+        username=username,
+        email=email,
+        password_hash=hash_password(password),
+        user_level=user_level,
+    )
     session.add(user)
     await session.commit()
     await session.refresh(user)

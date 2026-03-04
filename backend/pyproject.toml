@@ -12,6 +12,7 @@ dependencies = [
     "pyjwt>=2.11.0",
     "redis>=7.2.1",
     "sqlalchemy>=2.0.48",
+    "tushare>=1.4.24",
 ]
 
 [dependency-groups]

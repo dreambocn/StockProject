@@ -1,13 +1,18 @@
 from collections.abc import Callable, Awaitable
 
 import asyncpg
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import or_, select
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import app.models  # noqa: F401
 from app.core.logging import get_logger
+from app.core.security import hash_password
 from app.core.settings import Settings, get_settings
 from app.db.base import Base
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
+from app.models.user import USER_LEVEL_ADMIN, User
 
 
 logger = get_logger("app.db")
@@ -84,6 +89,88 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
     async with target_engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
+        # 关键流程：对历史库执行最小列补齐，避免 create_all 不会自动 ALTER 导致运行期写入失败。
+        await connection.run_sync(_ensure_stock_instrument_columns)
+
+
+def _ensure_stock_instrument_columns(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "stock_instruments" not in set(inspector.get_table_names()):
+        return
+
+    existing_columns = {
+        item["name"] for item in inspector.get_columns("stock_instruments")
+    }
+    required_column_sql: dict[str, str] = {
+        "fullname": "VARCHAR(128)",
+        "enname": "VARCHAR(256)",
+        "cnspell": "VARCHAR(32)",
+        "curr_type": "VARCHAR(8)",
+        "act_name": "VARCHAR(128)",
+        "act_ent_type": "VARCHAR(64)",
+    }
+    for column_name, column_type in required_column_sql.items():
+        if column_name in existing_columns:
+            continue
+        sync_connection.execute(
+            text(
+                f"ALTER TABLE stock_instruments ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+
+async def ensure_initial_admin_user(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    admin_username = settings.init_admin_username.strip()
+    admin_email = settings.init_admin_email.strip().lower()
+    admin_password = settings.init_admin_password.strip()
+
+    # 鉴权边界：只有在三个种子参数都提供时才创建首个管理员，避免误创建弱配置账户。
+    if not (admin_username and admin_email and admin_password):
+        return
+
+    session_maker = session_factory or SessionLocal
+    async with session_maker() as session:
+        existing_admin_statement = (
+            select(User.id).where(User.user_level == USER_LEVEL_ADMIN).limit(1)
+        )
+        existing_admin = await session.execute(existing_admin_statement)
+        if existing_admin.scalar_one_or_none() is not None:
+            return
+
+        conflict_statement = (
+            select(User.id)
+            .where(or_(User.username == admin_username, User.email == admin_email))
+            .limit(1)
+        )
+        conflict = await session.execute(conflict_statement)
+        if conflict.scalar_one_or_none() is not None:
+            # 关键分支：种子管理员与现有账号冲突时直接跳过，防止覆盖或破坏已有账户。
+            logger.warning(
+                "event=auth.bootstrap_admin.skipped reason=account_conflict username=%s email=%s",
+                admin_username,
+                admin_email,
+            )
+            return
+
+        admin_user = User(
+            username=admin_username,
+            email=admin_email,
+            password_hash=hash_password(admin_password),
+            user_level=USER_LEVEL_ADMIN,
+        )
+        session.add(admin_user)
+        await session.commit()
+        await session.refresh(admin_user)
+
+    logger.info(
+        "event=auth.bootstrap_admin.created user_id=%s username=%s",
+        admin_user.id,
+        admin_user.username,
+    )
+
 
 async def ensure_database_schema() -> None:
     settings = get_settings()
@@ -94,6 +181,7 @@ async def ensure_database_schema() -> None:
     await ensure_postgres_schema_exists(settings)
 
     await ensure_schema_for_engine(engine)
+    await ensure_initial_admin_user(settings)
     logger.info(
         "event=db.schema.ensure.success tables=%s",
         ",".join(sorted(Base.metadata.tables.keys())),

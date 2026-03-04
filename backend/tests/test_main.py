@@ -1,10 +1,14 @@
+import asyncio
 import importlib
 import logging
 
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.api.routes.health as health_routes
+from app.db.base import Base
+from app.db.session import get_db_session
 from app.main import app
 
 
@@ -140,14 +144,36 @@ def test_health_endpoint_maps_to_readiness(monkeypatch) -> None:
     assert "services" in payload
 
 
-def test_stocks_endpoint_returns_seed_data() -> None:
-    response = client.get("/api/stocks")
+def test_stocks_endpoint_returns_list_response(tmp_path) -> None:
+    db_path = tmp_path / "main-stock-test.db"
+    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
+    engine = create_async_engine(db_url)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert isinstance(payload, list)
-    assert payload[0]["symbol"] == "AAPL"
-    assert "price" in payload[0]
+    async def _prepare() -> None:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+    async def override_get_db_session():
+        async with session_maker() as session:
+            yield session
+
+    asyncio.run(_prepare())
+    app.dependency_overrides[get_db_session] = override_get_db_session
+
+    try:
+        response = client.get("/api/stocks")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert isinstance(payload, list)
+        if payload:
+            assert "ts_code" in payload[0]
+            assert "symbol" in payload[0]
+            assert "name" in payload[0]
+    finally:
+        app.dependency_overrides.clear()
+        asyncio.run(engine.dispose())
 
 
 def test_cors_allows_whitelisted_origin(monkeypatch) -> None:
@@ -165,6 +191,23 @@ def test_cors_allows_whitelisted_origin(monkeypatch) -> None:
         response.headers.get("access-control-allow-origin") == "http://localhost:5173"
     )
     assert response.headers.get("access-control-allow-credentials") == "true"
+
+
+def test_cors_allows_localhost_with_different_dev_port(monkeypatch) -> None:
+    client_with_cors = _build_client_with_cors(monkeypatch, "http://localhost:5173")
+    response = client_with_cors.options(
+        "/api/auth/register/email-code",
+        headers={
+            "Origin": "http://localhost:5174",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.headers.get("access-control-allow-origin") == "http://localhost:5174"
+    )
 
 
 def test_cors_blocks_non_allowlisted_origin(monkeypatch) -> None:

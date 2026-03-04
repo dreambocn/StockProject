@@ -16,7 +16,7 @@ from app.cache.token_store import TokenStore
 from app.core.security import TokenError, decode_token
 from app.core.settings import get_settings
 from app.db.session import get_db_session
-from app.models.user import User
+from app.models.user import USER_LEVEL_ADMIN, User
 from app.services.auth_service import get_user_by_id
 from app.services.email_service import EmailSender
 from app.services.smtp_email_sender import SmtpEmailSender
@@ -70,3 +70,16 @@ async def get_current_user(
         )
 
     return user
+
+
+async def get_current_admin(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    # 鉴权安全边界：后台管理接口必须是管理员，普通用户统一返回 403。
+    if current_user.user_level != USER_LEVEL_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="insufficient permissions",
+        )
+
+    return current_user

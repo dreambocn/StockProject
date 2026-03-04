@@ -45,7 +45,7 @@ def test_settings_parse_database_and_schema_from_jdbc_path() -> None:
 
 
 def test_settings_captcha_defaults() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.login_captcha_threshold == 2
     assert settings.login_fail_window_seconds == 900
@@ -57,6 +57,10 @@ def test_settings_captcha_defaults() -> None:
     assert settings.email_code_ip_limit_per_minute == 10
     assert settings.email_code_ip_limit_per_day == 200
     assert settings.email_code_ip_block_seconds == 900
+    assert settings.cors_allow_origins_list == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
     assert settings.trust_proxy_headers is False
     assert settings.trusted_proxy_ips_list == []
 

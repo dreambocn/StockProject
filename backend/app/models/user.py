@@ -7,6 +7,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
+USER_LEVEL_USER = "user"
+USER_LEVEL_ADMIN = "admin"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -18,6 +22,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    user_level: Mapped[str] = mapped_column(
+        String(16), default=USER_LEVEL_USER, index=True
+    )
     # 审计字段：用于追踪账号创建/更新时间及最近登录行为。
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

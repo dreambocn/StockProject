@@ -14,6 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
 
   const isAuthenticated = computed(() => Boolean(accessToken.value))
+  const isAdmin = computed(() => user.value?.user_level === 'admin')
 
   const persistTokens = () => {
     // 统一收口 token 持久化，避免不同流程写入策略不一致。
@@ -175,6 +176,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     initialized,
     isAuthenticated,
+    isAdmin,
     hydrateFromStorage,
     initialize,
     login,

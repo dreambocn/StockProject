@@ -42,8 +42,14 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_port: int = 465
     smtp_use_ssl: bool = True
-    cors_allow_origins: str = ""
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     cors_allow_credentials: bool = True
+    cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+    tushare_token: str = ""
+    stock_sync_trade_days: int = 120
+    init_admin_username: str = ""
+    init_admin_email: str = ""
+    init_admin_password: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

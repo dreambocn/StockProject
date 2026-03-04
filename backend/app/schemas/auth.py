@@ -1,7 +1,10 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 PASSWORD_POLICY_MESSAGE = "Password must be 8-128 chars and include uppercase, lowercase, number, and special character"
+UserLevel = Literal["user", "admin"]
 
 
 def _is_strong_password(value: str) -> bool:
@@ -68,6 +71,7 @@ class UserResponse(BaseModel):
     username: str
     email: EmailStr
     is_active: bool
+    user_level: UserLevel
 
 
 class MessageResponse(BaseModel):

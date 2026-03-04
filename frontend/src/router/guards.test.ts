@@ -7,6 +7,7 @@ describe('createAuthGuard', () => {
     const guard = createAuthGuard({
       initialized: true,
       isAuthenticated: false,
+      user: null,
       initialize: async () => {},
     })
 
@@ -26,6 +27,7 @@ describe('createAuthGuard', () => {
     const guard = createAuthGuard({
       initialized: true,
       isAuthenticated: true,
+      user: null,
       initialize: async () => {},
     })
 
@@ -36,5 +38,22 @@ describe('createAuthGuard', () => {
     })
 
     expect(result).toEqual({ path: '/profile' })
+  })
+
+  it('redirects authenticated non-admin away from admin pages', async () => {
+    const guard = createAuthGuard({
+      initialized: true,
+      isAuthenticated: true,
+      user: { user_level: 'user' },
+      initialize: async () => {},
+    })
+
+    const result = await guard({
+      fullPath: '/admin/users',
+      query: {},
+      meta: { requiresAuth: true, requiresAdmin: true },
+    })
+
+    expect(result).toEqual({ path: '/' })
   })
 })

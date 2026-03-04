@@ -1,17 +1,22 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import HomeView from '../views/HomeView.vue'
+import AdminConsoleView from '../views/AdminConsoleView.vue'
+import AdminStocksView from '../views/AdminStocksView.vue'
+import AdminUsersView from '../views/AdminUsersView.vue'
 import ChangePasswordView from '../views/ChangePasswordView.vue'
 import LoginView from '../views/LoginView.vue'
 import ProfileView from '../views/ProfileView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import ResetPasswordView from '../views/ResetPasswordView.vue'
+import StockDetailView from '../views/StockDetailView.vue'
 import { useAuthStore } from '../stores/auth'
 import { createAuthGuard } from './guards'
 
 declare module 'vue-router' {
   interface RouteMeta {
     requiresAuth?: boolean
+    requiresAdmin?: boolean
     guestOnly?: boolean
   }
 }
@@ -43,6 +48,24 @@ export const router = createRouter({
       meta: { guestOnly: true },
     },
     {
+      path: '/admin',
+      name: 'admin-console',
+      component: AdminConsoleView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/admin/users',
+      name: 'admin-users',
+      component: AdminUsersView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/admin/stocks',
+      name: 'admin-stocks',
+      component: AdminStocksView,
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: '/profile',
       name: 'profile',
       component: ProfileView,
@@ -53,6 +76,11 @@ export const router = createRouter({
       name: 'change-password',
       component: ChangePasswordView,
       meta: { requiresAuth: true },
+    },
+    {
+      path: '/stocks/:tsCode',
+      name: 'stock-detail',
+      component: StockDetailView,
     },
   ],
 })
@@ -66,6 +94,7 @@ router.beforeEach(async (to) => {
     query: to.query,
     meta: {
       requiresAuth: to.meta.requiresAuth,
+      requiresAdmin: to.meta.requiresAdmin,
       guestOnly: to.meta.guestOnly,
     },
   })

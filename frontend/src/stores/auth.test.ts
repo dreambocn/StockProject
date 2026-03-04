@@ -30,6 +30,7 @@ describe('auth store', () => {
             username: 'alice',
             email: 'alice@example.com',
             is_active: true,
+            user_level: 'user',
           }),
         }),
     )
@@ -73,6 +74,7 @@ describe('auth store', () => {
           username: 'alice',
           email: 'alice@example.com',
           is_active: true,
+          user_level: 'user',
         }),
       })
     vi.stubGlobal('fetch', fetchMock)

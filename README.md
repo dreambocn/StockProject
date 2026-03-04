@@ -10,6 +10,13 @@
 ### 后端能力
 
 - 完成 Auth V1 全流程：注册、登录、刷新 Token、修改密码、登出、当前用户信息。
+- 用户模型新增 `user_level`（`user/admin`），为权限路由与后台管理提供统一角色来源。
+- 新增管理员能力：
+  - `GET /api/admin/users` 查看用户列表（仅 admin）
+  - `POST /api/admin/users` 创建用户并指定等级（仅 admin）
+  - `POST /api/admin/stocks/full` 按状态触发股票主数据全量同步并入库（仅 admin）
+  - `GET /api/admin/stocks` 提供后台股票主数据分页查询（仅 admin）
+- 启动引导支持首个管理员自动创建（`INIT_ADMIN_*` 配置齐全且当前无 admin 时）。
 - 登录支持用户名或邮箱（`account` 字段）。
 - 接入 JWT 鉴权与密码哈希安全模块。
 - 接入 Redis 刷新令牌存储。
@@ -33,13 +40,28 @@
   - 返回 `ok | degraded | fail`，并包含按服务的 `status/latency_ms/error_type`
 - 启动时支持自动检查/创建数据库、表与 schema（可配置）。
 - 完成请求级日志能力（含 `X-Request-ID`）。
+- 完成股票业务基础闭环（数据库存储 + 真实接口）：
+  - 新增 `stock_instruments`、`stock_daily_snapshots`、`stock_sync_cursors` 三张表
+  - 接入 Tushare 数据源并完整保留 `L/D/P/G` 股票基础库
+  - 接入“最近 120 个交易日”增量行情同步
+  - `/api/stocks` 支持关键词搜索（名称/代码/TS Code）与显式状态筛选
+  - `/api/stocks/{ts_code}` 提供股票详情与最新快照
+  - `/api/stocks/{ts_code}/daily` 返回最近日线数据
+  - `POST /api/stocks/sync/full` 支持登录态触发股票基础信息全量更新
 
 ### 前端能力
 
 - 完成认证页面与流程：登录、注册、个人中心、修改密码。
 - 新增重置密码页面（登录失败/忘记密码场景）。
 - 接入路由守卫（`guestOnly` / `requiresAuth`）与登录后重定向。
+- 新增 `requiresAdmin` 路由守卫，阻止普通用户进入后台页。
 - 完成 Pinia 认证状态管理（含 token 持久化与会话恢复）。
+- 新增后台管理页（统一终端风格）：用户列表 + 管理员创建用户表单。
+- 新增后台管理中枢页：点击“后台管理”后统一进入功能分发页，再跳转到用户管理/股票管理。
+- 新增后台股票管理页（统一终端风格）：
+  - 管理员可按关键词与状态进行数据库分页查询
+  - 新增“按参数获取全量”按钮与参数快捷键（ALL/L/D/P/G），触发服务端全量入库
+  - 新增“默认查询”按钮，直接走数据库查询接口
 - 完成密码确认与密码强度提示体验。
 - 登录页支持验证码挑战展示与刷新。
 - 注册页与修改密码页支持邮箱验证码发送、输入与倒计时。
@@ -50,6 +72,9 @@
   - 品牌文案：`AI STOCK LAB` / `by DreamBo`
   - 语言切换器采用胶囊分段样式
   - 已添加滑块式 active 背景动效
+- 首页股票卡片已切换为后端真实数据，支持关键词搜索。
+- 首页仪表盘股票区采用瀑布流布局，并在滚动到底部时自动加载下一页股票数据。
+- 新增股票详情页（最新快照 + 最近 60 个交易日日线）。
 
 ## 项目结构
 
@@ -66,10 +91,13 @@
 - `backend/main.py`：开发入口（兼容 `fastapi dev main.py`）
 - `backend/app/main.py`：FastAPI 应用装配
 - `backend/app/api/routes/auth.py`：认证相关路由
+- `backend/app/api/routes/admin.py`：后台管理路由（用户 + 股票，admin only）
 - `backend/app/services/auth_service.py`：认证业务逻辑
+- `backend/app/services/stock_sync_service.py`：股票增量同步服务
 - `backend/app/services/captcha_service.py`：验证码服务
 - `backend/app/core/security.py`：JWT 与密码安全
 - `backend/app/core/settings.py`：环境配置解析
+- `backend/app/integrations/tushare_gateway.py`：Tushare 数据网关
 
 ## 快速启动
 
@@ -106,10 +134,16 @@ uv run fastapi dev main.py
 - `EMAIL_CODE_IP_LIMIT_PER_MINUTE`（默认 `10`）
 - `EMAIL_CODE_IP_LIMIT_PER_DAY`（默认 `200`）
 - `EMAIL_CODE_IP_BLOCK_SECONDS`（默认 `900`）
+- `INIT_ADMIN_USERNAME`（可选；与下方两项同时配置才生效）
+- `INIT_ADMIN_EMAIL`（可选）
+- `INIT_ADMIN_PASSWORD`（可选）
 - `TRUST_PROXY_HEADERS`（默认 `false`；仅在受信代理部署场景开启）
 - `TRUSTED_PROXY_IPS`（逗号分隔受信代理 IP；仅在 `TRUST_PROXY_HEADERS=true` 时生效）
 - `CORS_ALLOW_ORIGINS`（逗号分隔白名单，例如 `http://localhost:5173,https://app.example.com`）
 - `CORS_ALLOW_CREDENTIALS`（默认 `true`；当为 `true` 时禁止在白名单中使用 `*`）
+- `CORS_ALLOW_ORIGIN_REGEX`（默认放行 `localhost/127.0.0.1` 任意端口，避免 Vite 端口漂移导致预检失败）
+- `TUSHARE_TOKEN`（Tushare Pro token，用于行情同步）
+- `STOCK_SYNC_TRADE_DAYS`（增量同步交易日窗口，默认 `120`）
 
 邮件服务参数（`backend/.env`）：
 
@@ -131,6 +165,19 @@ npm run dev
 
 默认地址：`http://127.0.0.1:5173`
 
+### 同步最近 120 个交易日股票数据（后端内部命令）
+
+```bash
+cd backend
+uv run python scripts/sync_stocks.py
+```
+
+说明：
+
+- 该命令会同步上市股票主数据与最近 N 个交易日（默认 `120`）行情快照。
+- 股票基础信息按 `L/D/P/G` 全状态同步并落库，行情仍按最近 N 个交易日增量拉取。
+- `N` 可通过 `STOCK_SYNC_TRADE_DAYS` 配置调整。
+
 ## Auth API 列表
 
 - `POST /api/auth/register`
@@ -145,11 +192,25 @@ npm run dev
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 
+## Admin API 列表
+
+- `GET /api/admin/users`（需 admin）
+- `POST /api/admin/users`（需 admin）
+- `POST /api/admin/stocks/full`（需 admin；支持 `list_status`，默认 `ALL`；执行全量同步并入库）
+- `GET /api/admin/stocks`（需 admin；支持 `keyword/list_status/page/page_size`，默认分页 `page=1&page_size=20`）
+
 ## Health API 列表
 
 - `GET /api/health/liveness`
 - `GET /api/health/readiness`
 - `GET /api/health`（兼容入口，语义等同于 readiness）
+
+## Stock API 列表
+
+- `GET /api/stocks`（支持 `keyword/list_status/page/page_size`，默认 `list_status=L`，可显式传 `ALL` 或 `L,D,P,G`）
+- `GET /api/stocks/{ts_code}`
+- `GET /api/stocks/{ts_code}/daily`（支持 `limit`）
+- `POST /api/stocks/sync/full`（需登录态，用于触发股票基础信息全量更新）
 
 认证安全语义（重要）：
 

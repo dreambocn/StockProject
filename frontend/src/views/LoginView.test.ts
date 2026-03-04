@@ -143,6 +143,7 @@ describe('LoginView', () => {
           username: 'alice',
           email: 'alice@example.com',
           is_active: true,
+          user_level: 'user',
         }),
       )
     vi.stubGlobal('fetch', fetchMock)

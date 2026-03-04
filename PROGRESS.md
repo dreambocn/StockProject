@@ -68,6 +68,38 @@ Last update: 2026-03-04
   - Added `GET /api/health/liveness` for process-level alive checks
   - Added `GET /api/health/readiness` for PostgreSQL/Redis/SMTP readiness checks
   - Introduced readiness status grading (`ok | degraded | fail`) with per-service latency and error type
+- Implemented stock data closed-loop (real data instead of mock):
+  - Added stock tables: `stock_instruments`, `stock_daily_snapshots`, `stock_sync_cursors`
+  - Integrated Tushare gateway and sync service for recent trade-day incremental sync
+  - Added internal sync command: `uv run python scripts/sync_stocks.py`
+  - Added stock APIs for list/search, detail, and daily snapshots
+  - Replaced frontend home mock cards with backend data and keyword search
+  - Added stock detail page with latest snapshot and recent daily rows
+  - Added backend/frontend test coverage for stock routes, sync service, and stock views
+- Added user-level RBAC and admin control surface:
+  - Added `user_level` (`user/admin`) to user model and auth payloads
+  - Added admin-only APIs for listing users and creating users with target level
+  - Added startup seed flow for first admin via `INIT_ADMIN_*` env configuration
+  - Added frontend admin route guard (`requiresAdmin`) and admin console page
+  - Added backend/frontend test coverage for admin auth boundaries and navigation
+- Added admin stock management surface:
+  - Added admin-only full stock sync endpoint `POST /api/admin/stocks/full` with `list_status` filter
+  - Added admin-only default stock query endpoint `GET /api/admin/stocks` with DB pagination
+  - Added admin control hub page (`/admin`) to route into user/stock management
+  - Updated stock admin center: full-fetch button now syncs to DB, default query uses paged DB API
+  - Added frontend admin stock management page and top-nav entry to admin hub for quick access
+  - Kept existing `/api/stocks` public dashboard API unchanged for compatibility
+- Upgraded stock basic library model and sync strategy:
+  - Expanded `stock_instruments` fields based on Tushare `stock_basic` (fullname/enname/cnspell/curr_type/act_name/act_ent_type)
+  - Full stock basic sync now covers explicit `L/D/P/G` statuses
+  - `GET /api/stocks` now defaults to `L` and supports explicit `list_status` filter (`ALL` or `L,D,P,G`)
+  - Added authenticated trigger endpoint `POST /api/stocks/sync/full` for full stock basic refresh
+  - Added compatibility schema patch step for legacy databases to auto-add newly required stock columns
+- Upgraded dashboard stock browsing experience:
+  - Added infinite scrolling on the home waterfall/grid with prefetch-trigger (`IntersectionObserver`)
+  - Stabilized card rendering by deduplicating appended pages by `ts_code` to avoid old-card mutation on scroll
+  - Reworked home stock cards to horizontal list arrangement while keeping vertical content flow inside each card
+  - Reduced scroll repaint cost by simplifying fixed background layers and removing heavy visual effects
 
 ## In Progress
 
@@ -77,5 +109,4 @@ Last update: 2026-03-04
 
 - Add database and Redis real client initialization with startup checks.
 - Add JSON structured logging output for log ingestion systems.
-- Add frontend auth pages and route guards.
-- Add forgot-password flow.
+- Add stock historical backfill task with batching, checkpoint resume, and retry strategy.

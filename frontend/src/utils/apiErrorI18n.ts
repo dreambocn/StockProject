@@ -13,6 +13,7 @@ const API_ERROR_KEY_MAP: Record<string, string> = {
   'email verification code invalid': 'errors.emailCodeInvalid',
   'email verification code send too frequent': 'errors.emailCodeTooFrequent',
   'email service unavailable': 'errors.emailServiceUnavailable',
+  'insufficient permissions': 'errors.insufficientPermissions',
   'Password must be 8-128 chars and include uppercase, lowercase, number, and special character':
     'errors.passwordPolicy',
 }

@@ -24,6 +24,7 @@ export type UserProfile = {
   username: string
   email: string
   is_active: boolean
+  user_level: 'user' | 'admin'
 }
 
 export type EmailCodeSendResponse = {

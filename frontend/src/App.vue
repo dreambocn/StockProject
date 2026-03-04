@@ -34,6 +34,8 @@ const authActionLabel = computed(() =>
   authStore.isAuthenticated ? t('nav.logout') : t('nav.login'),
 )
 
+const showAdminNav = computed(() => authStore.isAdmin)
+
 onMounted(async () => {
   // 应用启动时先恢复会话，避免首屏出现登录态闪烁。
   await authStore.initialize()
@@ -53,9 +55,11 @@ const handleAuthAction = async () => {
 
 <template>
   <div class="terminal-shell">
-    <div class="terminal-grid" />
-    <div class="terminal-glow glow-top" />
-    <div class="terminal-glow glow-bottom" />
+    <div class="terminal-bg" aria-hidden="true">
+      <div class="terminal-grid" />
+      <div class="terminal-glow glow-top" />
+      <div class="terminal-glow glow-bottom" />
+    </div>
 
     <header class="terminal-header">
       <div>
@@ -65,6 +69,7 @@ const handleAuthAction = async () => {
 
       <nav class="terminal-nav">
         <router-link to="/">{{ t('nav.dashboard') }}</router-link>
+        <router-link v-if="showAdminNav" to="/admin">{{ t('nav.admin') }}</router-link>
         <router-link to="/profile">{{ t('nav.profile') }}</router-link>
         <div class="locale-switch" role="group" :aria-label="t('nav.language')">
           <span class="locale-slider" data-testid="locale-slider" :style="localeSliderStyle" />
@@ -95,7 +100,15 @@ const handleAuthAction = async () => {
   position: relative;
   min-height: 100vh;
   padding: 1.3rem;
-  overflow: hidden;
+}
+
+.terminal-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  contain: layout paint style;
+  transform: translateZ(0);
 }
 
 .terminal-grid,
@@ -110,15 +123,17 @@ const handleAuthAction = async () => {
     linear-gradient(rgba(61, 169, 252, 0.08) 1px, transparent 1px),
     linear-gradient(90deg, rgba(61, 169, 252, 0.08) 1px, transparent 1px);
   background-size: 34px 34px;
-  mask-image: radial-gradient(circle at center, black 30%, transparent 92%);
+  opacity: 0.42;
 }
 
 .glow-top {
   background: radial-gradient(circle at top right, rgba(61, 169, 252, 0.18), transparent 52%);
+  transform: translateZ(0);
 }
 
 .glow-bottom {
   background: radial-gradient(circle at bottom left, rgba(247, 181, 0, 0.14), transparent 45%);
+  transform: translateZ(0);
 }
 
 .terminal-header {
@@ -131,7 +146,6 @@ const handleAuthAction = async () => {
   border: 1px solid var(--terminal-border);
   border-radius: 14px;
   background: rgba(19, 29, 48, 0.85);
-  backdrop-filter: blur(6px);
   padding: 0.7rem 1rem;
   box-shadow: var(--terminal-shadow);
 }
