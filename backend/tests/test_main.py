@@ -4,6 +4,7 @@ import logging
 from fastapi.testclient import TestClient
 import pytest
 
+import app.api.routes.health as health_routes
 from app.main import app
 
 
@@ -24,18 +25,119 @@ def _build_client_with_cors(
     return TestClient(main_module.app)
 
 
-def test_health_endpoint_returns_ok(caplog) -> None:
+def test_health_liveness_endpoint_returns_ok(caplog) -> None:
     with caplog.at_level(logging.INFO, logger="app.request"):
-        response = client.get("/api/health")
+        response = client.get("/api/health/liveness")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["services"]["postgres"]["host"] == "192.168.31.199"
-    assert payload["services"]["redis"]["host"] == "192.168.31.199"
     assert response.headers.get("x-request-id")
     assert "event=request_started" in caplog.text
     assert "event=request_finished" in caplog.text
+
+
+def test_health_readiness_endpoint_returns_ok_when_dependencies_healthy(
+    monkeypatch,
+) -> None:
+    async def _probe_ok() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "latency_ms": 1.0,
+            "error_type": None,
+        }
+
+    monkeypatch.setattr(health_routes, "_probe_postgres", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_smtp", _probe_ok)
+
+    response = client.get("/api/health/readiness")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["services"]["postgres"]["status"] == "ok"
+    assert payload["services"]["redis"]["status"] == "ok"
+    assert payload["services"]["smtp"]["status"] == "ok"
+    assert payload["services"]["postgres"]["error_type"] is None
+
+
+def test_health_readiness_returns_fail_when_postgres_unavailable(monkeypatch) -> None:
+    async def _probe_postgres_fail() -> dict[str, object]:
+        return {
+            "status": "fail",
+            "latency_ms": 2.0,
+            "error_type": "OperationalError",
+        }
+
+    async def _probe_ok() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "latency_ms": 1.0,
+            "error_type": None,
+        }
+
+    monkeypatch.setattr(health_routes, "_probe_postgres", _probe_postgres_fail)
+    monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_smtp", _probe_ok)
+
+    response = client.get("/api/health/readiness")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "fail"
+    assert payload["services"]["postgres"]["status"] == "fail"
+    assert payload["services"]["postgres"]["error_type"] == "OperationalError"
+    assert payload["services"]["redis"]["status"] == "ok"
+
+
+def test_health_readiness_returns_degraded_when_smtp_unavailable(monkeypatch) -> None:
+    async def _probe_ok() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "latency_ms": 1.0,
+            "error_type": None,
+        }
+
+    async def _probe_smtp_fail() -> dict[str, object]:
+        return {
+            "status": "fail",
+            "latency_ms": 1.0,
+            "error_type": "RuntimeError",
+        }
+
+    monkeypatch.setattr(health_routes, "_probe_postgres", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_smtp", _probe_smtp_fail)
+
+    response = client.get("/api/health/readiness")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["services"]["smtp"]["status"] == "fail"
+    assert payload["services"]["smtp"]["error_type"] == "RuntimeError"
+    assert "password" not in str(payload).lower()
+
+
+def test_health_endpoint_maps_to_readiness(monkeypatch) -> None:
+    async def _probe_ok() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "latency_ms": 1.0,
+            "error_type": None,
+        }
+
+    monkeypatch.setattr(health_routes, "_probe_postgres", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
+    monkeypatch.setattr(health_routes, "_probe_smtp", _probe_ok)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert "services" in payload
 
 
 def test_stocks_endpoint_returns_seed_data() -> None:

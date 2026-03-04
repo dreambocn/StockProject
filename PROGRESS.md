@@ -64,6 +64,10 @@ Last update: 2026-03-04
   - Password change now revokes all existing refresh tokens of that user
   - Password reset now revokes all existing refresh tokens of that user
   - Added integration tests to verify old refresh tokens return `401` after both flows
+- Upgraded health endpoint to real probes:
+  - Added `GET /api/health/liveness` for process-level alive checks
+  - Added `GET /api/health/readiness` for PostgreSQL/Redis/SMTP readiness checks
+  - Introduced readiness status grading (`ok | degraded | fail`) with per-service latency and error type
 
 ## In Progress
 

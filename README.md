@@ -26,6 +26,10 @@
   - 历史会话无法继续通过 `/api/auth/refresh` 获取新令牌
   - 已签发 `access token` 仍按原过期时间自然失效
 - 新增 CORS 环境白名单控制：仅允许配置来源跨域，并在 `CORS_ALLOW_CREDENTIALS=true` 时禁止 `*` 通配。
+- 升级健康检查为真实探针：
+  - `GET /api/health/liveness` 提供进程级存活检查
+  - `GET /api/health/readiness` 检查 PostgreSQL(`SELECT 1`)、Redis(`PING`) 与 SMTP 配置完整性
+  - 返回 `ok | degraded | fail`，并包含按服务的 `status/latency_ms/error_type`
 - 启动时支持自动检查/创建数据库、表与 schema（可配置）。
 - 完成请求级日志能力（含 `X-Request-ID`）。
 
@@ -134,6 +138,12 @@ npm run dev
 - `POST /api/auth/reset-password`
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
+
+## Health API 列表
+
+- `GET /api/health/liveness`
+- `GET /api/health/readiness`
+- `GET /api/health`（兼容入口，语义等同于 readiness）
 
 认证安全语义（重要）：
 
