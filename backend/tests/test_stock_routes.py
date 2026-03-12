@@ -710,3 +710,34 @@ def test_trigger_stock_basic_full_sync_endpoint(
     assert payload["list_statuses"] == ["L", "D", "P", "G"]
     assert called["session_present"] is True
     assert called["gateway"] == "FakeGateway"
+
+
+def test_stock_related_news_returns_symbol_scoped_items(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    async def fake_fetch_stock_news(symbol: str) -> list[dict[str, object]]:
+        assert symbol == "600000"
+        return [
+            {
+                "关键词": "600000",
+                "新闻标题": "浦发银行发布业绩快报",
+                "新闻内容": "营收同比增长",
+                "发布时间": "2026-03-03 09:12:00",
+                "文章来源": "东方财富",
+                "新闻链接": "https://finance.example.com/a/1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.stocks.fetch_stock_news",
+        fake_fetch_stock_news,
+    )
+
+    response = stock_client.get("/api/stocks/600000.SH/news")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["symbol"] == "600000"
+    assert payload[0]["ts_code"] == "600000.SH"
+    assert payload[0]["title"] == "浦发银行发布业绩快报"

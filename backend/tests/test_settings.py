@@ -5,6 +5,7 @@ from app.core.settings import Settings
 
 def test_settings_build_postgres_async_dsn() -> None:
     settings = Settings(
+        _env_file=None,
         postgres_jdbc_url="jdbc:postgresql://192.168.31.199:2143/DreamBoDB",
         postgres_user="dreambo",
         postgres_password="syb/20031122",
@@ -19,6 +20,7 @@ def test_settings_build_postgres_async_dsn() -> None:
 
 def test_settings_build_redis_url() -> None:
     settings = Settings(
+        _env_file=None,
         postgres_jdbc_url="jdbc:postgresql://192.168.31.199:2143/DreamBoDB",
         postgres_user="dreambo",
         postgres_password="syb/20031122",
@@ -28,8 +30,20 @@ def test_settings_build_redis_url() -> None:
     assert settings.redis_url == "redis://192.168.31.199:6379/0"
 
 
+def test_settings_build_redis_url_with_auth_from_env() -> None:
+    settings = Settings(
+        _env_file=None,
+        redis_jdbc_url="jdbc:redis://192.168.31.199:6379/0",
+        redis_username="default",
+        redis_password="p@ss/word",
+    )
+
+    assert settings.redis_url == "redis://default:p%40ss%2Fword@192.168.31.199:6379/0"
+
+
 def test_settings_parse_database_and_schema_from_jdbc_path() -> None:
     settings = Settings(
+        _env_file=None,
         postgres_jdbc_url="jdbc:postgresql://192.168.31.199:2143/DreamBoDB.stockdb",
         postgres_user="dreambo",
         postgres_password="syb/20031122",

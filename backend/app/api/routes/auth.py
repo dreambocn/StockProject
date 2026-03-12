@@ -1,4 +1,3 @@
-import hashlib
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -44,6 +43,12 @@ from app.services.auth_service import (
     register_user,
     reset_password_by_email,
 )
+from app.services.auth_risk_service import (
+    EmailCodeRiskControlError,
+    build_login_identity_key,
+    enforce_email_code_ip_risk_control,
+    resolve_client_ip,
+)
 from app.services.email_service import EmailSender
 from app.services.email_verification_service import (
     CHANGE_PASSWORD_EMAIL_SCENE,
@@ -58,34 +63,14 @@ logger = get_logger("app.auth")
 settings = get_settings()
 
 
-def _build_login_identity_key(account: str, client_ip: str) -> str:
-    # 基于账号+IP做哈希，避免在 Redis key 或日志中暴露原始登录标识。
-    # 该 key 用于登录失败计数，直接影响验证码风控触发。
-    normalized_account = account.strip().lower()
-    raw_value = f"{normalized_account}|{client_ip}"
-    return hashlib.sha256(raw_value.encode("utf-8")).hexdigest()
-
-
-def _extract_client_ip(request: Request) -> str:
+def _resolve_request_client_ip(request: Request) -> str:
     direct_client_ip = request.client.host if request.client else "unknown"
-
-    # 仅在显式开启且来源是受信代理时才读取转发头，防止伪造 X-Forwarded-For 绕过限流。
-    if not settings.trust_proxy_headers:
-        return direct_client_ip
-
-    trusted_proxy_ips = settings.trusted_proxy_ips_list
-    if not trusted_proxy_ips:
-        return direct_client_ip
-
-    if direct_client_ip not in trusted_proxy_ips:
-        return direct_client_ip
-
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    forwarded_ip = forwarded_for.split(",", 1)[0].strip()
-    if not forwarded_ip:
-        return direct_client_ip
-
-    return forwarded_ip
+    return resolve_client_ip(
+        direct_client_ip=direct_client_ip,
+        forwarded_for=request.headers.get("x-forwarded-for", ""),
+        trust_proxy_headers=settings.trust_proxy_headers,
+        trusted_proxy_ips=settings.trusted_proxy_ips_list,
+    )
 
 
 async def _enforce_email_code_ip_risk_control(
@@ -93,27 +78,21 @@ async def _enforce_email_code_ip_risk_control(
     request: Request,
     email_verification_store: EmailVerificationStore,
 ) -> None:
-    client_ip = _extract_client_ip(request)
-
-    # 风控顺序：先黑名单、再计数限流、最后才进入邮箱冷却与发信逻辑，避免高风险请求继续消耗资源。
-    if await email_verification_store.is_ip_blocked(client_ip):
+    client_ip = _resolve_request_client_ip(request)
+    try:
+        await enforce_email_code_ip_risk_control(
+            scene=scene,
+            client_ip=client_ip,
+            email_verification_store=email_verification_store,
+            per_minute_limit=settings.email_code_ip_limit_per_minute,
+            per_day_limit=settings.email_code_ip_limit_per_day,
+            block_seconds=settings.email_code_ip_block_seconds,
+        )
+    except EmailCodeRiskControlError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="email verification code send too frequent",
-        )
-
-    is_allowed = await email_verification_store.check_and_increment_ip_limits(
-        scene,
-        client_ip,
-        settings.email_code_ip_limit_per_minute,
-        settings.email_code_ip_limit_per_day,
-        settings.email_code_ip_block_seconds,
-    )
-    if not is_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="email verification code send too frequent",
-        )
+            detail=str(exc),
+        ) from exc
 
 
 @router.post(
@@ -234,7 +213,7 @@ async def login(
     ],
 ) -> TokenPairResponse:
     client_ip = request.client.host if request.client else "unknown"
-    identity_key = _build_login_identity_key(payload.account, client_ip)
+    identity_key = build_login_identity_key(payload.account, client_ip)
     failed_login_count = await login_challenge_store.get_failed_login_count(
         identity_key
     )

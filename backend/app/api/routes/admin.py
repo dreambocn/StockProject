@@ -18,34 +18,15 @@ from app.schemas.stocks import (
     StockInstrumentResponse,
 )
 from app.services.auth_service import AuthError, register_user
+from app.services.stock_list_status import (
+    STOCK_BASIC_STATUSES,
+    parse_stock_list_status_filter,
+)
 from app.services.stock_sync_service import sync_stock_basic_full
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = get_logger("app.admin")
-STOCK_BASIC_STATUSES = ("L", "D", "P", "G")
-
-
-def _parse_stock_list_status_filter(value: str) -> list[str]:
-    normalized_value = value.strip().upper()
-    if not normalized_value or normalized_value == "ALL":
-        return list(STOCK_BASIC_STATUSES)
-
-    parsed: list[str] = []
-    seen: set[str] = set()
-    for raw_status in normalized_value.split(","):
-        status_value = raw_status.strip()[:1]
-        if status_value not in STOCK_BASIC_STATUSES:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="invalid list_status, expected ALL or comma-separated values in L,D,P,G",
-            )
-        if status_value in seen:
-            continue
-        seen.add(status_value)
-        parsed.append(status_value)
-
-    return parsed or list(STOCK_BASIC_STATUSES)
 
 
 @router.get("/users", response_model=list[AdminUserResponse])
@@ -111,7 +92,17 @@ async def sync_stocks_full(
         ) from exc
 
     # 关键副作用：该接口会触发全量入库同步，返回结果用于确认本次写库规模与状态范围。
-    list_statuses = _parse_stock_list_status_filter(list_status)
+    try:
+        list_statuses = parse_stock_list_status_filter(
+            list_status,
+            all_statuses=STOCK_BASIC_STATUSES,
+            default_statuses=STOCK_BASIC_STATUSES,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     sync_result = await sync_stock_basic_full(
         session,
         gateway,
@@ -135,7 +126,17 @@ async def list_stocks(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> AdminStockPageResponse:
-    list_statuses = _parse_stock_list_status_filter(list_status)
+    try:
+        list_statuses = parse_stock_list_status_filter(
+            list_status,
+            all_statuses=STOCK_BASIC_STATUSES,
+            default_statuses=STOCK_BASIC_STATUSES,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     statement = select(StockInstrument).where(
         StockInstrument.list_status.in_(list_statuses)
     )

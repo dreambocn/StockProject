@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
     redis_jdbc_url: str = "jdbc:redis://127.0.0.1:6379/0"
+    redis_username: str = ""
+    redis_password: str = ""
     jwt_secret_key: str = "change-this-secret-key-to-32-chars-min"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
@@ -123,7 +125,25 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        parsed_url = urlparse(_remove_jdbc_prefix(self.redis_jdbc_url))
+        resolved_username = self.redis_username or (parsed_url.username or "")
+        resolved_password = self.redis_password or (parsed_url.password or "")
+
+        # 鉴权安全边界：优先使用独立环境变量，避免把明文凭据硬编码在 REDIS_JDBC_URL。
+        # 同时对用户名和密码做 URL 编码，防止特殊字符导致连接串解析歧义。
+        if resolved_username and resolved_password:
+            username = quote(resolved_username, safe="")
+            password = quote(resolved_password, safe="")
+            auth_segment = f"{username}:{password}@"
+        elif resolved_password:
+            password = quote(resolved_password, safe="")
+            auth_segment = f":{password}@"
+        else:
+            auth_segment = ""
+
+        return (
+            f"redis://{auth_segment}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        )
 
     @property
     def access_token_expire_seconds(self) -> int:
