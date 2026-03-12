@@ -9,6 +9,7 @@ import {
   type StockAdjFactor,
   type StockDailySnapshot,
   type StockDetail,
+  type StockRelatedNewsItem,
 } from '../api/stocks'
 
 type KlinePeriod = 'daily' | 'weekly' | 'monthly'
@@ -34,9 +35,11 @@ const router = useRouter()
 const { t } = useI18n()
 
 const loading = ref(false)
+const relatedNewsLoading = ref(false)
 const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
+const relatedNews = ref<StockRelatedNewsItem[]>([])
 const adjFactors = ref<StockAdjFactor[]>([])
 const selectedPeriod = ref<KlinePeriod>('daily')
 const selectedAdjustMode = ref<AdjustMode>('none')
@@ -529,15 +532,19 @@ const loadData = async () => {
   errorMessage.value = ''
   try {
     // 关键流程：详情与K线并行拉取，缩短首屏等待；任一失败统一走降级错误提示。
-    const [detailPayload, dailyPayload] = await Promise.all([
+    relatedNewsLoading.value = true
+    const [detailPayload, dailyPayload, newsPayload] = await Promise.all([
       stocksApi.getStockDetail(tsCode.value),
       stocksApi.getStockDaily(tsCode.value, {
         limit: 60,
         period: selectedPeriod.value,
       }),
+      // 关键流程：详情页资讯严格使用个股新闻接口，不接入全局热点，避免语义混淆。
+      stocksApi.getStockRelatedNews(tsCode.value, 50),
     ])
     detail.value = detailPayload
     dailyRows.value = dailyPayload
+    relatedNews.value = newsPayload
     // 关键状态流转：复权因子依赖已拉取的行情时间窗，必须在 dailyRows 更新后再请求。
     await loadAdjFactors(dailyPayload)
   } catch (error) {
@@ -547,6 +554,7 @@ const loadData = async () => {
       errorMessage.value = t('errors.fallback')
     }
   } finally {
+    relatedNewsLoading.value = false
     loading.value = false
   }
 }
@@ -593,6 +601,34 @@ onMounted(async () => {
           <span class="metric-label">{{ t('stockDetail.exchange') }}</span>
           <strong>{{ detail.instrument.exchange ?? '--' }}</strong>
         </div>
+      </div>
+    </el-card>
+
+    <el-card class="detail-card" shadow="never">
+      <div class="related-news-header">
+        <h2>{{ t('stockDetail.relatedNews') }}</h2>
+      </div>
+      <el-skeleton v-if="relatedNewsLoading" :rows="3" animated />
+      <el-empty v-else-if="relatedNews.length === 0" :description="t('stockDetail.relatedNewsEmpty')" />
+      <div v-else class="related-news-list">
+        <article
+          v-for="item in relatedNews"
+          :key="`${item.source}-${item.url ?? item.title}-${item.published_at ?? ''}`"
+          class="related-news-item"
+        >
+          <p class="related-news-meta">{{ item.publisher ?? item.source }} · {{ item.published_at ?? '--' }}</p>
+          <a
+            v-if="item.url"
+            class="related-news-link"
+            :href="item.url"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {{ item.title }}
+          </a>
+          <p v-else class="related-news-title">{{ item.title }}</p>
+          <p v-if="item.summary" class="related-news-summary">{{ item.summary }}</p>
+        </article>
       </div>
     </el-card>
 
@@ -882,6 +918,48 @@ h1 {
   align-items: center;
   margin-bottom: 0.8rem;
   gap: 0.8rem;
+}
+
+.related-news-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.8rem;
+}
+
+.related-news-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.related-news-item {
+  border: 1px solid var(--terminal-border);
+  border-radius: 10px;
+  padding: 0.6rem;
+  background: color-mix(in srgb, var(--terminal-surface, #10172a) 90%, transparent);
+}
+
+.related-news-meta {
+  margin: 0;
+  color: var(--terminal-muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.74rem;
+}
+
+.related-news-link,
+.related-news-title {
+  margin: 0.35rem 0 0;
+  font-size: 0.95rem;
+}
+
+.related-news-link {
+  color: var(--terminal-primary);
+  text-decoration: none;
+}
+
+.related-news-summary {
+  margin: 0.35rem 0 0;
+  color: var(--terminal-muted);
 }
 
 .daily-actions {

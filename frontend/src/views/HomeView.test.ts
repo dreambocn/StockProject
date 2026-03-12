@@ -48,6 +48,7 @@ const mountHomeView = async () => {
     routes: [
       { path: '/', component: HomeView },
       { path: '/stocks/:tsCode', component: { template: '<div>detail</div>' } },
+      { path: '/news/hot', component: { template: '<div>hot-news</div>' } },
     ],
   })
   await router.push('/')
@@ -302,5 +303,17 @@ describe('HomeView', () => {
     expect(quoteCall[0]).toContain('/api/stocks/000001.SZ/daily?')
     expect(quoteCall[0]).toContain('limit=1')
     expect(quoteCall[0]).toContain('period=daily')
+  })
+
+  it('renders hot news jump action in dashboard header', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([])))
+
+    const wrapper = await mountHomeView()
+    await flushPromises()
+
+    const links = wrapper.findAll('a')
+    const hotNewsLink = links.find((item) => item.text().includes('热点新闻'))
+    expect(hotNewsLink).toBeDefined()
+    expect(hotNewsLink?.attributes('href')).toContain('/news/hot')
   })
 })

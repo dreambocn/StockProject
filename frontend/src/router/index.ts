@@ -1,15 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import HomeView from '../views/HomeView.vue'
-import AdminConsoleView from '../views/AdminConsoleView.vue'
-import AdminStocksView from '../views/AdminStocksView.vue'
-import AdminUsersView from '../views/AdminUsersView.vue'
-import ChangePasswordView from '../views/ChangePasswordView.vue'
-import LoginView from '../views/LoginView.vue'
-import ProfileView from '../views/ProfileView.vue'
-import RegisterView from '../views/RegisterView.vue'
-import ResetPasswordView from '../views/ResetPasswordView.vue'
-import StockDetailView from '../views/StockDetailView.vue'
 import { useAuthStore } from '../stores/auth'
 import { createAuthGuard } from './guards'
 
@@ -27,60 +17,65 @@ export const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: HomeView,
+      component: () => import('../views/HomeView.vue'),
     },
     {
       path: '/login',
       name: 'login',
-      component: LoginView,
+      component: () => import('../views/LoginView.vue'),
       meta: { guestOnly: true },
     },
     {
       path: '/register',
       name: 'register',
-      component: RegisterView,
+      component: () => import('../views/RegisterView.vue'),
       meta: { guestOnly: true },
     },
     {
       path: '/reset-password',
       name: 'reset-password',
-      component: ResetPasswordView,
+      component: () => import('../views/ResetPasswordView.vue'),
       meta: { guestOnly: true },
     },
     {
       path: '/admin',
       name: 'admin-console',
-      component: AdminConsoleView,
+      component: () => import('../views/AdminConsoleView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: '/admin/users',
       name: 'admin-users',
-      component: AdminUsersView,
+      component: () => import('../views/AdminUsersView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: '/admin/stocks',
       name: 'admin-stocks',
-      component: AdminStocksView,
+      component: () => import('../views/AdminStocksView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
       path: '/profile',
       name: 'profile',
-      component: ProfileView,
+      component: () => import('../views/ProfileView.vue'),
       meta: { requiresAuth: true },
     },
     {
       path: '/profile/change-password',
       name: 'change-password',
-      component: ChangePasswordView,
+      component: () => import('../views/ChangePasswordView.vue'),
       meta: { requiresAuth: true },
     },
     {
       path: '/stocks/:tsCode',
       name: 'stock-detail',
-      component: StockDetailView,
+      component: () => import('../views/StockDetailView.vue'),
+    },
+    {
+      path: '/news/hot',
+      name: 'hot-news',
+      component: () => import('../views/HotNewsView.vue'),
     },
   ],
 })

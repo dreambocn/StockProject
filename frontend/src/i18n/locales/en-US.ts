@@ -1,6 +1,7 @@
 export default {
   nav: {
     dashboard: 'Dashboard',
+    hotNews: 'Hot News',
     admin: 'Admin',
     profile: 'Profile',
     login: 'Login',
@@ -20,6 +21,32 @@ export default {
     empty: 'No stock data yet, run sync first',
     loadingMore: 'Loading more...',
     noMore: 'All stocks loaded',
+    hotNews: 'Open Hot News',
+  },
+  hotNews: {
+    kicker: 'GLOBAL HOT SIGNALS',
+    title: 'Hot News',
+    refresh: 'Refresh',
+    empty: 'No hot news yet',
+    openLink: 'Open source',
+    filterLabel: 'Topic Filter',
+    topics: {
+      all: 'All',
+      geopolitical_conflict: 'Geopolitical',
+      monetary_policy: 'Monetary',
+      commodity_supply: 'Commodity',
+      regulation_policy: 'Regulation',
+      other: 'Other',
+    },
+    impactPanel: {
+      title: 'Impact Panel',
+      assets: 'Affected Assets',
+      beneficiarySectors: 'Beneficiary Sectors',
+      pressureSectors: 'Pressure Sectors',
+      targets: 'A-share Targets',
+      candidates: 'Dynamic A-share Candidates',
+      empty: 'No impact mapping',
+    },
   },
   stockDetail: {
     kicker: 'MARKET PROFILE',
@@ -28,6 +55,8 @@ export default {
     latestChange: 'Latest Change',
     industry: 'Industry',
     exchange: 'Exchange',
+    relatedNews: 'Related News',
+    relatedNewsEmpty: 'No related news',
     dailyTitle: 'Recent 60 Trading Days',
     empty: 'No daily data',
     kline: {

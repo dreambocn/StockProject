@@ -1,6 +1,7 @@
 export default {
   nav: {
     dashboard: '仪表盘',
+    hotNews: '热点新闻',
     admin: '后台管理',
     profile: '个人中心',
     login: '登录',
@@ -20,6 +21,32 @@ export default {
     empty: '暂无股票数据，请先执行同步任务',
     loadingMore: '加载更多中...',
     noMore: '已加载全部股票',
+    hotNews: '查看热点新闻',
+  },
+  hotNews: {
+    kicker: 'GLOBAL HOT SIGNALS',
+    title: '热点新闻',
+    refresh: '刷新热点',
+    empty: '暂无热点新闻',
+    openLink: '查看原文',
+    filterLabel: '主题筛选',
+    topics: {
+      all: '全部',
+      geopolitical_conflict: '地缘冲突',
+      monetary_policy: '货币政策',
+      commodity_supply: '大宗供给',
+      regulation_policy: '监管政策',
+      other: '其他',
+    },
+    impactPanel: {
+      title: '影响面板',
+      assets: '影响资产',
+      beneficiarySectors: '受益行业',
+      pressureSectors: '承压行业',
+      targets: 'A股关注标的',
+      candidates: 'A股动态候选',
+      empty: '暂无影响映射',
+    },
   },
   stockDetail: {
     kicker: 'MARKET PROFILE',
@@ -28,6 +55,8 @@ export default {
     latestChange: '最新涨跌幅',
     industry: '行业',
     exchange: '交易所',
+    relatedNews: '相关新闻',
+    relatedNewsEmpty: '暂无相关新闻',
     dailyTitle: '最近 60 个交易日',
     empty: '暂无日线数据',
     kline: {

@@ -263,6 +263,7 @@ onUnmounted(() => {
         <h1>{{ t('home.title') }}</h1>
       </div>
       <div class="header-actions">
+        <router-link class="hot-news-link" to="/news/hot">{{ t('home.hotNews') }}</router-link>
         <el-input
           v-model="keyword"
           class="search-input"
@@ -327,6 +328,16 @@ onUnmounted(() => {
 
 .search-input {
   min-width: 220px;
+}
+
+.hot-news-link {
+  text-decoration: none;
+  color: var(--terminal-primary);
+  border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
 }
 
 .section-kicker {

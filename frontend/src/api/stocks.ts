@@ -1,4 +1,5 @@
 import { requestJson } from './http'
+import { buildQueryString } from './query'
 
 
 export type StockListItem = {
@@ -68,6 +69,18 @@ export type StockAdjFactor = {
 }
 
 
+export type StockRelatedNewsItem = {
+  ts_code: string
+  symbol: string
+  title: string
+  summary: string | null
+  published_at: string | null
+  url: string | null
+  publisher: string | null
+  source: string
+}
+
+
 export type StockTradeCalendar = {
   exchange: string
   cal_date: string
@@ -99,20 +112,6 @@ export type StockTradeCalendarQueryOptions = {
   endDate?: string
   isOpen?: '0' | '1'
 }
-
-
-const buildQueryString = (params: Record<string, string | number | undefined>) => {
-  const query = new URLSearchParams()
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') {
-      return
-    }
-    query.set(key, String(value))
-  })
-  const queryString = query.toString()
-  return queryString ? `?${queryString}` : ''
-}
-
 
 export const stocksApi = {
   async listStocks(keyword?: string, listStatus?: string, page = 1, pageSize = 20) {
@@ -164,5 +163,14 @@ export const stocksApi = {
       is_open: options?.isOpen,
     })
     return requestJson<StockTradeCalendar[]>(`/api/stocks/trade-cal${query}`)
+  },
+  async getStockRelatedNews(tsCode: string, limit = 50) {
+    const query = buildQueryString({
+      limit,
+      include_announcements: 'true',
+    })
+    return requestJson<StockRelatedNewsItem[]>(
+      `/api/stocks/${encodeURIComponent(tsCode)}/news${query}`,
+    )
   },
 }

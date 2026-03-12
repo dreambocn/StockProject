@@ -166,9 +166,123 @@ describe('StockDetailView', () => {
     expect(dailyRequest[0]).toContain('period=daily')
     expect(dailyRequest[0]).not.toContain('adjust=')
 
-    const adjFactorRequest = fetchMock.mock.calls[2] as [string, RequestInit]
+    const newsRequest = fetchMock.mock.calls[2] as [string, RequestInit]
+    expect(newsRequest[0]).toContain('/api/stocks/600000.SH/news?')
+
+    const adjFactorRequest = fetchMock.mock.calls[3] as [string, RequestInit]
     expect(adjFactorRequest[0]).toContain('/api/stocks/600000.SH/adj-factor?')
     expect(adjFactorRequest[0]).toContain('start_date=20260302')
     expect(adjFactorRequest[0]).toContain('end_date=20260303')
+  })
+
+  it('shows stock-related news section and requests stock news endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            title: '浦发银行发布业绩快报',
+            summary: '净利润同比增长',
+            published_at: '2026-03-03T09:12:00',
+            url: 'https://finance.example.com/a/1',
+            publisher: '东方财富',
+            source: 'eastmoney_stock',
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            adj_factor: 2.0,
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/stocks/:tsCode', component: StockDetailView }],
+    })
+    await router.push('/stocks/600000.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('相关新闻')
+    expect(wrapper.text()).toContain('浦发银行发布业绩快报')
+
+    const newsRequest = fetchMock.mock.calls[2] as [string, RequestInit]
+    expect(newsRequest[0]).toContain('/api/stocks/600000.SH/news')
   })
 })
