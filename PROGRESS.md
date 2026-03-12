@@ -1,6 +1,6 @@
 # Project Progress
 
-Last update: 2026-03-04
+Last update: 2026-03-11
 
 ## Completed
 
@@ -119,6 +119,54 @@ Last update: 2026-03-04
   - Tushare list fallback now persists latest available daily quotes into `stock_kline_bars` for subsequent direct DB hits
   - Home view adds lightweight missing-card quote patching (`daily?limit=1`) to reduce `--` in price/date display
   - Added backend/frontend tests for quote backfill and card-display completion behavior
+- Completed structure-first optimization Phase 1:
+  - Backend now shares `list_status` parsing via `app.services.stock_list_status`, removing duplicate logic in `admin` and `stocks` routes
+  - Frontend now shares query-string builder via `src/api/query.ts` for `stocksApi` and `adminApi`
+  - Frontend router switched to lazy-loaded page components to reduce eager entry imports
+  - Auth store startup initialization now uses in-flight dedupe to avoid duplicate concurrent `me` requests
+  - Added focused regression tests for parser extraction, query builder, lazy routes, and auth initialize dedupe
+- Completed backend boundary cleanup Phase 2 (in progress roadmap):
+  - Added `app.services.stock_listing_service` to host stock list query + quote completion orchestration (snapshot -> kline -> Tushare)
+  - `GET /api/stocks` route now delegates list query assembly to service layer, reducing route-level mixed responsibilities
+  - Added `app.services.stock_daily_service` to host daily kline cache/db/remote fallback orchestration
+  - `GET /api/stocks/{ts_code}/daily` now delegates orchestration to service layer while preserving existing fallback semantics
+  - Added `app.services.stock_repository` as repository layer for stock DB read/write and response mapping helpers
+  - `stocks` route DB helpers (`kline/trade-cal/adj-factor/snapshot`) now delegate to repository layer to reduce route-level data-access logic
+  - Removed transitional DB wrapper implementations from `stocks` route, directly using repository functions in route orchestration flows
+  - Added `app.services.stock_cache_service` for shared model-cache read/write and singleflight lock management
+  - `stocks` route now delegates daily/trade-cal/adj-factor cache serialization and singleflight behavior to cache service helpers
+  - Added `app.services.stock_query_policy` for stock query parameter policy (period/is_open), date-window resolution, and cache-key composition
+  - `stocks` route now maps query-policy validation errors to HTTP 422 at the route boundary while reusing shared policy helpers
+  - Added `app.services.stock_tushare_mapper` for Tushare daily-row parsing and snapshot mapping
+  - `stocks` route now delegates Tushare daily row -> snapshot conversion to mapper service, reducing route-level parsing logic
+  - Added `app.services.auth_risk_service` for login identity hashing, trusted proxy IP resolution, and email-code IP risk checks
+  - Auth route risk-control helpers now delegate to service layer and keep HTTP mapping in route boundary
+  - Added `app.services.stock_reference_data_service` to host trade-calendar and adj-factor cache/db/remote fallback orchestration
+  - `GET /api/stocks/trade-cal` and `GET /api/stocks/{ts_code}/adj-factor` now delegate orchestration to service layer
+  - Added focused unit tests for stock listing orchestration and auth risk-control service behavior
+  - Added focused unit tests for reference-data orchestration service behavior
+  - Added focused unit tests for stock daily orchestration service behavior
+  - Added focused unit tests for stock repository helper behavior
+  - Added focused unit tests for stock cache service behavior
+  - Added focused unit tests for stock query policy behavior
+  - Added focused unit tests for stock Tushare mapper behavior
+- Added multi-source news access and split-display strategy:
+  - Added AkShare news integration gateway for global hot news (`stock_info_global_em`), stock news (`stock_news_em`), and stock announcements (`stock_zh_a_disclosure_report_cninfo`)
+  - Added backend `GET /api/news/hot` endpoint for global hot news feed
+  - Added backend `GET /api/stocks/{ts_code}/news` endpoint for stock-related news (news + announcements)
+  - Added frontend hot news page (`/news/hot`) with dashboard/nav jump entries
+  - Stock detail page now shows only stock-related news via stock-scoped endpoint and keeps global hot news isolated from detail context
+  - Added backend/frontend tests for hot news route, stock news route, router entry, hot-news page rendering, and stock-detail related-news section
+- Completed macro impact mapping phase for hot news:
+  - Added macro impact profile endpoint `GET /api/news/impact-map` for topic -> asset/sector/target mapping
+  - Extended hot news API with `macro_topic` tagging + topic filter compatibility
+  - Added hot-news impact panel UI with topic-synced mapping cards (affected assets, beneficiary sectors, pressure sectors, A-share targets)
+  - Added regression tests for impact map endpoint and hot-news topic/impact panel behavior
+- Completed macro impact mapping phase 4 (dynamic candidates):
+  - Impact map endpoint now attaches dynamic A-share candidate stocks from `stock_instruments` based on topic-specific industry keyword matching
+  - Added candidate-limit control in API (`candidate_limit`) and graceful fallback to empty candidates on query errors
+  - Hot-news impact panel now renders "A股动态候选" with `name(ts_code)` entries for faster drill-down
+  - Added backend test coverage for dynamic candidate output and frontend regression for candidate rendering
 
 ## In Progress
 
@@ -126,6 +174,6 @@ Last update: 2026-03-04
 
 ## Next Suggested Items
 
-- Add database and Redis real client initialization with startup checks.
-- Add JSON structured logging output for log ingestion systems.
-- Add stock historical backfill task with batching, checkpoint resume, and retry strategy.
+- Phase 5 (planned): make hot-news impact panel dynamic candidates clickable and route to stock detail.
+- Phase 5 (planned): add server-side candidate relevance scoring and stable ranked output.
+- Phase 5 (planned): link hot-news impact candidates into event-volatility explanation flow.
