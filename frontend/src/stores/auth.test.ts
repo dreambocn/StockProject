@@ -90,4 +90,29 @@ describe('auth store', () => {
     expect(options.body).toContain('"captcha_id":"challenge-1"')
     expect(options.body).toContain('"captcha_code":"ABCD"')
   })
+
+  it('deduplicates concurrent initialize requests', async () => {
+    localStorage.setItem('auth.accessToken', 'access-cache')
+    localStorage.setItem('auth.refreshToken', 'refresh-cache')
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'u-1',
+        username: 'alice',
+        email: 'alice@example.com',
+        is_active: true,
+        user_level: 'user',
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const store = useAuthStore()
+    const pendingFirst = store.initialize()
+    const pendingSecond = store.initialize()
+
+    await Promise.all([pendingFirst, pendingSecond])
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

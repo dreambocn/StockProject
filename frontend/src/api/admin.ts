@@ -1,4 +1,5 @@
 import { requestJson } from './http'
+import { buildQueryString } from './query'
 
 export type AdminUser = {
   id: string
@@ -53,18 +54,6 @@ export type AdminStockSyncResult = {
   list_statuses: string[]
 }
 
-const buildQueryString = (params: Record<string, string | undefined>) => {
-  const query = new URLSearchParams()
-  Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === '') {
-      return
-    }
-    query.set(key, value)
-  })
-  const queryString = query.toString()
-  return queryString ? `?${queryString}` : ''
-}
-
 export const adminApi = {
   listUsers: (accessToken: string) =>
     requestJson<AdminUser[]>('/api/admin/users', {
@@ -99,8 +88,8 @@ export const adminApi = {
     const query = buildQueryString({
       keyword: filters?.keyword,
       list_status: filters?.listStatus,
-      page: filters?.page ? String(filters.page) : undefined,
-      page_size: filters?.pageSize ? String(filters.pageSize) : undefined,
+      page: filters?.page,
+      page_size: filters?.pageSize,
     })
     return requestJson<AdminStockPage>(`/api/admin/stocks${query}`, {
       method: 'GET',

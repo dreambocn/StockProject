@@ -130,9 +130,10 @@ describe('AdminUsersView', () => {
     await flushPromises()
 
     const inputs = wrapper.findAll('input')
-    await inputs[0].setValue('neo_user')
-    await inputs[1].setValue('neo_user@example.com')
-    await inputs[2].setValue('Abc@1234!')
+    expect(inputs.length).toBeGreaterThanOrEqual(3)
+    await inputs[0]!.setValue('neo_user')
+    await inputs[1]!.setValue('neo_user@example.com')
+    await inputs[2]!.setValue('Abc@1234!')
 
     await wrapper.get('[data-testid="admin-users-create"]').trigger('click')
     await wrapper.find('form').trigger('submit')

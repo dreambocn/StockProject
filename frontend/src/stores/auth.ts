@@ -12,6 +12,7 @@ export const useAuthStore = defineStore('auth', () => {
   const refreshToken = ref<string | null>(null)
   const user = ref<UserProfile | null>(null)
   const initialized = ref(false)
+  let initializeInFlight: Promise<void> | null = null
 
   const isAuthenticated = computed(() => Boolean(accessToken.value))
   const isAdmin = computed(() => user.value?.user_level === 'admin')
@@ -74,28 +75,43 @@ export const useAuthStore = defineStore('auth', () => {
       return
     }
 
-    hydrateFromStorage()
-
-    if (!accessToken.value) {
-      initialized.value = true
+    if (initializeInFlight) {
+      await initializeInFlight
       return
     }
 
-    try {
-      await fetchMe()
-    } catch (error) {
-      // 冷启动兜底：access token 过期时尝试 refresh，失败则彻底登出。
-      if (error instanceof ApiError && error.status === 401 && refreshToken.value) {
-        try {
-          await refreshSession()
-        } catch {
+    // 关键状态流转：冷启动时可能同时被 App 和路由守卫触发。
+    // 通过单飞 promise 合并并发初始化，避免重复请求 /auth/me。
+    initializeInFlight = (async () => {
+      hydrateFromStorage()
+
+      if (!accessToken.value) {
+        initialized.value = true
+        return
+      }
+
+      try {
+        await fetchMe()
+      } catch (error) {
+        // 冷启动兜底：access token 过期时尝试 refresh，失败则彻底登出。
+        if (error instanceof ApiError && error.status === 401 && refreshToken.value) {
+          try {
+            await refreshSession()
+          } catch {
+            clearAuth()
+          }
+        } else {
           clearAuth()
         }
-      } else {
-        clearAuth()
+      } finally {
+        initialized.value = true
       }
+    })()
+
+    try {
+      await initializeInFlight
     } finally {
-      initialized.value = true
+      initializeInFlight = null
     }
   }
 
