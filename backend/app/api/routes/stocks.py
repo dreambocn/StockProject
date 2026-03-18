@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +27,7 @@ from app.schemas.stocks import (
     StockTradeCalendarResponse,
 )
 from app.schemas.news import StockRelatedNewsItemResponse
+from app.services.news_cache_service import get_news_rows
 from app.services.stock_sync_service import (
     STOCK_BASIC_FULL_STATUSES,
     sync_stock_basic_full,
@@ -70,12 +71,18 @@ from app.services.news_mapper_service import (
     map_stock_announcement_rows,
     map_stock_news_rows,
 )
+from app.services.news_repository import (
+    load_latest_stock_news_fetch_at,
+    load_stock_news_rows_from_db,
+    replace_stock_news_rows,
+)
 
 
 router = APIRouter()
 TUSHARE_DAILY_CACHE_PREFIX = "stocks:daily:tushare"
 TUSHARE_TRADE_CAL_CACHE_PREFIX = "stocks:trade_cal:tushare"
 TUSHARE_ADJ_FACTOR_CACHE_PREFIX = "stocks:adj_factor:tushare"
+STOCK_NEWS_CACHE_PREFIX = "stocks:news"
 SUPPORTED_KLINE_PERIODS: tuple[str, ...] = ("daily", "weekly", "monthly")
 
 
@@ -415,38 +422,104 @@ async def get_stock_related_news(
     symbol = instrument.symbol.strip() if instrument.symbol else ""
     if not symbol:
         return []
+    cache_variant = "with_announcements" if include_announcements else "news_only"
+    cache_key = (
+        f"{STOCK_NEWS_CACHE_PREFIX}:{normalized_ts_code}:{cache_variant}:{limit}"
+    )
 
-    try:
-        # 关键流程：个股详情页只加载与该股票 symbol 直接相关的新闻，避免全局热点污染个股语境。
-        stock_news_rows = await fetch_stock_news(symbol)
-        mapped_stock_news = map_stock_news_rows(
-            ts_code=normalized_ts_code,
-            symbol=symbol,
-            rows=stock_news_rows,
+    async def read_cache(key: str) -> list[StockRelatedNewsItemResponse] | None:
+        return await read_cached_model_rows(
+            key,
+            StockRelatedNewsItemResponse,
+            delete_on_decode_error=True,
+            redis_client_getter=get_redis_client,
         )
-        mapped_items = mapped_stock_news
 
-        if include_announcements:
-            # 关键业务分支：公告作为强相关信息并入个股资讯流；失败时降级为仅新闻，不阻断详情页主流程。
-            try:
-                announcement_rows = await fetch_stock_announcements(symbol=symbol)
-            except Exception:
-                announcement_rows = []
+    async def write_cache(
+        key: str,
+        rows: list[StockRelatedNewsItemResponse],
+        ttl_seconds: int,
+    ) -> None:
+        await write_cached_model_rows(
+            key,
+            rows,
+            ttl_seconds=ttl_seconds,
+            redis_client_getter=get_redis_client,
+        )
 
-            mapped_announcements = map_stock_announcement_rows(
+    async def load_from_db() -> list[StockRelatedNewsItemResponse]:
+        return await load_stock_news_rows_from_db(
+            session=session,
+            ts_code=normalized_ts_code,
+            cache_variant=cache_variant,
+            limit=limit,
+        )
+
+    async def get_last_fetch_at() -> datetime | None:
+        return await load_latest_stock_news_fetch_at(
+            session=session,
+            ts_code=normalized_ts_code,
+            cache_variant=cache_variant,
+        )
+
+    async def fetch_remote_and_persist() -> list[StockRelatedNewsItemResponse]:
+        try:
+            # 关键流程：个股详情页只拉取该股票自身新闻，并把结果统一落库，
+            # 1 小时内优先走缓存和数据库，避免切换详情/复看页面时重复打资讯源。
+            stock_news_rows = await fetch_stock_news(symbol)
+            mapped_stock_news = map_stock_news_rows(
                 ts_code=normalized_ts_code,
                 symbol=symbol,
-                rows=announcement_rows,
+                rows=stock_news_rows,
             )
-            mapped_items = [*mapped_stock_news, *mapped_announcements]
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="stock news upstream unavailable",
-        ) from exc
+            mapped_items = mapped_stock_news
 
-    mapped_items.sort(key=lambda item: item.published_at or datetime.min, reverse=True)
-    return mapped_items[:limit]
+            if include_announcements:
+                # 关键业务分支：公告作为强相关补充并入新闻流；若公告源失败，降级为仅新闻，不阻断主流程。
+                try:
+                    announcement_rows = await fetch_stock_announcements(symbol=symbol)
+                except Exception:
+                    announcement_rows = []
+
+                mapped_announcements = map_stock_announcement_rows(
+                    ts_code=normalized_ts_code,
+                    symbol=symbol,
+                    rows=announcement_rows,
+                )
+                mapped_items = [*mapped_stock_news, *mapped_announcements]
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="stock news upstream unavailable",
+            ) from exc
+
+        mapped_items.sort(
+            key=lambda item: item.published_at or datetime.min, reverse=True
+        )
+        fetched_at = datetime.now(UTC)
+        await replace_stock_news_rows(
+            session=session,
+            ts_code=normalized_ts_code,
+            symbol=symbol,
+            cache_variant=cache_variant,
+            fetched_at=fetched_at,
+            rows=mapped_items,
+        )
+        await session.commit()
+        return mapped_items[:limit]
+
+    return await get_news_rows(
+        cache_key=cache_key,
+        cache_ttl_seconds=get_settings().stock_related_news_cache_ttl_seconds,
+        refresh_window_seconds=get_settings().stock_related_news_cache_ttl_seconds,
+        now=datetime.now(UTC),
+        read_cache=read_cache,
+        write_cache=write_cache,
+        load_from_db=load_from_db,
+        get_last_fetch_at=get_last_fetch_at,
+        fetch_remote_and_persist=fetch_remote_and_persist,
+        get_singleflight_lock=cache_get_singleflight_lock,
+    )
 
 
 @router.get("/stocks/{ts_code}/daily", response_model=list[StockDailySnapshotResponse])

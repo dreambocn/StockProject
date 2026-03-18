@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
 import { ApiError } from '../api/http'
 import { stocksApi, type StockListItem } from '../api/stocks'
 
 const { t } = useI18n()
+const router = useRouter()
 const loading = ref(false)
 const loadingMore = ref(false)
 const keyword = ref('')
@@ -216,6 +218,10 @@ const scheduleLoadMore = () => {
   })
 }
 
+const goToHotNews = async () => {
+  await router.push('/news/hot')
+}
+
 const setupLoadMoreObserver = () => {
   if (typeof IntersectionObserver === 'undefined') {
     return
@@ -263,7 +269,7 @@ onUnmounted(() => {
         <h1>{{ t('home.title') }}</h1>
       </div>
       <div class="header-actions">
-        <router-link class="hot-news-link" to="/news/hot">{{ t('home.hotNews') }}</router-link>
+        <el-button type="primary" @click="goToHotNews">{{ t('home.hotNews') }}</el-button>
         <el-input
           v-model="keyword"
           class="search-input"
@@ -328,16 +334,6 @@ onUnmounted(() => {
 
 .search-input {
   min-width: 220px;
-}
-
-.hot-news-link {
-  text-decoration: none;
-  color: var(--terminal-primary);
-  border: 1px solid var(--terminal-border);
-  border-radius: 8px;
-  padding: 0.35rem 0.55rem;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 0.75rem;
 }
 
 .section-kicker {

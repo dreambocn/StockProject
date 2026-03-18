@@ -48,6 +48,10 @@
   - `/api/stocks/{ts_code}` 提供股票详情与最新快照
   - `/api/stocks/{ts_code}/daily` 支持 `daily/weekly/monthly` 周期，先查库再回源并带 10 分钟缓存
   - `POST /api/stocks/sync/full` 支持登录态触发股票基础信息全量更新
+ - 完成新闻持久化与分析查询能力：
+   - 新增 `news_events` 表，统一持久化热点新闻与个股新闻（含公告）
+   - `GET /api/news/hot` 与 `GET /api/stocks/{ts_code}/news` 已升级为 `Redis -> DB -> 上游` 链路，默认 1 小时刷新窗口
+   - 新增 `GET /api/news/events`，支持按 `scope/ts_code/topic/时间范围/分页` 查询持久化新闻事件，便于 AI 直接分析
 
 ### 前端能力
 
@@ -148,6 +152,8 @@ uv run fastapi dev main.py
 - `STOCK_DAILY_CACHE_TTL_SECONDS`（股票日线缓存秒数，默认 `600`）
 - `STOCK_TRADE_CAL_CACHE_TTL_SECONDS`（交易日历缓存秒数，默认 `86400`）
 - `STOCK_ADJ_FACTOR_CACHE_TTL_SECONDS`（复权因子缓存秒数，默认 `3600`）
+- `STOCK_RELATED_NEWS_CACHE_TTL_SECONDS`（个股新闻缓存秒数，默认 `3600`）
+- `HOT_NEWS_CACHE_TTL_SECONDS`（热点新闻缓存秒数，默认 `3600`）
 
 邮件服务参数（`backend/.env`）：
 
@@ -214,9 +220,16 @@ uv run python scripts/sync_stocks.py
 - `GET /api/stocks`（支持 `keyword/list_status/page/page_size`，默认 `list_status=L`，可显式传 `ALL` 或 `L,D,P,G`）
 - `GET /api/stocks/{ts_code}`
 - `GET /api/stocks/{ts_code}/daily`（支持 `limit/period/trade_date/start_date/end_date`，`period` 可选 `daily|weekly|monthly`）
+- `GET /api/stocks/{ts_code}/news`（支持 `limit/include_announcements`；默认 1 小时窗口内优先走缓存/数据库）
 - `GET /api/stocks/trade-cal`（支持 `exchange/start_date/end_date/is_open`，先查库再回源）
 - `GET /api/stocks/{ts_code}/adj-factor`（支持 `limit/trade_date/start_date/end_date`，先查库再回源）
 - `POST /api/stocks/sync/full`（需登录态，用于触发股票基础信息全量更新）
+
+## News API 列表
+
+- `GET /api/news/hot`（支持 `limit/topic`；默认 1 小时窗口内优先走缓存/数据库）
+- `GET /api/news/impact-map`（支持 `topic/candidate_limit`）
+- `GET /api/news/events`（支持 `scope/ts_code/topic/published_from/published_to/page/page_size`；直接查询持久化新闻事件）
 
 认证安全语义（重要）：
 

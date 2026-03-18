@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.deps.auth import get_current_user
+import app.api.routes.stocks as stocks_routes
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
@@ -138,6 +139,9 @@ def stock_client(tmp_path: Path) -> TestClient:
             )
             await session.commit()
 
+    fake_redis = FakeRedisClient()
+    original_get_redis_client = stocks_routes.get_redis_client
+
     asyncio.run(_create_tables())
     asyncio.run(_seed_data())
 
@@ -146,11 +150,13 @@ def stock_client(tmp_path: Path) -> TestClient:
             yield session
 
     app.dependency_overrides[get_db_session] = override_get_db_session
+    stocks_routes.get_redis_client = lambda: fake_redis
 
     with TestClient(app) as client:
         yield client
 
     app.dependency_overrides.clear()
+    stocks_routes.get_redis_client = original_get_redis_client
     asyncio.run(engine.dispose())
 
 
@@ -741,3 +747,61 @@ def test_stock_related_news_returns_symbol_scoped_items(
     assert payload[0]["symbol"] == "600000"
     assert payload[0]["ts_code"] == "600000.SH"
     assert payload[0]["title"] == "浦发银行发布业绩快报"
+
+
+def test_stock_related_news_uses_cache_and_avoids_repeat_upstream_calls(
+    stock_client: TestClient, monkeypatch
+) -> None:
+    called = {"news": 0, "announcements": 0}
+
+    async def fake_fetch_stock_news(symbol: str) -> list[dict[str, object]]:
+        called["news"] += 1
+        assert symbol == "600000"
+        return [
+            {
+                "关键词": "600000",
+                "新闻标题": "浦发银行发布业绩快报",
+                "新闻内容": "营收同比增长",
+                "发布时间": "2026-03-03 09:12:00",
+                "文章来源": "东方财富",
+                "新闻链接": "https://finance.example.com/a/1",
+            }
+        ]
+
+    async def fake_fetch_stock_announcements(
+        *,
+        symbol: str,
+        market: str = "沪深京",
+        keyword: str = "",
+        category: str = "",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> list[dict[str, object]]:
+        _ = market, keyword, category, start_date, end_date
+        called["announcements"] += 1
+        assert symbol == "600000"
+        return [
+            {
+                "公告标题": "浦发银行关于董事会决议的公告",
+                "公告时间": "2026-03-03 08:30:00",
+                "公告链接": "https://finance.example.com/notice/1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.stocks.fetch_stock_news",
+        fake_fetch_stock_news,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.stocks.fetch_stock_announcements",
+        fake_fetch_stock_announcements,
+    )
+
+    first = stock_client.get("/api/stocks/600000.SH/news")
+    second = stock_client.get("/api/stocks/600000.SH/news")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert called["news"] == 1
+    assert called["announcements"] == 1
+    assert len(second.json()) == 2

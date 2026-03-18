@@ -305,15 +305,20 @@ describe('HomeView', () => {
     expect(quoteCall[0]).toContain('period=daily')
   })
 
-  it('renders hot news jump action in dashboard header', async () => {
+  it('renders hot news jump action as primary button in dashboard header', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([])))
 
     const wrapper = await mountHomeView()
     await flushPromises()
 
+    const hotNewsButton = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('热点新闻'))
+    expect(hotNewsButton).toBeDefined()
+    expect(hotNewsButton?.classes()).toContain('el-button--primary')
+
     const links = wrapper.findAll('a')
     const hotNewsLink = links.find((item) => item.text().includes('热点新闻'))
-    expect(hotNewsLink).toBeDefined()
-    expect(hotNewsLink?.attributes('href')).toContain('/news/hot')
+    expect(hotNewsLink).toBeUndefined()
   })
 })

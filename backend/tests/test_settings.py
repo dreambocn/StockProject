@@ -75,6 +75,8 @@ def test_settings_captcha_defaults() -> None:
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+    assert settings.stock_related_news_cache_ttl_seconds == 3600
+    assert settings.hot_news_cache_ttl_seconds == 3600
     assert settings.trust_proxy_headers is False
     assert settings.trusted_proxy_ips_list == []
 

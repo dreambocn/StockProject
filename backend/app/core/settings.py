@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     stock_daily_cache_ttl_seconds: int = 600
     stock_trade_cal_cache_ttl_seconds: int = 86400
     stock_adj_factor_cache_ttl_seconds: int = 3600
+    stock_related_news_cache_ttl_seconds: int = 3600
+    hot_news_cache_ttl_seconds: int = 3600
     init_admin_username: str = ""
     init_admin_email: str = ""
     init_admin_password: str = ""

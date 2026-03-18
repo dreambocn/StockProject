@@ -35,6 +35,7 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
             )
 
         assert "users" in after_tables
+        assert "news_events" in after_tables
 
         await engine.dispose()
 
