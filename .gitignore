@@ -27,3 +27,6 @@ yarn-error.log*
 
 ## Local worktrees
 .worktrees/
+
+## Local OpenCode workspace
+.opencode/
