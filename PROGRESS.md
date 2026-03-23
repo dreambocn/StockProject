@@ -1,6 +1,6 @@
 # Project Progress
 
-Last update: 2026-03-11
+Last update: 2026-03-13
 
 ## Completed
 
@@ -167,6 +167,12 @@ Last update: 2026-03-11
   - Added candidate-limit control in API (`candidate_limit`) and graceful fallback to empty candidates on query errors
   - Hot-news impact panel now renders "A股动态候选" with `name(ts_code)` entries for faster drill-down
   - Added backend test coverage for dynamic candidate output and frontend regression for candidate rendering
+- Completed unified news persistence + analysis query access:
+  - Added `news_events` table to persist both global hot news and stock-related news (including announcements)
+  - Upgraded `GET /api/news/hot` and `GET /api/stocks/{ts_code}/news` to `Redis -> DB -> upstream` with 1-hour refresh window
+  - Added `GET /api/news/events` for direct historical querying by scope/stock/topic/time range to support AI analysis workflows
+  - Stock detail page now renders related news after kline panel and avoids refetching news on period switching
+  - Added backend/frontend tests covering persistence, cache window behavior, and detail-page request decoupling
 
 ## In Progress
 

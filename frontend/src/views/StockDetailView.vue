@@ -40,6 +40,7 @@ const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
 const relatedNews = ref<StockRelatedNewsItem[]>([])
+const showAllNews = ref(false)
 const adjFactors = ref<StockAdjFactor[]>([])
 const selectedPeriod = ref<KlinePeriod>('daily')
 const selectedAdjustMode = ref<AdjustMode>('none')
@@ -433,6 +434,16 @@ const activeTooltipLeft = computed(() => {
   return `${(activeHoverX.value / chartWidth) * 100}%`
 })
 
+const newsPreviewLimit = 6
+const displayedNews = computed(() => {
+  if (showAllNews.value) {
+    return relatedNews.value
+  }
+  return relatedNews.value.slice(0, newsPreviewLimit)
+})
+
+const hasMoreNews = computed(() => relatedNews.value.length > newsPreviewLimit)
+
 const updateHoveredPoint = (event: MouseEvent) => {
   if (klineRows.value.length === 0) {
     hoveredIndex.value = null
@@ -470,7 +481,7 @@ const selectPeriod = (period: KlinePeriod) => {
   selectedPeriod.value = period
   hoveredIndex.value = null
   // 关键流程：周期切换必须触发后端真实请求，优先走数据库命中，缺失再由后端回源补齐。
-  void loadData()
+  void loadCoreData()
 }
 
 const selectAdjustMode = (mode: AdjustMode) => {
@@ -514,14 +525,26 @@ const loadAdjFactors = async (rows: StockDailySnapshot[]) => {
   }
 }
 
-watch(
-  () => dailyRows.value,
-  () => {
-    hoveredIndex.value = null
-  },
-)
+const loadRelatedNews = async () => {
+  if (!tsCode.value) {
+    relatedNews.value = []
+    return
+  }
 
-const loadData = async () => {
+  relatedNewsLoading.value = true
+  try {
+    // 关键流程：资讯加载与K线主链路拆开执行，避免资讯接口波动拖慢核心看板首屏。
+    relatedNews.value = await stocksApi.getStockRelatedNews(tsCode.value, 50)
+    showAllNews.value = false
+  } catch {
+    // 降级分支：资讯拉取失败时展示空态，不影响主看板核心行情与指标继续可用。
+    relatedNews.value = []
+  } finally {
+    relatedNewsLoading.value = false
+  }
+}
+
+const loadCoreData = async () => {
   if (!tsCode.value) {
     // 关键边界：缺少 tsCode 时不发请求，直接进入错误提示分支，避免无效接口调用。
     errorMessage.value = t('errors.fallback')
@@ -531,20 +554,16 @@ const loadData = async () => {
   loading.value = true
   errorMessage.value = ''
   try {
-    // 关键流程：详情与K线并行拉取，缩短首屏等待；任一失败统一走降级错误提示。
-    relatedNewsLoading.value = true
-    const [detailPayload, dailyPayload, newsPayload] = await Promise.all([
+    // 关键流程：优先并行拉取详情和K线，先稳定主看板；复权因子按时间窗二次请求。
+    const [detailPayload, dailyPayload] = await Promise.all([
       stocksApi.getStockDetail(tsCode.value),
       stocksApi.getStockDaily(tsCode.value, {
         limit: 60,
         period: selectedPeriod.value,
       }),
-      // 关键流程：详情页资讯严格使用个股新闻接口，不接入全局热点，避免语义混淆。
-      stocksApi.getStockRelatedNews(tsCode.value, 50),
     ])
     detail.value = detailPayload
     dailyRows.value = dailyPayload
-    relatedNews.value = newsPayload
     // 关键状态流转：复权因子依赖已拉取的行情时间窗，必须在 dailyRows 更新后再请求。
     await loadAdjFactors(dailyPayload)
   } catch (error) {
@@ -554,9 +573,20 @@ const loadData = async () => {
       errorMessage.value = t('errors.fallback')
     }
   } finally {
-    relatedNewsLoading.value = false
     loading.value = false
   }
+}
+
+watch(
+  () => dailyRows.value,
+  () => {
+    hoveredIndex.value = null
+  },
+)
+
+const loadData = async () => {
+  await loadCoreData()
+  await loadRelatedNews()
 }
 
 const goBack = async () => {
@@ -604,35 +634,8 @@ onMounted(async () => {
       </div>
     </el-card>
 
-    <el-card class="detail-card" shadow="never">
-      <div class="related-news-header">
-        <h2>{{ t('stockDetail.relatedNews') }}</h2>
-      </div>
-      <el-skeleton v-if="relatedNewsLoading" :rows="3" animated />
-      <el-empty v-else-if="relatedNews.length === 0" :description="t('stockDetail.relatedNewsEmpty')" />
-      <div v-else class="related-news-list">
-        <article
-          v-for="item in relatedNews"
-          :key="`${item.source}-${item.url ?? item.title}-${item.published_at ?? ''}`"
-          class="related-news-item"
-        >
-          <p class="related-news-meta">{{ item.publisher ?? item.source }} · {{ item.published_at ?? '--' }}</p>
-          <a
-            v-if="item.url"
-            class="related-news-link"
-            :href="item.url"
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            {{ item.title }}
-          </a>
-          <p v-else class="related-news-title">{{ item.title }}</p>
-          <p v-if="item.summary" class="related-news-summary">{{ item.summary }}</p>
-        </article>
-      </div>
-    </el-card>
-
-    <el-card class="detail-card" shadow="never">
+    <section class="content-grid">
+      <el-card data-testid="stock-detail-main-panel" class="detail-card" shadow="never">
       <div class="daily-header">
         <h2>{{ t('stockDetail.dailyTitle') }}</h2>
         <div class="daily-actions">
@@ -845,7 +848,45 @@ onMounted(async () => {
           <span>ROC</span>
         </div>
       </div>
-    </el-card>
+      </el-card>
+
+      <el-card data-testid="stock-detail-news-panel" class="detail-card detail-card-news" shadow="never">
+        <div class="related-news-header">
+          <h2>{{ t('stockDetail.relatedNews') }}</h2>
+          <el-button
+            v-if="hasMoreNews"
+            text
+            size="small"
+            class="news-toggle"
+            @click="showAllNews = !showAllNews"
+          >
+            {{ showAllNews ? '收起' : '查看更多' }}
+          </el-button>
+        </div>
+        <el-skeleton v-if="relatedNewsLoading" :rows="4" animated />
+        <el-empty v-else-if="relatedNews.length === 0" :description="t('stockDetail.relatedNewsEmpty')" />
+        <div v-else class="related-news-list">
+          <article
+            v-for="item in displayedNews"
+            :key="`${item.source}-${item.url ?? item.title}-${item.published_at ?? ''}`"
+            class="related-news-item"
+          >
+            <p class="related-news-meta">{{ item.publisher ?? item.source }} · {{ item.published_at ?? '--' }}</p>
+            <a
+              v-if="item.url"
+              class="related-news-link"
+              :href="item.url"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {{ item.title }}
+            </a>
+            <p v-else class="related-news-title">{{ item.title }}</p>
+            <p v-if="item.summary" class="related-news-summary">{{ item.summary }}</p>
+          </article>
+        </div>
+      </el-card>
+    </section>
   </section>
 </template>
 
@@ -853,6 +894,17 @@ onMounted(async () => {
 .detail-page {
   display: grid;
   gap: 1rem;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.content-grid > .detail-card {
+  height: 100%;
 }
 
 .detail-card {
@@ -927,15 +979,32 @@ h1 {
   margin-bottom: 0.8rem;
 }
 
+.news-toggle {
+  color: var(--terminal-primary);
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.detail-card-news {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 760px;
+}
+
 .related-news-list {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.55rem;
+  flex: 1;
+  min-height: 0;
+  max-height: 620px;
+  overflow: auto;
+  padding-right: 0.2rem;
 }
 
 .related-news-item {
   border: 1px solid var(--terminal-border);
   border-radius: 10px;
-  padding: 0.6rem;
+  padding: 0.5rem 0.56rem;
   background: color-mix(in srgb, var(--terminal-surface, #10172a) 90%, transparent);
 }
 
@@ -948,8 +1017,13 @@ h1 {
 
 .related-news-link,
 .related-news-title {
-  margin: 0.35rem 0 0;
-  font-size: 0.95rem;
+  margin: 0.28rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .related-news-link {
@@ -958,16 +1032,23 @@ h1 {
 }
 
 .related-news-summary {
-  margin: 0.35rem 0 0;
+  margin: 0.28rem 0 0;
   color: var(--terminal-muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .daily-actions {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  flex-wrap: nowrap;
-  overflow-x: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  overflow: visible;
   scrollbar-width: thin;
   padding-bottom: 0.1rem;
 }
@@ -1191,9 +1272,30 @@ h2 {
 }
 
 @media (max-width: 960px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-card-news {
+    position: static;
+    display: block;
+    max-height: 520px;
+  }
+
+  .related-news-list {
+    flex: none;
+    max-height: 420px;
+    overflow: auto;
+    padding-right: 0;
+  }
+
   .daily-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .daily-actions {
+    justify-content: flex-start;
   }
 
   .kline-meta-row {
