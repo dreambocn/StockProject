@@ -100,6 +100,67 @@ async def load_latest_hot_news_fetch_at(
     return (await session.execute(statement)).scalar_one_or_none()
 
 
+async def replace_policy_news_rows(
+    *,
+    session: AsyncSession,
+    fetched_at: datetime,
+    rows: list[NewsEventResponse],
+) -> None:
+    await session.execute(
+        delete(NewsEvent)
+        .where(NewsEvent.scope == "policy")
+        .where(NewsEvent.cache_variant == "policy_source")
+    )
+    for row in rows:
+        session.add(
+            NewsEvent(
+                scope="policy",
+                cache_variant="policy_source",
+                ts_code=None,
+                symbol=None,
+                title=row.title,
+                summary=row.summary,
+                published_at=row.published_at,
+                url=row.url,
+                publisher=row.publisher,
+                source=row.source,
+                macro_topic=row.macro_topic,
+                fetched_at=fetched_at,
+            )
+        )
+
+
+async def load_policy_news_rows(
+    *,
+    session: AsyncSession,
+    limit: int,
+) -> list[NewsEventResponse]:
+    statement = (
+        select(NewsEvent)
+        .where(NewsEvent.scope == "policy")
+        .where(NewsEvent.cache_variant == "policy_source")
+        .order_by(NewsEvent.published_at.desc(), NewsEvent.created_at.desc())
+        .limit(limit)
+    )
+    rows = (await session.execute(statement)).scalars().all()
+    return [
+        NewsEventResponse(
+            scope=row.scope,
+            cache_variant=row.cache_variant,
+            ts_code=row.ts_code,
+            symbol=row.symbol,
+            title=row.title,
+            summary=row.summary,
+            published_at=row.published_at,
+            url=row.url,
+            publisher=row.publisher,
+            source=row.source,
+            macro_topic=row.macro_topic,
+            fetched_at=row.fetched_at,
+        )
+        for row in rows
+    ]
+
 async def replace_stock_news_rows(
     *,
     session: AsyncSession,

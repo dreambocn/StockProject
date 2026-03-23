@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.stock_instrument import StockInstrument
-from app.schemas.news import HotNewsItemResponse, StockRelatedNewsItemResponse
+from app.schemas.news import HotNewsItemResponse, NewsEventResponse, StockRelatedNewsItemResponse
 
 
 MACRO_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -299,4 +299,29 @@ def map_stock_announcement_rows(
         key=lambda item: item.published_at or datetime.min,
         reverse=True,
     )
+    return mapped
+
+
+def map_policy_news_rows(rows: list[dict[str, object]]) -> list[NewsEventResponse]:
+    mapped: list[NewsEventResponse] = []
+    for row in rows:
+        title = _as_text(row.get("title"))
+        if not title:
+            continue
+        mapped.append(
+            NewsEventResponse(
+                scope="policy",
+                cache_variant="policy_source",
+                ts_code=None,
+                symbol=None,
+                title=title,
+                summary=_as_text(row.get("summary")),
+                published_at=_parse_datetime(row.get("published_at")),
+                url=_as_text(row.get("link")),
+                publisher="政策网关",
+                source="policy_gateway",
+                macro_topic="regulation_policy",
+                fetched_at=datetime.now(UTC),
+            )
+        )
     return mapped

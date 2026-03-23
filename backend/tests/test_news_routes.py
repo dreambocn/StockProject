@@ -431,3 +431,53 @@ def test_news_events_endpoint_orders_results_by_published_at_desc(
         "南方航空发布运力恢复公告",
         "美联储官员讲话",
     ]
+
+
+def test_policy_news_route_returns_policy_scope(news_client: TestClient, monkeypatch) -> None:
+    async def fake_fetch_policy_events() -> list[dict[str, object]]:
+        return [
+            {
+                "title": "证监会调整监管框架",
+                "summary": "加强数据披露要求",
+                "published_at": "2026-03-02 10:00:00",
+                "link": "https://politics.example.com/p/1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.news.fetch_policy_events", fake_fetch_policy_events
+    )
+
+    response = news_client.get("/api/news/policy")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["scope"] == "policy"
+    assert payload[0]["source"] == "policy_gateway"
+
+
+def test_news_events_endpoint_supports_policy_scope(news_client: TestClient, monkeypatch) -> None:
+    async def fake_fetch_policy_events() -> list[dict[str, object]]:
+        return [
+            {
+                "title": "证监会发布监管新规",
+                "summary": "强化信息披露要求",
+                "published_at": "2026-03-05 08:00:00",
+                "link": "https://policy.example.com/1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.news.fetch_policy_events", fake_fetch_policy_events
+    )
+
+    policy_response = news_client.get("/api/news/policy")
+    assert policy_response.status_code == 200
+
+    response = news_client.get("/api/news/events", params={"scope": "policy"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["scope"] == "policy"
+    assert payload[0]["title"] == "证监会发布监管新规"

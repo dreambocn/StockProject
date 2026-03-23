@@ -7,6 +7,7 @@ from app.cache.redis import get_redis_client
 from app.core.settings import get_settings
 from app.db.session import get_db_session
 from app.integrations.akshare_gateway import fetch_hot_news
+from app.integrations.policy_gateway import fetch_policy_events
 from app.schemas.news import (
     HotNewsItemResponse,
     MacroImpactProfileResponse,
@@ -17,12 +18,15 @@ from app.services.news_mapper_service import (
     attach_dynamic_a_share_candidates,
     list_macro_impact_profiles,
     map_hot_news_rows,
+    map_policy_news_rows,
 )
 from app.services.news_repository import (
     load_hot_news_rows_from_db,
     load_latest_hot_news_fetch_at,
+    load_policy_news_rows,
     query_news_events,
     replace_hot_news_rows,
+    replace_policy_news_rows,
 )
 from app.services.stock_cache_service import (
     get_singleflight_lock,
@@ -44,7 +48,7 @@ SUPPORTED_MACRO_TOPICS = {
     "regulation_policy",
     "other",
 }
-SUPPORTED_NEWS_SCOPES = {"hot", "stock"}
+SUPPORTED_NEWS_SCOPES = {"hot", "stock", "policy"}
 
 
 @router.get("/news/hot", response_model=list[HotNewsItemResponse])
@@ -215,3 +219,22 @@ async def get_macro_impact_map(
             profile["a_share_candidates"] = []
 
     return [MacroImpactProfileResponse.model_validate(item) for item in profiles]
+
+
+@router.get("/news/policy", response_model=list[NewsEventResponse])
+async def get_policy_news(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+) -> list[NewsEventResponse]:
+    raw_rows = await fetch_policy_events()
+    mapped = map_policy_news_rows(raw_rows)
+    if mapped:
+        await replace_policy_news_rows(
+            session=session,
+            fetched_at=datetime.now(UTC),
+            rows=mapped,
+        )
+        await session.commit()
+        return mapped[:limit]
+
+    return await load_policy_news_rows(session=session, limit=limit)
