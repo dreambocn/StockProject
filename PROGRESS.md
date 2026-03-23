@@ -186,6 +186,9 @@ Last update: 2026-03-23
   - Added `analysis_generation_sessions`, `user_watchlist_items`, and `stock_watch_snapshots` persistence models
   - Added watchlist worker orchestration service and standalone worker script for hourly news/snapshot sync plus daily analysis
   - Added backend/frontend regression coverage for analysis sessions, watchlist routes, worker de-duplication, streamed UI, and watchlist interactions
+- Updated local startup automation:
+  - Root `start-dev.bat` now launches backend API, watchlist worker, and frontend dev server together
+  - Local development can verify watchlist hourly sync and daily analysis without manually opening a third terminal
 
 ## In Progress
 
