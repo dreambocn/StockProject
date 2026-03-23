@@ -8,6 +8,7 @@ import { MotionPlugin } from '@vueuse/motion'
 import AnalysisWorkbenchView from './AnalysisWorkbenchView.vue'
 import { i18n, setAppLocale } from '../i18n'
 import { analysisApi, type StockAnalysisSummaryResponse } from '../api/analysis'
+import { watchlistApi } from '../api/watchlist'
 import { useAuthStore } from '../stores/auth'
 
 const createRouterWithQuery = () =>
@@ -52,6 +53,7 @@ describe('AnalysisWorkbenchView', () => {
       ts_code: '600519.SH',
       items: [],
     })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
     const { wrapper } = await mountWorkbench(router)
 
     expect(spy).not.toHaveBeenCalled()
@@ -221,6 +223,7 @@ describe('AnalysisWorkbenchView', () => {
       ts_code: '600519.SH',
       items: [summary.report!],
     })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
 
     const { wrapper } = await mountWorkbench(router)
 
@@ -300,6 +303,7 @@ describe('AnalysisWorkbenchView', () => {
       reused: false,
       cached: true,
     })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
 
     const { wrapper } = await mountWorkbench(router)
 
@@ -377,6 +381,7 @@ describe('AnalysisWorkbenchView', () => {
         },
       ],
     })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
 
     const { wrapper } = await mountWorkbench(router)
 
@@ -453,6 +458,7 @@ describe('AnalysisWorkbenchView', () => {
           },
         ],
       })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
 
     vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
       session_id: 'session-1',
@@ -490,5 +496,102 @@ describe('AnalysisWorkbenchView', () => {
     expect(openSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('实时更新')
     expect(wrapper.text()).toContain('第一条')
+  })
+
+  it('inherits watchlist web-search default but only applies it to the current manual session', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const authStore = useAuthStore()
+    authStore.initialized = true
+    authStore.accessToken = 'token'
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 0,
+      events: [],
+      report: {
+        id: 'report-current',
+        status: 'ready',
+        summary: '## 摘要',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:00:00Z',
+        trigger_source: 'manual',
+        used_web_search: true,
+        web_search_status: 'used',
+        content_format: 'markdown',
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({
+      items: [
+        {
+          id: 'watch-1',
+          ts_code: '600519.SH',
+          hourly_sync_enabled: true,
+          daily_analysis_enabled: true,
+          web_search_enabled: true,
+          last_hourly_sync_at: null,
+          last_daily_analysis_at: null,
+          created_at: '2026-03-23T08:00:00Z',
+          updated_at: '2026-03-23T08:00:00Z',
+          instrument: null,
+          latest_report: null,
+        },
+      ],
+    })
+    const createSessionSpy = vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
+      session_id: null,
+      report_id: 'report-current',
+      status: 'completed',
+      reused: false,
+      cached: true,
+    })
+
+    const wrapper = mount(AnalysisWorkbenchView, {
+      global: { plugins: [pinia, router, i18n, ElementPlus, MotionPlugin] },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('本次分析联网增强')
+    expect(wrapper.text()).toContain('已继承关注设置，可仅对本次分析临时调整。')
+    expect(wrapper.text()).toContain('已启用联网增强')
+
+    const webSearchSwitch = wrapper.findComponent({ name: 'ElSwitch' })
+    expect(webSearchSwitch.exists()).toBe(true)
+    expect((webSearchSwitch.props() as { modelValue?: boolean }).modelValue).toBe(true)
+
+    const refreshButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('刷新分析'))
+    expect(refreshButton).toBeDefined()
+    await refreshButton!.trigger('click')
+    await flushPromises()
+
+    expect(createSessionSpy).toHaveBeenCalledWith(
+      '600519.SH',
+      expect.objectContaining({
+        use_web_search: true,
+        trigger_source: 'manual',
+      }),
+    )
   })
 })

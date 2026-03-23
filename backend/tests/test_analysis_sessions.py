@@ -56,7 +56,14 @@ async def _seed_instrument(session_maker, *, ts_code: str) -> None:
         await session.commit()
 
 
-async def _seed_report(session_maker, *, ts_code: str, generated_at: datetime) -> None:
+async def _seed_report(
+    session_maker,
+    *,
+    ts_code: str,
+    generated_at: datetime,
+    trigger_source: str = "manual",
+    used_web_search: bool = False,
+) -> None:
     async with session_maker() as session:
         instrument = await session.get(StockInstrument, ts_code)
         if instrument is None:
@@ -89,9 +96,9 @@ async def _seed_report(session_maker, *, ts_code: str, generated_at: datetime) -
                 generated_at=generated_at,
                 started_at=generated_at - timedelta(minutes=1),
                 completed_at=generated_at,
-                trigger_source="manual",
-                used_web_search=False,
-                web_search_status="disabled",
+                trigger_source=trigger_source,
+                used_web_search=used_web_search,
+                web_search_status="used" if used_web_search else "disabled",
                 content_format="markdown",
             )
         )
@@ -158,6 +165,67 @@ def test_create_analysis_session_uses_fresh_report_cache(tmp_path: Path) -> None
     assert payload["cached"] is True
     assert payload["report_id"]
     assert payload["session_id"] is None
+
+
+def test_create_analysis_session_force_refresh_still_uses_hourly_report_cache(
+    tmp_path: Path,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(
+            _seed_report(
+                session_maker,
+                ts_code="600519.SH",
+                generated_at=datetime.now(UTC),
+            )
+        )
+        response = client.post(
+            "/api/analysis/stocks/600519.SH/sessions",
+            json={
+                "force_refresh": True,
+                "use_web_search": False,
+                "trigger_source": "manual",
+            },
+        )
+    finally:
+        _cleanup_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cached"] is True
+    assert payload["session_id"] is None
+    assert payload["report_id"]
+
+
+def test_create_analysis_session_uses_recent_report_across_trigger_sources(
+    tmp_path: Path,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(
+            _seed_report(
+                session_maker,
+                ts_code="600519.SH",
+                generated_at=datetime.now(UTC),
+                trigger_source="watchlist_daily",
+            )
+        )
+        response = client.post(
+            "/api/analysis/stocks/600519.SH/sessions",
+            json={
+                "force_refresh": True,
+                "use_web_search": False,
+                "trigger_source": "manual",
+            },
+        )
+    finally:
+        _cleanup_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cached"] is True
+    assert payload["session_id"] is None
+    assert payload["report_id"]
 
 
 def test_analysis_reports_route_returns_latest_first(tmp_path: Path) -> None:

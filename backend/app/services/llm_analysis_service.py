@@ -1,8 +1,12 @@
 from dataclasses import dataclass
 from datetime import datetime, UTC
+import re
 from typing import Awaitable, Callable, Iterable
 
-from app.services.analysis_prompt_service import build_analysis_prompt
+from app.services.analysis_prompt_service import (
+    build_analysis_prompt,
+    build_analysis_system_instruction,
+)
 from app.services.factor_weight_service import FactorWeight
 from app.services.llm_client_service import generate_llm_result, stream_llm_text
 
@@ -19,6 +23,100 @@ class AnalysisReportResult:
     web_sources: list[dict[str, object]]
 
 
+AGENTIC_OUTPUT_PATTERNS = (
+    "准备先查看",
+    "查看仓库",
+    "仓库根目录",
+    "文件结构",
+    "现有文档",
+    "工具调用",
+    "我将先",
+    "我会先",
+    "当前分析状态 ·",
+    "先看结论，再回溯证据与风险。",
+)
+
+
+def _contains_agentic_output(summary: str) -> bool:
+    normalized_summary = summary.strip()
+    if not normalized_summary:
+        return False
+
+    return any(pattern in normalized_summary for pattern in AGENTIC_OUTPUT_PATTERNS)
+
+
+def _sanitize_analysis_summary(summary: str) -> str:
+    sanitized_lines: list[str] = []
+    for raw_line in summary.splitlines():
+        line = raw_line.strip()
+        if not line:
+            sanitized_lines.append("")
+            continue
+        if any(pattern in line for pattern in AGENTIC_OUTPUT_PATTERNS):
+            continue
+        sanitized_lines.append(raw_line.rstrip())
+
+    sanitized = "\n".join(sanitized_lines).strip()
+    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized).strip()
+    if _contains_agentic_output(sanitized):
+        return ""
+    return sanitized
+
+
+def _build_rule_based_summary(
+    *,
+    ts_code: str,
+    instrument_name: str | None,
+    events: Iterable[dict[str, object]],
+    factor_weights: Iterable[FactorWeight],
+) -> str:
+    resolved_name = instrument_name or ts_code
+    factor_list = list(factor_weights)
+    event_list = list(events)
+    top_factor = factor_list[0] if factor_list else None
+    direction_label_map = {
+        "positive": "利好",
+        "negative": "利空",
+        "neutral": "中性",
+    }
+
+    conclusion = (
+        f"{resolved_name}（{ts_code}）当前可结合事件驱动做跟踪，"
+        f"但建议优先核对最新公告与交易反馈。"
+    )
+    if top_factor is not None:
+        direction_label = direction_label_map.get(
+            top_factor.direction,
+            top_factor.direction,
+        )
+        conclusion = (
+            f"{resolved_name}（{ts_code}）当前主要受“{top_factor.factor_label}”驱动，"
+            f"方向偏{direction_label}，但仍需结合事件证据二次确认。"
+        )
+
+    evidence_lines = [
+        f"- {event.get('title') or '暂无明确事件'}"
+        for event in event_list[:3]
+    ] or ["- 暂无可用事件证据"]
+    risk_lines = [
+        f"- 需持续确认：{event.get('title') or '暂无明确事件'}"
+        for event in event_list[:2]
+    ] or ["- 当前事件证据不足，建议继续观察。"]
+
+    return "\n".join(
+        [
+            "## 核心判断",
+            conclusion,
+            "",
+            "## 关键证据",
+            *evidence_lines,
+            "",
+            "## 风险提示",
+            *risk_lines,
+        ]
+    ).strip()
+
+
 async def generate_stock_analysis_report(
     ts_code: str,
     instrument_name: str | None,
@@ -29,50 +127,64 @@ async def generate_stock_analysis_report(
     use_web_search: bool = False,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> AnalysisReportResult:
+    factor_weight_list = list(factor_weights)
+    event_list = list(events)
     prompt = build_analysis_prompt(
         ts_code=ts_code,
         instrument_name=instrument_name,
-        events=events,
-        factor_weights=factor_weights,
+        events=event_list,
+        factor_weights=factor_weight_list,
     )
+    system_instruction = build_analysis_system_instruction()
+    used_web_search = False
+    web_search_status = "disabled"
+    web_sources: list[dict[str, object]] = []
     try:
         if on_delta is not None:
             chunks: list[str] = []
             async for delta in stream_llm_text(
                 prompt,
                 client=client,
+                system_instruction=system_instruction,
                 max_output_tokens=512,
                 use_web_search=use_web_search,
             ):
                 chunks.append(delta)
-                await on_delta(delta)
-            summary = "".join(chunks).strip()
             used_web_search = use_web_search
             web_search_status = "used" if use_web_search else "disabled"
-            web_sources: list[dict[str, object]] = []
+            summary = _sanitize_analysis_summary("".join(chunks).strip())
+            if not summary:
+                raise RuntimeError("dirty llm summary")
+            await on_delta(summary)
         else:
             llm_result = await generate_llm_result(
                 prompt,
                 client=client,
+                system_instruction=system_instruction,
                 max_output_tokens=512,
                 use_web_search=use_web_search,
             )
-            summary = llm_result.text
             used_web_search = llm_result.used_web_search
             web_search_status = llm_result.web_search_status
             web_sources = llm_result.web_sources
+            summary = _sanitize_analysis_summary(llm_result.text)
+            if not summary:
+                raise RuntimeError("dirty llm summary")
 
         if not summary:
             raise RuntimeError("empty llm summary")
         status = "ready"
     except Exception:
-        summary = (
-            "由于大模型暂不可用，当前仅返回基于规则的摘要，后续会补齐分析。"
+        summary = _build_rule_based_summary(
+            ts_code=ts_code,
+            instrument_name=instrument_name,
+            events=event_list,
+            factor_weights=factor_weight_list,
         )
         status = "partial"
-        used_web_search = False
-        web_search_status = "unsupported" if use_web_search else "disabled"
-        web_sources = []
+        if use_web_search and web_search_status == "disabled":
+            web_search_status = "unsupported"
+            used_web_search = False
 
     factor_breakdown = [
         {
@@ -83,10 +195,13 @@ async def generate_stock_analysis_report(
             "evidence": factor.evidence,
             "reason": factor.reason,
         }
-        for factor in factor_weights
+        for factor in factor_weight_list
     ]
 
-    risk_points = [f"事件：{event.get('title', '未知')} 可能带来的风险" for event in events]
+    risk_points = [
+        f"事件：{event.get('title', '未知')} 可能带来的风险"
+        for event in event_list
+    ]
 
     return AnalysisReportResult(
         status=status,

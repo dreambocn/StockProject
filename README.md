@@ -173,7 +173,7 @@ uv run fastapi dev main.py
 - `LLM_STREAM_ENABLED`（是否启用流式输出，默认 `true`）
 - `LLM_WEB_SEARCH_ENABLED`（是否允许联网搜索增强，默认 `false`）
 - `ANALYSIS_ACTIVE_SESSION_TTL_SECONDS`（活跃分析会话去重 TTL，默认 `300`）
-- `ANALYSIS_REPORT_FRESHNESS_MINUTES`（分析报告新鲜度窗口，默认 `120`）
+- `ANALYSIS_REPORT_FRESHNESS_MINUTES`（分析报告冷却窗口，默认 `60`；1 小时内复用最近归档，不重复触发分析）
 - `STOCK_SYNC_TRADE_DAYS`（增量同步交易日窗口，默认 `120`）
 - `STOCK_DAILY_CACHE_TTL_SECONDS`（股票日线缓存秒数，默认 `600`）
 - `STOCK_TRADE_CAL_CACHE_TTL_SECONDS`（交易日历缓存秒数，默认 `86400`）

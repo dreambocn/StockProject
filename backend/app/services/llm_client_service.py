@@ -13,9 +13,27 @@ def build_openai_base_url(base_url: str) -> str:
     return f"{normalized_base_url}/v1"
 
 
-def _build_responses_input(prompt: str) -> list[dict[str, object]]:
+def _build_responses_input(
+    prompt: str,
+    *,
+    system_instruction: str | None = None,
+) -> list[dict[str, object]]:
     # 使用 Responses API 的结构化 content 形式，避免网关把纯字符串输入解析到错误分支。
-    return [
+    input_items: list[dict[str, object]] = []
+    if system_instruction and system_instruction.strip():
+        input_items.append(
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": system_instruction.strip(),
+                    }
+                ],
+            }
+        )
+
+    input_items.append(
         {
             "role": "user",
             "content": [
@@ -25,7 +43,8 @@ def _build_responses_input(prompt: str) -> list[dict[str, object]]:
                 }
             ],
         }
-    ]
+    )
+    return input_items
 
 
 def _extract_output_text(response: object) -> str:
@@ -67,6 +86,7 @@ def build_openai_client(settings: Settings | None = None):
 def _build_create_kwargs(
     *,
     prompt: str,
+    system_instruction: str | None,
     resolved_settings: Settings,
     model: str | None,
     reasoning_effort: str | None,
@@ -75,7 +95,10 @@ def _build_create_kwargs(
 ) -> dict[str, object]:
     request_kwargs: dict[str, object] = {
         "model": model or resolved_settings.llm_model,
-        "input": _build_responses_input(prompt),
+        "input": _build_responses_input(
+            prompt,
+            system_instruction=system_instruction,
+        ),
         "store": False,
         "reasoning": {
             "effort": reasoning_effort or resolved_settings.llm_reasoning_effort
@@ -104,6 +127,7 @@ async def generate_llm_result(
     *,
     client: Any | None = None,
     settings: Settings | None = None,
+    system_instruction: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     max_output_tokens: int = 512,
@@ -121,6 +145,7 @@ async def generate_llm_result(
     resolved_client = client or build_openai_client(resolved_settings)
     request_kwargs = _build_create_kwargs(
         prompt=prompt,
+        system_instruction=system_instruction,
         resolved_settings=resolved_settings,
         model=model,
         reasoning_effort=reasoning_effort,
@@ -147,6 +172,7 @@ async def generate_llm_result(
 
         fallback_kwargs = _build_create_kwargs(
             prompt=prompt,
+            system_instruction=system_instruction,
             resolved_settings=resolved_settings,
             model=model,
             reasoning_effort=reasoning_effort,
@@ -170,6 +196,7 @@ async def generate_llm_text(
     *,
     client: Any | None = None,
     settings: Settings | None = None,
+    system_instruction: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     max_output_tokens: int = 512,
@@ -179,6 +206,7 @@ async def generate_llm_text(
         prompt,
         client=client,
         settings=settings,
+        system_instruction=system_instruction,
         model=model,
         reasoning_effort=reasoning_effort,
         max_output_tokens=max_output_tokens,
@@ -192,6 +220,7 @@ async def stream_llm_text(
     *,
     client: Any | None = None,
     settings: Settings | None = None,
+    system_instruction: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
     max_output_tokens: int = 512,
@@ -205,6 +234,7 @@ async def stream_llm_text(
             prompt,
             client=resolved_client,
             settings=resolved_settings,
+            system_instruction=system_instruction,
             model=model,
             reasoning_effort=reasoning_effort,
             max_output_tokens=max_output_tokens,
@@ -214,6 +244,7 @@ async def stream_llm_text(
 
     request_kwargs = _build_create_kwargs(
         prompt=prompt,
+        system_instruction=system_instruction,
         resolved_settings=resolved_settings,
         model=model,
         reasoning_effort=reasoning_effort,

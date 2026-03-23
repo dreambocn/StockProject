@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     llm_stream_enabled: bool = True
     llm_web_search_enabled: bool = False
     analysis_active_session_ttl_seconds: int = 300
-    analysis_report_freshness_minutes: int = 120
+    analysis_report_freshness_minutes: int = 60
     init_admin_username: str = ""
     init_admin_email: str = ""
     init_admin_password: str = ""

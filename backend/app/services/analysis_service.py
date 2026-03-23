@@ -216,23 +216,22 @@ async def start_analysis_session(
     )
     lock = await get_analysis_lock(analysis_key)
     async with lock:
-        if not force_refresh:
-            fresh_report = await load_latest_fresh_report(
-                session,
-                ts_code=normalized_ts_code,
-                topic=topic,
-                use_web_search=use_web_search,
-                trigger_source=trigger_source,
-                freshness_minutes=settings.analysis_report_freshness_minutes,
-            )
-            if fresh_report is not None:
-                return {
-                    "session_id": None,
-                    "report_id": fresh_report.id,
-                    "status": "completed",
-                    "reused": False,
-                    "cached": True,
-                }
+        # 关键流程：历史报告按股票/主题维度做 1 小时冷却，优先级高于 force_refresh。
+        # 这样可以避免用户重复点击刷新或不同来源重复触发时，在短时间内写入多份归档报告。
+        fresh_report = await load_latest_fresh_report(
+            session,
+            ts_code=normalized_ts_code,
+            topic=topic,
+            freshness_minutes=settings.analysis_report_freshness_minutes,
+        )
+        if fresh_report is not None:
+            return {
+                "session_id": None,
+                "report_id": fresh_report.id,
+                "status": "completed",
+                "reused": False,
+                "cached": True,
+            }
 
         active_after = datetime.now(UTC) - timedelta(
             seconds=settings.analysis_active_session_ttl_seconds

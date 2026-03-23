@@ -30,6 +30,8 @@ const selectedReportId = ref<string | null>(null)
 const streamingMarkdown = ref('')
 const streaming = ref(false)
 const useWebSearch = ref(false)
+const webSearchInherited = ref(false)
+const webSearchSeededTsCode = ref('')
 const watchlistLoading = ref(false)
 const watchlistItem = ref<WatchlistItemResponse | null>(null)
 
@@ -141,6 +143,11 @@ const translateTriggerSource = (value: string | null | undefined) => {
   return t(`analysisWorkbench.triggerSourceText.${value}`, value)
 }
 
+const translateWebSearchStatus = (value: string | null | undefined) => {
+  const normalizedValue = value || 'disabled'
+  return t(`analysisWorkbench.webSearchStatusText.${normalizedValue}`, normalizedValue)
+}
+
 const confidenceRank = (value: string | null | undefined) => {
   if (value === 'high') {
     return 3
@@ -191,6 +198,12 @@ const reportAvailable = computed(() => Boolean(activeSummaryMarkdown.value))
 const withoutReport = computed(() => Boolean(summary.value && !summary.value.report && !streamingMarkdown.value))
 const needsFallbackHint = computed(
   () => Boolean(selectedReport.value) && (selectedReport.value?.status ?? summary.value?.status) === 'partial',
+)
+const currentReportWebSearchStatus = computed(() =>
+  translateWebSearchStatus(selectedReport.value?.web_search_status),
+)
+const showWebSearchInheritedHint = computed(
+  () => Boolean(watchlistItem.value) && webSearchInherited.value,
 )
 
 const sortedFactors = computed(() => {
@@ -362,7 +375,16 @@ const loadWatchlistState = async () => {
   }
   try {
     const payload = await watchlistApi.getWatchlist(authStore.accessToken)
-    watchlistItem.value = payload.items.find((item) => item.ts_code === tsCode.value) ?? null
+    const matchedItem = payload.items.find((item) => item.ts_code === tsCode.value) ?? null
+    watchlistItem.value = matchedItem
+
+    // 关键流程：关注页中的联网增强是“自动分析默认值”，分析页只在首次进入该股票时继承一次。
+    // 这样既能保持默认一致，又不会在用户手动切换后被异步刷新重新覆盖。
+    if (webSearchSeededTsCode.value !== tsCode.value) {
+      useWebSearch.value = Boolean(matchedItem?.web_search_enabled)
+      webSearchInherited.value = Boolean(matchedItem)
+      webSearchSeededTsCode.value = tsCode.value
+    }
   } catch {
     watchlistItem.value = null
   }
@@ -433,6 +455,7 @@ const toggleWatchlist = async () => {
     if (watchlistItem.value) {
       await watchlistApi.deleteWatchlistItem(authStore.accessToken, tsCode.value)
       watchlistItem.value = null
+      webSearchInherited.value = false
     } else {
       watchlistItem.value = await watchlistApi.createWatchlistItem(authStore.accessToken, {
         ts_code: tsCode.value,
@@ -441,6 +464,11 @@ const toggleWatchlist = async () => {
   } finally {
     watchlistLoading.value = false
   }
+}
+
+const updateUseWebSearch = (value: boolean) => {
+  useWebSearch.value = value
+  webSearchInherited.value = false
 }
 
 const refreshAnalysis = async () => {
@@ -503,6 +531,9 @@ watch(
   () => {
     selectedReportId.value = null
     streamingMarkdown.value = ''
+    useWebSearch.value = false
+    webSearchInherited.value = false
+    webSearchSeededTsCode.value = ''
     void loadWorkbench()
   },
 )
@@ -584,8 +615,11 @@ watch(
             <div class="analysis-hero__actions">
               <label class="analysis-switch">
                 <span>{{ t('analysisWorkbench.webSearchToggle') }}</span>
-                <el-switch v-model="useWebSearch" />
+                <el-switch :model-value="useWebSearch" @update:model-value="updateUseWebSearch" />
               </label>
+              <p v-if="showWebSearchInheritedHint" class="analysis-switch__hint">
+                {{ t('analysisWorkbench.webSearchInheritedHint') }}
+              </p>
               <el-button type="primary" :loading="loading || streaming" @click="refreshAnalysis">
                 {{ t('analysisWorkbench.refreshAction') }}
               </el-button>
@@ -621,9 +655,14 @@ watch(
                   <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.summaryTitle') }}</p>
                   <h2 class="analysis-panel__title">{{ t('analysisWorkbench.summarySubtitle') }}</h2>
                 </div>
-                <span class="analysis-panel__meta">
-                  {{ t('analysisWorkbench.metricStatus') }} · {{ displayStatus }}
-                </span>
+                <div class="analysis-panel__meta-stack">
+                  <span class="analysis-panel__meta">
+                    {{ t('analysisWorkbench.metricStatus') }} · {{ displayStatus }}
+                  </span>
+                  <span v-if="selectedReport" class="analysis-panel__meta">
+                    {{ t('analysisWorkbench.webSearchStatusLabel') }} · {{ currentReportWebSearchStatus }}
+                  </span>
+                </div>
               </div>
 
               <template v-if="reportAvailable">
@@ -889,6 +928,12 @@ watch(
   flex-wrap: wrap;
 }
 
+.analysis-panel__meta-stack {
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+}
+
 .analysis-loading {
   display: grid;
   gap: 1rem;
@@ -1016,6 +1061,7 @@ watch(
   gap: 0.6rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
 }
 
 .analysis-switch {
@@ -1023,6 +1069,13 @@ watch(
   align-items: center;
   gap: 0.45rem;
   color: #d9e8f7;
+}
+
+.analysis-switch__hint {
+  margin: 0;
+  max-width: 18rem;
+  font-size: 0.78rem;
+  color: color-mix(in srgb, var(--terminal-primary) 62%, white 38%);
 }
 
 .analysis-overview {

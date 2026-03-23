@@ -195,6 +195,6 @@ describe('WatchlistView', () => {
       '600519.SH',
       { web_search_enabled: true },
     )
-    expect(wrapper.text()).toContain('联网增强：ON')
+    expect(wrapper.text()).toContain('自动分析联网增强：ON')
   })
 })

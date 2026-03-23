@@ -113,6 +113,34 @@ def test_generate_llm_text_passes_web_search_tool_when_enabled() -> None:
     asyncio.run(_run())
 
 
+def test_generate_llm_text_supports_system_instruction() -> None:
+    async def _run() -> None:
+        fake_client = _FakeClient()
+        settings = Settings(
+            _env_file=None,
+            llm_base_url="https://aixj.vip",
+            llm_wire_api="responses",
+            llm_api_key="test-key",
+            llm_model="gpt-5.1-codex-mini",
+            llm_reasoning_effort="high",
+        )
+
+        await generate_llm_text(
+            "请输出股票分析",
+            client=fake_client,
+            settings=settings,
+            system_instruction="你是股票分析助手，不要输出过程说明，不要描述工具调用。",
+        )
+
+        payload = fake_client.responses.calls[0]
+        assert payload["input"][0]["role"] == "system"
+        system_text = payload["input"][0]["content"][0]["text"]
+        assert "不要输出过程说明" in system_text
+        assert "不要描述工具调用" in system_text
+
+    asyncio.run(_run())
+
+
 def test_stream_llm_text_yields_incremental_chunks() -> None:
     async def _run() -> None:
         fake_client = _FakeClient()

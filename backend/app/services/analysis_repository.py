@@ -246,16 +246,12 @@ async def load_latest_fresh_report(
     *,
     ts_code: str,
     topic: str | None,
-    use_web_search: bool,
-    trigger_source: str,
     freshness_minutes: int,
 ) -> AnalysisReport | None:
     freshness_threshold = datetime.now(UTC) - timedelta(minutes=freshness_minutes)
     statement = (
         select(AnalysisReport)
         .where(AnalysisReport.ts_code == ts_code)
-        .where(AnalysisReport.used_web_search == use_web_search)
-        .where(AnalysisReport.trigger_source == trigger_source)
         .where(AnalysisReport.generated_at >= freshness_threshold)
     )
     if topic is None:
