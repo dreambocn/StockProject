@@ -43,6 +43,7 @@ describe('App', () => {
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/news/hot', component: HomeView },
       ],
     })
     await router.push('/')
@@ -89,6 +90,7 @@ describe('App', () => {
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/news/hot', component: HomeView },
       ],
     })
     await router.push('/')
@@ -161,6 +163,7 @@ describe('App', () => {
         { path: '/admin/users', component: HomeView },
         { path: '/admin/stocks', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/news/hot', component: HomeView },
       ],
     })
     await router.push('/')
