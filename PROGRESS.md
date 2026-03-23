@@ -1,6 +1,6 @@
 # Project Progress
 
-Last update: 2026-03-13
+Last update: 2026-03-23
 
 ## Completed
 
@@ -173,6 +173,12 @@ Last update: 2026-03-13
   - Added `GET /api/news/events` for direct historical querying by scope/stock/topic/time range to support AI analysis workflows
   - Stock detail page now renders related news after kline panel and avoids refetching news on period switching
   - Added backend/frontend tests covering persistence, cache window behavior, and detail-page request decoupling
+- Completed analysis workbench UX optimization for professional research:
+  - Reworked `/analysis` into a professional dual-column workbench with overview, summary, factor ranking, event evidence, and risk sections
+  - Added translated human-readable analysis status, sentiment, and confidence labels instead of raw enum values
+  - Added source-aware return actions, refresh action, empty-state guidance, and event filter chips for faster drill-down
+  - Hot news page now reads `topic` from route query and keeps candidate entry aligned with the analysis workflow
+  - Added backend optimization notes document for follow-up P1/P2 analysis service refactors
 
 ## In Progress
 

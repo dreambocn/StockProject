@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { newsApi, type HotNewsItem, type MacroImpactProfile } from '../api/news'
 import { ApiError } from '../api/http'
 
 const { t } = useI18n()
+const route = useRoute()
 const router = useRouter()
 
 const loading = ref(false)
@@ -14,8 +15,6 @@ const impactLoading = ref(false)
 const errorMessage = ref('')
 const items = ref<HotNewsItem[]>([])
 const impactProfiles = ref<MacroImpactProfile[]>([])
-const selectedTopic = ref('all')
-
 const topicOptions = [
   'all',
   'geopolitical_conflict',
@@ -24,6 +23,11 @@ const topicOptions = [
   'regulation_policy',
   'other',
 ] as const
+
+const normalizeTopic = (value: string) =>
+  topicOptions.includes(value as (typeof topicOptions)[number]) ? value : 'all'
+
+const selectedTopic = ref(normalizeTopic(String(route.query.topic ?? 'all')))
 
 const formatTime = (value: string | null) => {
   if (!value) {
@@ -74,12 +78,28 @@ const selectTopic = async (topic: string) => {
     return
   }
   selectedTopic.value = topic
+  await router.replace({
+    path: '/news/hot',
+    query: topic === 'all' ? {} : { topic },
+  })
   await Promise.all([loadHotNews(), loadImpactProfiles()])
 }
 
 onMounted(async () => {
   await Promise.all([loadHotNews(), loadImpactProfiles()])
 })
+
+watch(
+  () => String(route.query.topic ?? 'all'),
+  async (value) => {
+    const normalized = normalizeTopic(value)
+    if (normalized === selectedTopic.value) {
+      return
+    }
+    selectedTopic.value = normalized
+    await Promise.all([loadHotNews(), loadImpactProfiles()])
+  },
+)
 
 const goToAnalysis = async (tsCode: string, topic: string) => {
   await router.push({

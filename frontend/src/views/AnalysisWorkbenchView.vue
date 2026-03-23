@@ -1,41 +1,276 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import type { StockAnalysisSummaryResponse } from '../api/analysis'
-import { analysisApi } from '../api/analysis'
+import { analysisApi, type StockAnalysisSummaryResponse } from '../api/analysis'
+
+type EventFilterKey = 'all' | 'high-related' | 'policy' | 'announcement' | 'news' | 'pending'
+type SourceKind = 'hot_news' | 'stock_detail' | 'direct'
 
 const route = useRoute()
-const { t } = useI18n()
+const router = useRouter()
+const { t, locale } = useI18n()
 
-const tsCode = computed(() => String(route.query.ts_code ?? '').trim().toUpperCase())
-const source = computed(() => String(route.query.source ?? '').trim())
-const topicContext = computed(() => String(route.query.topic ?? '').trim())
-const eventId = computed(() => String(route.query.event_id ?? '').trim())
 const summary = ref<StockAnalysisSummaryResponse | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
+const selectedEventFilter = ref<EventFilterKey>('all')
+const showAllFactors = ref(false)
 
+const readQueryString = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return String(value[0] ?? '').trim()
+  }
+  return String(value ?? '').trim()
+}
+
+const parseTime = (value: string | null | undefined) => {
+  if (!value) {
+    return null
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+  return parsed
+}
+
+const formatDateTime = (value: string | null | undefined) => {
+  const parsed = parseTime(value)
+  if (!parsed) {
+    return t('analysisWorkbench.dataMissing')
+  }
+
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed)
+}
+
+const formatPrice = (value: number | null | undefined) => {
+  if (typeof value !== 'number') {
+    return t('analysisWorkbench.dataMissing')
+  }
+  return `¥${value.toLocaleString(locale.value, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+const formatPercent = (value: number | null | undefined, digits = 2) => {
+  if (typeof value !== 'number') {
+    return t('analysisWorkbench.dataMissing')
+  }
+  const sign = value > 0 ? '+' : ''
+  return `${sign}${value.toFixed(digits)}%`
+}
+
+const formatWeight = (value: number | null | undefined) => {
+  if (typeof value !== 'number') {
+    return t('analysisWorkbench.dataMissing')
+  }
+  return `${(value * 100).toFixed(1)}%`
+}
+
+const formatMetricNumber = (value: number | null | undefined, digits = 2) => {
+  if (typeof value !== 'number') {
+    return t('analysisWorkbench.dataMissing')
+  }
+  return value.toFixed(digits)
+}
+
+const getCorrelationPercent = (value: number | null | undefined) => {
+  if (typeof value !== 'number') {
+    return 0
+  }
+  return Math.max(0, Math.min(100, Math.round(value * 100)))
+}
+
+const translateStatus = (value: StockAnalysisSummaryResponse['status'] | null | undefined) => {
+  if (!value) {
+    return t('analysisWorkbench.pendingStatus')
+  }
+  return t(`analysisWorkbench.statusText.${value}`)
+}
+
+const translateSentiment = (value: string | null | undefined) => {
+  if (!value) {
+    return t('analysisWorkbench.dataMissing')
+  }
+  return t(`analysisWorkbench.sentimentText.${value}`, value)
+}
+
+const translateConfidence = (value: string | null | undefined) => {
+  if (!value) {
+    return t('analysisWorkbench.dataMissing')
+  }
+  return t(`analysisWorkbench.confidenceText.${value}`, value)
+}
+
+const confidenceRank = (value: string | null | undefined) => {
+  if (value === 'high') {
+    return 3
+  }
+  if (value === 'medium') {
+    return 2
+  }
+  if (value === 'low') {
+    return 1
+  }
+  return 0
+}
+
+const tsCode = computed(() => readQueryString(route.query.ts_code).toUpperCase())
+const source = computed(() => readQueryString(route.query.source))
+const topicContext = computed(() => readQueryString(route.query.topic))
+const eventId = computed(() => readQueryString(route.query.event_id))
 const hasTsCode = computed(() => Boolean(tsCode.value))
-const reportAvailable = computed(() => Boolean(summary.value?.report))
-const needsFallbackHint = computed(
-  () => Boolean(summary.value?.report) && summary.value?.status !== 'ready',
+
+const sourceKind = computed<SourceKind>(() => {
+  if (source.value === 'hot_news') {
+    return 'hot_news'
+  }
+  if (source.value === 'stock_detail') {
+    return 'stock_detail'
+  }
+  return 'direct'
+})
+
+const sourceLabel = computed(() => t(`analysisWorkbench.sourceText.${sourceKind.value}`))
+
+const displayName = computed(() => summary.value?.instrument?.name ?? tsCode.value)
+const displayStatus = computed(() => translateStatus(summary.value?.status))
+const generatedAtLabel = computed(() =>
+  formatDateTime(summary.value?.report?.generated_at ?? summary.value?.generated_at),
 )
+const reportAvailable = computed(() => Boolean(summary.value?.report))
 const withoutReport = computed(() => Boolean(summary.value && !summary.value.report))
+const needsFallbackHint = computed(
+  () => Boolean(summary.value?.report) && summary.value?.status === 'partial',
+)
+
+const sortedFactors = computed(() => {
+  const factors = summary.value?.report?.factor_breakdown ?? []
+  return [...factors].sort((left, right) => right.weight - left.weight)
+})
+
+const topFactor = computed(() => sortedFactors.value[0] ?? null)
+const visibleFactors = computed(() =>
+  showAllFactors.value ? sortedFactors.value : sortedFactors.value.slice(0, 3),
+)
+const hasMoreFactors = computed(() => sortedFactors.value.length > 3)
+
+const sortedEvents = computed(() => {
+  const events = summary.value?.events ?? []
+  return [...events].sort((left, right) => {
+    const correlationDelta =
+      getCorrelationPercent(right.correlation_score) - getCorrelationPercent(left.correlation_score)
+    if (correlationDelta !== 0) {
+      return correlationDelta
+    }
+
+    const publishDelta =
+      (parseTime(right.published_at)?.getTime() ?? 0) - (parseTime(left.published_at)?.getTime() ?? 0)
+    if (publishDelta !== 0) {
+      return publishDelta
+    }
+
+    return confidenceRank(right.confidence) - confidenceRank(left.confidence)
+  })
+})
+
+const eventFilterOptions = computed(() => [
+  { key: 'all' as const, label: t('analysisWorkbench.filters.all') },
+  { key: 'high-related' as const, label: t('analysisWorkbench.filters.highRelated') },
+  { key: 'policy' as const, label: t('analysisWorkbench.filters.policy') },
+  { key: 'announcement' as const, label: t('analysisWorkbench.filters.announcement') },
+  { key: 'news' as const, label: t('analysisWorkbench.filters.news') },
+  { key: 'pending' as const, label: t('analysisWorkbench.filters.pending') },
+])
+
+const filteredEvents = computed(() => {
+  return sortedEvents.value.filter((event) => {
+    if (selectedEventFilter.value === 'all') {
+      return true
+    }
+    if (selectedEventFilter.value === 'high-related') {
+      return getCorrelationPercent(event.correlation_score) >= 70
+    }
+    if (selectedEventFilter.value === 'pending') {
+      return event.link_status !== 'linked' || typeof event.correlation_score !== 'number'
+    }
+    return event.event_type === selectedEventFilter.value
+  })
+})
+
+const latestCloseLabel = computed(() => formatPrice(summary.value?.latest_snapshot?.close))
+const latestChangeLabel = computed(() => formatPercent(summary.value?.latest_snapshot?.pct_chg))
+
+const overviewItems = computed(() => [
+  {
+    key: 'close',
+    label: t('analysisWorkbench.metricClose'),
+    value: latestCloseLabel.value,
+  },
+  {
+    key: 'change',
+    label: t('analysisWorkbench.metricChange'),
+    value: latestChangeLabel.value,
+  },
+  {
+    key: 'events',
+    label: t('analysisWorkbench.metricEvents'),
+    value: String(summary.value?.event_count ?? 0),
+  },
+  {
+    key: 'factor',
+    label: t('analysisWorkbench.metricTopFactor'),
+    value: topFactor.value
+      ? `${topFactor.value.factor_label} · ${formatWeight(topFactor.value.weight)}`
+      : t('analysisWorkbench.noFactors'),
+  },
+  {
+    key: 'status',
+    label: t('analysisWorkbench.metricStatus'),
+    value: displayStatus.value,
+  },
+])
+
 const contextItems = computed(() =>
   [
-    source.value ? `${t('analysisWorkbench.contextSource')}: ${source.value}` : null,
-    topicContext.value ? `${t('analysisWorkbench.contextTopic')}: ${topicContext.value}` : null,
+    `${t('analysisWorkbench.contextSource')}: ${sourceLabel.value}`,
+    topicContext.value
+      ? `${t('analysisWorkbench.contextTopic')}: ${topicContext.value}`
+      : null,
     eventId.value ? `${t('analysisWorkbench.contextEvent')}: ${eventId.value}` : null,
+    summary.value?.instrument?.industry
+      ? `${t('analysisWorkbench.contextIndustry')}: ${summary.value.instrument.industry}`
+      : null,
   ].filter((item): item is string => Boolean(item)),
 )
+
+const sourceActionLabel = computed(() => {
+  if (sourceKind.value === 'hot_news') {
+    return t('analysisWorkbench.backToHotTopic')
+  }
+  if (sourceKind.value === 'stock_detail') {
+    return t('analysisWorkbench.backToStockDetail')
+  }
+  return t('analysisWorkbench.backToHome')
+})
 
 const loadSummary = async () => {
   if (!tsCode.value) {
     summary.value = null
     errorMessage.value = ''
     loading.value = false
+    selectedEventFilter.value = 'all'
+    showAllFactors.value = false
     return
   }
 
@@ -43,8 +278,11 @@ const loadSummary = async () => {
   errorMessage.value = ''
 
   try {
-    summary.value = await analysisApi.getStockAnalysisSummary(tsCode.value)
-  } catch (error) {
+    const payload = await analysisApi.getStockAnalysisSummary(tsCode.value)
+    summary.value = payload
+    selectedEventFilter.value = 'all'
+    showAllFactors.value = false
+  } catch {
     errorMessage.value = t('analysisWorkbench.error')
     summary.value = null
   } finally {
@@ -52,14 +290,50 @@ const loadSummary = async () => {
   }
 }
 
+const goToHotNews = async () => {
+  await router.push('/news/hot')
+}
+
+const goToHome = async () => {
+  await router.push('/')
+}
+
+const goToStockDetail = async () => {
+  if (!tsCode.value) {
+    return
+  }
+  await router.push(`/stocks/${encodeURIComponent(tsCode.value)}`)
+}
+
+const goToSource = async () => {
+  if (sourceKind.value === 'hot_news') {
+    await router.push({
+      path: '/news/hot',
+      query: topicContext.value ? { topic: topicContext.value } : {},
+    })
+    return
+  }
+
+  if (sourceKind.value === 'stock_detail' && tsCode.value) {
+    await router.push(`/stocks/${encodeURIComponent(tsCode.value)}`)
+    return
+  }
+
+  await router.push('/')
+}
+
+const selectFilter = (filterKey: EventFilterKey) => {
+  selectedEventFilter.value = filterKey
+}
+
 onMounted(() => {
-  loadSummary()
+  void loadSummary()
 })
 
 watch(
   () => tsCode.value,
   () => {
-    loadSummary()
+    void loadSummary()
   },
 )
 </script>
@@ -67,93 +341,288 @@ watch(
 <template>
   <section class="analysis-workbench">
     <el-card v-if="!hasTsCode" class="analysis-empty">
-      <p class="analysis-empty__title">{{ t('analysisWorkbench.emptyTitle') }}</p>
-      <p class="analysis-empty__desc">{{ t('analysisWorkbench.emptyDesc') }}</p>
+      <div class="analysis-empty__content">
+        <p class="analysis-empty__title">{{ t('analysisWorkbench.emptyTitle') }}</p>
+        <p class="analysis-empty__desc">{{ t('analysisWorkbench.emptyDesc') }}</p>
+        <div class="analysis-empty__actions">
+          <el-button type="primary" @click="goToHotNews">
+            {{ t('analysisWorkbench.emptyHotNewsAction') }}
+          </el-button>
+          <el-button plain @click="goToHome">
+            {{ t('analysisWorkbench.emptyHomeAction') }}
+          </el-button>
+        </div>
+      </div>
     </el-card>
 
     <el-card v-else-if="errorMessage" class="analysis-error">
-      <p>{{ errorMessage }}</p>
-    </el-card>
-
-    <el-card v-else-if="loading" class="analysis-loading">
-      <el-skeleton :rows="5" animated />
+      <p class="analysis-error__title">{{ t('analysisWorkbench.errorTitle') }}</p>
+      <p class="analysis-error__desc">{{ errorMessage }}</p>
+      <div class="analysis-error__actions">
+        <el-button type="primary" :loading="loading" @click="loadSummary">
+          {{ t('analysisWorkbench.refreshAction') }}
+        </el-button>
+        <el-button plain @click="goToSource">
+          {{ sourceActionLabel }}
+        </el-button>
+      </div>
     </el-card>
 
     <template v-else>
-      <el-card class="analysis-context">
-        <div class="analysis-context__header">
-          <div>
-            <p class="analysis-context__label">{{ t('analysisWorkbench.panelTitle') }}</p>
-            <h2 class="analysis-context__title">{{ summary?.instrument?.name ?? tsCode }}</h2>
-            <p class="analysis-context__code">{{ summary?.ts_code ?? tsCode }}</p>
-            <div v-if="contextItems.length > 0" class="analysis-context__tags">
-              <span v-for="item in contextItems" :key="item" class="analysis-context__tag">
-                {{ item }}
-              </span>
+      <div v-if="loading && !summary" class="analysis-loading">
+        <el-card class="analysis-skeleton analysis-skeleton--hero">
+          <el-skeleton :rows="4" animated />
+        </el-card>
+        <div class="analysis-loading__grid">
+          <el-card class="analysis-skeleton">
+            <el-skeleton :rows="6" animated />
+          </el-card>
+          <el-card class="analysis-skeleton">
+            <el-skeleton :rows="7" animated />
+          </el-card>
+        </div>
+      </div>
+
+      <div v-else class="analysis-shell">
+        <el-card class="analysis-hero">
+          <div class="analysis-hero__header">
+            <div class="analysis-hero__headline">
+              <p class="analysis-kicker">{{ t('analysisWorkbench.panelTitle') }}</p>
+              <div class="analysis-hero__title-row">
+                <div>
+                  <h1 class="analysis-hero__title">{{ displayName }}</h1>
+                  <p class="analysis-hero__code">{{ summary?.ts_code ?? tsCode }}</p>
+                </div>
+                <span class="analysis-status-pill" :data-status="summary?.status ?? 'pending'">
+                  {{ displayStatus }}
+                </span>
+              </div>
+              <p class="analysis-hero__generated">
+                {{ t('analysisWorkbench.generatedAt') }}：{{ generatedAtLabel }}
+              </p>
+              <div class="analysis-hero__context">
+                <span
+                  v-for="item in contextItems"
+                  :key="item"
+                  class="analysis-context-chip"
+                >
+                  {{ item }}
+                </span>
+              </div>
+            </div>
+
+            <div class="analysis-hero__actions">
+              <el-button type="primary" :loading="loading" @click="loadSummary">
+                {{ t('analysisWorkbench.refreshAction') }}
+              </el-button>
+              <el-button plain :disabled="!hasTsCode" @click="goToStockDetail">
+                {{ t('analysisWorkbench.viewStockDetailAction') }}
+              </el-button>
+              <el-button text @click="goToSource">
+                {{ sourceActionLabel }}
+              </el-button>
             </div>
           </div>
-          <div class="analysis-context__meta">
-            <p>
-              <strong>{{ t('analysisWorkbench.latestSnapshot') }}:</strong>
-              {{ summary?.latest_snapshot?.close ?? t('analysisWorkbench.dataMissing') }}
-            </p>
-            <p>
-              <strong>{{ t('analysisWorkbench.statusLabel') }}:</strong>
-              {{ summary?.status ?? t('analysisWorkbench.pendingStatus') }}
-            </p>
+
+          <div class="analysis-overview">
+            <article
+              v-for="item in overviewItems"
+              :key="item.key"
+              class="analysis-overview__item"
+            >
+              <span class="analysis-overview__label">{{ item.label }}</span>
+              <strong class="analysis-overview__value">{{ item.value }}</strong>
+            </article>
+          </div>
+        </el-card>
+
+        <div class="analysis-content">
+          <div class="analysis-main">
+            <el-card class="analysis-panel analysis-panel--summary">
+              <div class="analysis-panel__header">
+                <div>
+                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.summaryTitle') }}</p>
+                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.summarySubtitle') }}</h2>
+                </div>
+                <span class="analysis-panel__meta">
+                  {{ t('analysisWorkbench.metricStatus') }} · {{ displayStatus }}
+                </span>
+              </div>
+
+              <template v-if="reportAvailable">
+                <p v-if="needsFallbackHint" class="analysis-summary__hint">
+                  {{ t('analysisWorkbench.partialHint') }}
+                </p>
+                <p class="analysis-summary__body">{{ summary?.report?.summary }}</p>
+              </template>
+
+              <template v-else-if="withoutReport">
+                <p class="analysis-summary__pending-title">{{ t('analysisWorkbench.pendingTitle') }}</p>
+                <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
+              </template>
+
+              <template v-else>
+                <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
+              </template>
+            </el-card>
+
+            <el-card class="analysis-panel">
+              <div class="analysis-panel__header">
+                <div>
+                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.factorHeading') }}</p>
+                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.factorSubtitle') }}</h2>
+                </div>
+                <span class="analysis-panel__meta">
+                  {{ t('analysisWorkbench.metricTopFactor') }}
+                </span>
+              </div>
+
+              <div v-if="visibleFactors.length > 0" class="analysis-factor-list">
+                <article
+                  v-for="factor in visibleFactors"
+                  :key="factor.factor_key"
+                  class="analysis-factor-card"
+                >
+                  <div class="analysis-factor-card__header">
+                    <div>
+                      <p class="analysis-factor-card__title">{{ factor.factor_label }}</p>
+                      <p class="analysis-factor-card__reason">{{ factor.reason }}</p>
+                    </div>
+                    <div class="analysis-factor-card__meta">
+                      <strong>{{ formatWeight(factor.weight) }}</strong>
+                      <span>{{ translateSentiment(factor.direction) }}</span>
+                    </div>
+                  </div>
+
+                  <div class="analysis-factor-card__bar">
+                    <span :style="{ width: `${Math.max(8, factor.weight * 100)}%` }" />
+                  </div>
+
+                  <div class="analysis-factor-card__evidence">
+                    <span
+                      v-for="evidence in factor.evidence"
+                      :key="evidence"
+                      class="analysis-token"
+                    >
+                      {{ evidence }}
+                    </span>
+                  </div>
+                </article>
+              </div>
+              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noFactors') }}</p>
+
+              <div v-if="hasMoreFactors" class="analysis-factor__actions">
+                <el-button text @click="showAllFactors = !showAllFactors">
+                  {{ showAllFactors ? t('analysisWorkbench.collapseFactors') : t('analysisWorkbench.expandFactors') }}
+                </el-button>
+              </div>
+            </el-card>
+
+            <el-card class="analysis-panel">
+              <div class="analysis-panel__header">
+                <div>
+                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.riskHeading') }}</p>
+                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.riskSubtitle') }}</h2>
+                </div>
+              </div>
+
+              <ul v-if="summary?.report?.risk_points?.length" class="analysis-risk-list">
+                <li v-for="point in summary?.report?.risk_points" :key="point">
+                  {{ point }}
+                </li>
+              </ul>
+              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noRisks') }}</p>
+            </el-card>
+          </div>
+
+          <div class="analysis-side">
+            <el-card class="analysis-panel analysis-panel--sticky">
+              <div class="analysis-panel__header">
+                <div>
+                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.eventsHeading') }}</p>
+                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.eventsSubtitle') }}</h2>
+                </div>
+                <span class="analysis-panel__meta">
+                  {{ filteredEvents.length }} / {{ summary?.event_count ?? 0 }}
+                </span>
+              </div>
+
+              <div class="analysis-filter-row">
+                <button
+                  v-for="filterOption in eventFilterOptions"
+                  :key="filterOption.key"
+                  type="button"
+                  class="analysis-filter-chip"
+                  :class="{ active: selectedEventFilter === filterOption.key }"
+                  @click="selectFilter(filterOption.key)"
+                >
+                  {{ filterOption.label }}
+                </button>
+              </div>
+
+              <div v-if="filteredEvents.length > 0" class="analysis-event-list">
+                <article
+                  v-for="event in filteredEvents"
+                  :key="event.event_id"
+                  class="analysis-event-card"
+                >
+                  <div class="analysis-event-card__header">
+                    <p data-testid="analysis-event-title" class="analysis-event-card__title">
+                      {{ event.title }}
+                    </p>
+                    <span class="analysis-token analysis-token--confidence">
+                      {{ translateConfidence(event.confidence) }}
+                    </span>
+                  </div>
+
+                  <p class="analysis-event-card__meta">
+                    {{ formatDateTime(event.published_at) }} ·
+                    {{ event.source || t('analysisWorkbench.dataMissing') }}
+                  </p>
+
+                  <div class="analysis-event-card__tags">
+                    <span v-if="event.macro_topic" class="analysis-token">
+                      {{ event.macro_topic }}
+                    </span>
+                    <span class="analysis-token">
+                      {{ event.event_type || t('analysisWorkbench.noEventType') }}
+                    </span>
+                    <span class="analysis-token">
+                      {{ translateSentiment(event.sentiment_label) }}
+                    </span>
+                  </div>
+
+                  <div class="analysis-event-card__score">
+                    <div class="analysis-event-card__score-head">
+                      <span>{{ t('analysisWorkbench.correlation') }}</span>
+                      <strong>{{ getCorrelationPercent(event.correlation_score) }}/100</strong>
+                    </div>
+                    <div class="analysis-score-bar">
+                      <span :style="{ width: `${getCorrelationPercent(event.correlation_score)}%` }" />
+                    </div>
+                  </div>
+
+                  <div class="analysis-event-card__stats">
+                    <div>
+                      <span>{{ t('analysisWorkbench.windowReturn') }}</span>
+                      <strong>{{ formatPercent(event.window_return_pct) }}</strong>
+                    </div>
+                    <div>
+                      <span>{{ t('analysisWorkbench.windowVolatility') }}</span>
+                      <strong>{{ formatMetricNumber(event.window_volatility) }}</strong>
+                    </div>
+                    <div>
+                      <span>{{ t('analysisWorkbench.abnormalVolume') }}</span>
+                      <strong>{{ formatMetricNumber(event.abnormal_volume_ratio) }}</strong>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noEvents') }}</p>
+            </el-card>
           </div>
         </div>
-      </el-card>
-
-      <el-card class="analysis-summary" v-if="reportAvailable">
-        <p class="analysis-summary__heading">{{ t('analysisWorkbench.summaryTitle') }}</p>
-        <p v-if="needsFallbackHint" class="analysis-summary__hint">
-          {{ t('analysisWorkbench.partialHint') }}
-        </p>
-        <p class="analysis-summary__body">{{ summary?.report?.summary }}</p>
-      </el-card>
-
-      <el-card class="analysis-summary" v-else-if="withoutReport">
-        <p class="analysis-summary__heading">{{ t('analysisWorkbench.pendingTitle') }}</p>
-        <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
-      </el-card>
-
-      <el-card class="analysis-factors" v-if="summary?.report?.factor_breakdown?.length">
-        <p class="analysis-factors__heading">{{ t('analysisWorkbench.factorHeading') }}</p>
-        <ul class="analysis-factors__list">
-          <li v-for="factor in summary?.report?.factor_breakdown" :key="factor.factor_key">
-            <div>
-              <strong>{{ factor.factor_label }}</strong>
-              <p class="analysis-factors__weight">{{ factor.weight }}</p>
-            </div>
-            <p class="analysis-factors__direction">{{ factor.direction }}</p>
-            <p class="analysis-factors__reason">{{ factor.reason }}</p>
-          </li>
-        </ul>
-      </el-card>
-
-      <el-card class="analysis-events" v-if="summary?.events?.length">
-        <p class="analysis-events__heading">{{ t('analysisWorkbench.eventsHeading') }}</p>
-        <ul>
-          <li v-for="event in summary?.events" :key="event.event_id">
-            <p class="analysis-events__title">{{ event.title }}</p>
-            <p class="analysis-events__meta">
-              {{ event.macro_topic || t('analysisWorkbench.noTopic') }} · {{ event.event_type || t('analysisWorkbench.noEventType') }}
-            </p>
-            <div class="analysis-events__stats">
-              <span>{{ t('analysisWorkbench.correlation') }}: {{ event.correlation_score ?? '--' }}</span>
-              <span>{{ t('analysisWorkbench.sentiment') }}: {{ event.sentiment_label ?? '--' }}</span>
-            </div>
-          </li>
-        </ul>
-      </el-card>
-
-      <el-card class="analysis-risk" v-if="summary?.report?.risk_points?.length">
-        <p class="analysis-risk__heading">{{ t('analysisWorkbench.riskHeading') }}</p>
-        <ul>
-          <li v-for="point in summary?.report?.risk_points" :key="point">{{ point }}</li>
-        </ul>
-      </el-card>
+      </div>
     </template>
   </section>
 </template>
@@ -166,138 +635,448 @@ watch(
 
 .analysis-empty,
 .analysis-error,
-.analysis-loading,
-.analysis-context,
-.analysis-summary,
-.analysis-factors,
-.analysis-events,
-.analysis-risk {
-  border-radius: 14px;
-  border: 1px solid var(--terminal-border);
-  background: rgba(12, 20, 33, 0.85);
+.analysis-skeleton,
+.analysis-hero,
+.analysis-panel {
+  border-radius: 18px;
+  border: 1px solid rgba(123, 197, 255, 0.12);
+  background:
+    linear-gradient(165deg, rgba(15, 23, 38, 0.98), rgba(9, 14, 24, 0.98)),
+    rgba(8, 14, 25, 0.95);
+  box-shadow: 0 20px 44px rgba(2, 8, 18, 0.28);
 }
 
-.analysis-empty {
-  text-align: center;
-  padding: 2rem;
+.analysis-empty,
+.analysis-error {
+  padding: 1.4rem;
 }
 
-.analysis-empty__title {
-  font-size: 1.2rem;
-  margin-bottom: 0.4rem;
-  color: var(--terminal-primary);
+.analysis-empty__content,
+.analysis-error__actions {
+  display: grid;
+  gap: 0.8rem;
 }
 
-.analysis-context__header {
+.analysis-empty__title,
+.analysis-error__title {
+  margin: 0;
+  font-size: 1.28rem;
+  font-weight: 600;
+  color: #eef6ff;
+}
+
+.analysis-empty__desc,
+.analysis-error__desc,
+.analysis-empty-note,
+.analysis-panel__meta,
+.analysis-hero__generated,
+.analysis-hero__code,
+.analysis-factor-card__reason,
+.analysis-event-card__meta,
+.analysis-event-card__stats span,
+.analysis-overview__label {
+  color: color-mix(in srgb, var(--terminal-muted) 80%, white 20%);
+}
+
+.analysis-empty__actions,
+.analysis-error__actions {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.analysis-loading {
+  display: grid;
+  gap: 1rem;
+}
+
+.analysis-loading__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
+  gap: 1rem;
+}
+
+.analysis-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.analysis-kicker,
+.analysis-panel__eyebrow,
+.analysis-overview__label,
+.analysis-context-chip,
+.analysis-token {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.analysis-kicker,
+.analysis-panel__eyebrow {
+  margin: 0 0 0.32rem;
+  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--terminal-primary) 84%, white 16%);
+}
+
+.analysis-hero {
+  padding: 1.2rem;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(123, 197, 255, 0.12), transparent 36%),
+    radial-gradient(circle at bottom left, rgba(87, 184, 255, 0.08), transparent 28%),
+    linear-gradient(165deg, rgba(15, 23, 38, 0.98), rgba(8, 14, 25, 0.98));
+}
+
+.analysis-hero__header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  gap: 1rem;
+  align-items: flex-start;
 }
 
-.analysis-context__title {
-  margin: 0.2rem 0;
-  font-size: 1.4rem;
+.analysis-hero__headline {
+  display: grid;
+  gap: 0.72rem;
+  min-width: 0;
 }
 
-.analysis-context__code {
+.analysis-hero__title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.analysis-hero__title {
   margin: 0;
-  color: var(--terminal-muted);
+  font-size: clamp(1.62rem, 2.8vw, 2.3rem);
+  color: #f5fbff;
 }
 
-.analysis-context__tags {
+.analysis-hero__code,
+.analysis-hero__generated {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.analysis-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0.38rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(123, 197, 255, 0.18);
+  background: rgba(10, 18, 29, 0.85);
+  color: #eef6ff;
+  white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.08);
+}
+
+.analysis-status-pill[data-status='ready'] {
+  color: #9ff4c2;
+  border-color: rgba(18, 183, 106, 0.35);
+}
+
+.analysis-status-pill[data-status='partial'] {
+  color: #ffd58a;
+  border-color: rgba(247, 181, 0, 0.32);
+}
+
+.analysis-status-pill[data-status='pending'] {
+  color: #a8d5ff;
+  border-color: rgba(123, 197, 255, 0.28);
+}
+
+.analysis-hero__context {
   display: flex;
   gap: 0.45rem;
   flex-wrap: wrap;
-  margin-top: 0.65rem;
 }
 
-.analysis-context__tag {
+.analysis-context-chip,
+.analysis-token {
   display: inline-flex;
   align-items: center;
-  border: 1px solid rgba(123, 197, 255, 0.25);
+  gap: 0.25rem;
+  padding: 0.2rem 0.6rem;
   border-radius: 999px;
-  padding: 0.18rem 0.58rem;
-  color: var(--terminal-primary);
-  font-size: 0.76rem;
-  font-family: 'IBM Plex Mono', monospace;
-  background: rgba(8, 14, 25, 0.74);
+  border: 1px solid rgba(123, 197, 255, 0.16);
+  background: rgba(8, 14, 25, 0.76);
+  color: color-mix(in srgb, var(--terminal-primary) 88%, white 12%);
+  font-size: 0.74rem;
 }
 
-.analysis-context__meta {
-  text-align: right;
-  font-size: 0.9rem;
+.analysis-hero__actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.analysis-summary__heading,
-.analysis-factors__heading,
-.analysis-events__heading,
-.analysis-risk__heading {
-  font-weight: 600;
-  color: var(--terminal-primary);
-  margin-bottom: 0.6rem;
+.analysis-overview {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
 }
 
-.analysis-summary__body {
-  line-height: 1.6;
+.analysis-overview__item {
+  display: grid;
+  gap: 0.36rem;
+  padding: 0.78rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(123, 197, 255, 0.08);
+  background: rgba(8, 14, 25, 0.72);
+}
+
+.analysis-overview__value {
+  color: #f5fbff;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.analysis-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.95fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.analysis-main,
+.analysis-side {
+  display: grid;
+  gap: 1rem;
+}
+
+.analysis-panel {
+  padding: 1rem;
+}
+
+.analysis-panel--sticky {
+  position: sticky;
+  top: 1rem;
+}
+
+.analysis-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.analysis-panel__title {
+  margin: 0;
+  color: #f5fbff;
+  font-size: 1.05rem;
 }
 
 .analysis-summary__hint {
-  margin: 0 0 0.5rem;
-  color: var(--terminal-warning, #f7b500);
-  font-size: 0.82rem;
+  margin: 0 0 0.8rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid rgba(247, 181, 0, 0.18);
+  background: rgba(53, 38, 7, 0.34);
+  color: #ffd58a;
 }
 
-.analysis-factors__list {
-  list-style: none;
+.analysis-summary__body {
   margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+  color: #e7f0fb;
+  line-height: 1.8;
+  font-size: 0.98rem;
 }
 
-.analysis-factors__list li {
+.analysis-summary__pending-title {
+  margin: 0 0 0.4rem;
+  color: #f5fbff;
+  font-weight: 600;
+}
+
+.analysis-factor-list,
+.analysis-event-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.analysis-factor-card,
+.analysis-event-card {
+  border-radius: 14px;
+  border: 1px solid rgba(123, 197, 255, 0.08);
+  background: rgba(8, 14, 25, 0.64);
+  padding: 0.82rem 0.88rem;
+}
+
+.analysis-factor-card__header,
+.analysis-event-card__header,
+.analysis-event-card__score-head {
   display: flex;
   justify-content: space-between;
-  padding: 0.4rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 0.75rem;
+  align-items: flex-start;
 }
 
-.analysis-events__stats {
+.analysis-factor-card__title,
+.analysis-event-card__title {
+  margin: 0;
+  color: #f5fbff;
+  font-weight: 600;
+}
+
+.analysis-factor-card__reason,
+.analysis-event-card__meta {
+  margin: 0.25rem 0 0;
+  font-size: 0.84rem;
+}
+
+.analysis-factor-card__meta {
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+  color: #e7f0fb;
+  text-align: right;
+}
+
+.analysis-factor-card__bar,
+.analysis-score-bar {
+  margin-top: 0.78rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.analysis-factor-card__bar span,
+.analysis-score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(87, 184, 255, 0.95), rgba(123, 197, 255, 0.55));
+}
+
+.analysis-factor-card__evidence,
+.analysis-event-card__tags {
   display: flex;
-  gap: 1rem;
-  font-size: 0.85rem;
-  color: var(--terminal-muted);
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.72rem;
 }
 
-.analysis-risk ul,
-.analysis-events ul {
+.analysis-factor__actions {
+  margin-top: 0.55rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.analysis-filter-row {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.analysis-filter-chip {
+  border: 1px solid rgba(123, 197, 255, 0.12);
+  border-radius: 999px;
+  padding: 0.32rem 0.68rem;
+  background: rgba(9, 16, 29, 0.84);
+  color: #d9e8f7;
+  cursor: pointer;
+  transition: 0.2s ease;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.74rem;
+}
+
+.analysis-filter-chip.active {
+  background: linear-gradient(120deg, rgba(87, 184, 255, 0.2), rgba(123, 197, 255, 0.08));
+  border-color: rgba(123, 197, 255, 0.3);
+  color: #f5fbff;
+}
+
+.analysis-event-card__score {
+  margin-top: 0.75rem;
+}
+
+.analysis-event-card__stats {
+  margin-top: 0.78rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.analysis-event-card__stats div {
+  display: grid;
+  gap: 0.24rem;
+}
+
+.analysis-event-card__stats strong,
+.analysis-event-card__score-head strong {
+  color: #f5fbff;
+}
+
+.analysis-risk-list {
+  list-style: none;
   margin: 0;
   padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  display: grid;
+  gap: 0.65rem;
 }
 
-.analysis-risk li {
-  padding-left: 0.5rem;
-  border-left: 2px solid var(--terminal-primary);
+.analysis-risk-list li {
+  border-left: 2px solid rgba(247, 181, 0, 0.72);
+  padding-left: 0.75rem;
+  color: #eef6ff;
+  line-height: 1.6;
+}
+
+.analysis-token--confidence {
+  color: #eef6ff;
+}
+
+@media (max-width: 1040px) {
+  .analysis-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analysis-content {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-panel--sticky {
+    position: static;
+  }
 }
 
 @media (max-width: 760px) {
-  .analysis-context__header {
+  .analysis-hero {
+    padding: 1rem;
+  }
+
+  .analysis-hero__header,
+  .analysis-hero__title-row,
+  .analysis-panel__header {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .analysis-context__meta {
-    text-align: left;
+  .analysis-hero__actions,
+  .analysis-empty__actions,
+  .analysis-error__actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
-  .analysis-factors__list li {
-    display: grid;
-    gap: 0.3rem;
+  .analysis-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-event-card__stats {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-loading__grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

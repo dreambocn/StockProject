@@ -626,7 +626,7 @@ onMounted(async () => {
         <div class="title-actions">
           <el-button
             type="primary"
-            plain
+            class="title-actions__analysis"
             data-testid="stock-analysis-entry"
             @click="goToAnalysis"
           >
@@ -949,6 +949,10 @@ onMounted(async () => {
   gap: 0.45rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.title-actions__analysis {
+  box-shadow: 0 12px 26px rgba(61, 169, 252, 0.18);
 }
 
 .panel-kicker {
