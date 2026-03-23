@@ -1,11 +1,25 @@
 from datetime import datetime
+import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
-from app.schemas.analysis import StockAnalysisSummaryResponse
-from app.services.analysis_service import get_stock_analysis_summary
+from app.schemas.analysis import (
+    AnalysisReportArchiveListResponse,
+    AnalysisSessionCreateRequest,
+    AnalysisSessionCreateResponse,
+    StockAnalysisSummaryResponse,
+)
+from app.services.analysis_repository import load_analysis_session
+from app.services.analysis_runtime_service import event_bus
+from app.services.analysis_service import (
+    AnalysisNotFoundError,
+    get_stock_analysis_summary,
+    list_stock_analysis_report_archives,
+    start_analysis_session,
+)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -28,3 +42,107 @@ async def get_stock_analysis_summary_route(
         event_limit=event_limit,
     )
     return StockAnalysisSummaryResponse.model_validate(payload)
+
+
+@router.post(
+    "/stocks/{ts_code}/sessions",
+    response_model=AnalysisSessionCreateResponse,
+)
+async def create_analysis_session_route(
+    ts_code: str,
+    request: AnalysisSessionCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisSessionCreateResponse:
+    try:
+        payload = await start_analysis_session(
+            session,
+            ts_code,
+            topic=request.topic,
+            force_refresh=request.force_refresh,
+            use_web_search=request.use_web_search,
+            trigger_source=request.trigger_source,
+        )
+    except AnalysisNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return AnalysisSessionCreateResponse.model_validate(payload)
+
+
+@router.get(
+    "/stocks/{ts_code}/reports",
+    response_model=AnalysisReportArchiveListResponse,
+)
+async def get_stock_analysis_reports_route(
+    ts_code: str,
+    limit: int = Query(default=10, ge=1, le=50),
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisReportArchiveListResponse:
+    payload = await list_stock_analysis_report_archives(
+        session,
+        ts_code,
+        limit=limit,
+    )
+    return AnalysisReportArchiveListResponse.model_validate(payload)
+
+
+def _to_sse_payload(event: str, payload: dict[str, object]) -> str:
+    serialized = json.dumps(payload, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {serialized}\n\n"
+
+
+@router.get("/sessions/{session_id}/events")
+async def stream_analysis_session_events_route(
+    session_id: str,
+    reused: bool = Query(default=False),
+    session: AsyncSession = Depends(get_db_session),
+) -> StreamingResponse:
+    session_row = await load_analysis_session(session, session_id)
+    if session_row is None:
+        raise HTTPException(status_code=404, detail="analysis session not found")
+
+    async def event_stream():
+        yield _to_sse_payload(
+            "status",
+            {"session_id": session_id, "status": session_row.status},
+        )
+        if reused:
+            yield _to_sse_payload(
+                "reused",
+                {"session_id": session_id, "status": session_row.status},
+            )
+        if session_row.summary_preview:
+            yield _to_sse_payload(
+                "delta",
+                {
+                    "session_id": session_id,
+                    "delta": session_row.summary_preview,
+                    "content": session_row.summary_preview,
+                },
+            )
+        if session_row.status == "completed":
+            yield _to_sse_payload(
+                "completed",
+                {
+                    "session_id": session_id,
+                    "report_id": session_row.report_id,
+                    "status": "completed",
+                },
+            )
+            return
+        if session_row.status == "failed":
+            yield _to_sse_payload(
+                "error",
+                {
+                    "session_id": session_id,
+                    "detail": session_row.error_message or "analysis session failed",
+                },
+            )
+            return
+
+        async with event_bus.subscribe(session_id) as queue:
+            while True:
+                event_name, payload = await queue.get()
+                yield _to_sse_payload(event_name, payload)
+                if event_name in {"completed", "error"}:
+                    return
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

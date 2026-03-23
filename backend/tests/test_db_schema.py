@@ -44,11 +44,30 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
         assert "news_events" in after_tables
         assert "analysis_event_links" in after_tables
         assert "analysis_reports" in after_tables
+        assert "analysis_generation_sessions" in after_tables
+        assert "user_watchlist_items" in after_tables
+        assert "stock_watch_snapshots" in after_tables
         assert "event_type" in news_columns
         assert "sentiment_label" in news_columns
         assert "sentiment_score" in news_columns
         assert "event_tags" in news_columns
         assert "analysis_status" in news_columns
+        async with engine.begin() as connection:
+            report_columns = await connection.run_sync(
+                lambda sync_conn: {
+                    item["name"]
+                    for item in inspect(sync_conn).get_columns("analysis_reports")
+                }
+            )
+
+        assert "trigger_source" in report_columns
+        assert "used_web_search" in report_columns
+        assert "web_search_status" in report_columns
+        assert "session_id" in report_columns
+        assert "started_at" in report_columns
+        assert "completed_at" in report_columns
+        assert "content_format" in report_columns
+        assert "web_sources" in report_columns
 
         await engine.dispose()
 

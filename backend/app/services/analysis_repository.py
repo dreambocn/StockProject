@@ -1,10 +1,11 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.models.analysis_event_link import AnalysisEventLink
+from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
@@ -16,6 +17,23 @@ def _normalize_event_tags(raw: str | None) -> list[str]:
         return []
 
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def build_trigger_source_group(trigger_source: str) -> str:
+    return "watchlist" if trigger_source == "watchlist_daily" else "manual"
+
+
+def build_analysis_key(
+    *,
+    ts_code: str,
+    topic: str | None,
+    use_web_search: bool,
+    trigger_source: str,
+) -> str:
+    return (
+        f"{ts_code.strip().upper()}|{(topic or '').strip()}|"
+        f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}"
+    )
 
 
 async def load_stock_instrument(
@@ -139,6 +157,14 @@ async def create_analysis_report(
     published_from: datetime | None,
     published_to: datetime | None,
     generated_at: datetime,
+    trigger_source: str,
+    used_web_search: bool,
+    web_search_status: str,
+    session_id: str | None,
+    started_at: datetime | None,
+    completed_at: datetime | None,
+    content_format: str,
+    web_sources: list[dict[str, object]] | None,
 ) -> AnalysisReport:
     report = AnalysisReport(
         ts_code=ts_code,
@@ -150,6 +176,14 @@ async def create_analysis_report(
         published_from=published_from,
         published_to=published_to,
         generated_at=generated_at,
+        trigger_source=trigger_source,
+        used_web_search=used_web_search,
+        web_search_status=web_search_status,
+        session_id=session_id,
+        started_at=started_at,
+        completed_at=completed_at,
+        content_format=content_format,
+        web_sources=web_sources,
     )
     session.add(report)
     return report
@@ -194,11 +228,100 @@ async def load_analysis_events(
     return events
 
 
-async def load_latest_report(session: AsyncSession, ts_code: str) -> AnalysisReport | None:
+async def load_latest_report(
+    session: AsyncSession,
+    ts_code: str,
+    *,
+    topic: str | None = None,
+) -> AnalysisReport | None:
+    statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code)
+    if topic:
+        statement = statement.where(AnalysisReport.topic == topic)
+    statement = statement.order_by(AnalysisReport.generated_at.desc()).limit(1)
+    return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def load_latest_fresh_report(
+    session: AsyncSession,
+    *,
+    ts_code: str,
+    topic: str | None,
+    use_web_search: bool,
+    trigger_source: str,
+    freshness_minutes: int,
+) -> AnalysisReport | None:
+    freshness_threshold = datetime.now(UTC) - timedelta(minutes=freshness_minutes)
+    statement = (
+        select(AnalysisReport)
+        .where(AnalysisReport.ts_code == ts_code)
+        .where(AnalysisReport.used_web_search == use_web_search)
+        .where(AnalysisReport.trigger_source == trigger_source)
+        .where(AnalysisReport.generated_at >= freshness_threshold)
+    )
+    if topic is None:
+        statement = statement.where(AnalysisReport.topic.is_(None))
+    else:
+        statement = statement.where(AnalysisReport.topic == topic)
+    statement = statement.order_by(AnalysisReport.generated_at.desc()).limit(1)
+    return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def list_analysis_reports(
+    session: AsyncSession,
+    *,
+    ts_code: str,
+    limit: int,
+) -> list[AnalysisReport]:
     statement = (
         select(AnalysisReport)
         .where(AnalysisReport.ts_code == ts_code)
         .order_by(AnalysisReport.generated_at.desc())
+        .limit(limit)
+    )
+    return (await session.execute(statement)).scalars().all()
+
+
+async def create_analysis_session_record(
+    session: AsyncSession,
+    *,
+    analysis_key: str,
+    ts_code: str,
+    topic: str | None,
+    use_web_search: bool,
+    trigger_source: str,
+) -> AnalysisGenerationSession:
+    row = AnalysisGenerationSession(
+        analysis_key=analysis_key,
+        ts_code=ts_code,
+        topic=topic,
+        use_web_search=use_web_search,
+        trigger_source=trigger_source,
+        trigger_source_group=build_trigger_source_group(trigger_source),
+        status="queued",
+    )
+    session.add(row)
+    return row
+
+
+async def load_active_session_by_key(
+    session: AsyncSession,
+    *,
+    analysis_key: str,
+    active_after: datetime,
+) -> AnalysisGenerationSession | None:
+    statement = (
+        select(AnalysisGenerationSession)
+        .where(AnalysisGenerationSession.analysis_key == analysis_key)
+        .where(AnalysisGenerationSession.status.in_(("queued", "running")))
+        .where(AnalysisGenerationSession.updated_at >= active_after)
+        .order_by(AnalysisGenerationSession.updated_at.desc())
         .limit(1)
     )
     return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def load_analysis_session(
+    session: AsyncSession, session_id: str
+) -> AnalysisGenerationSession | None:
+    return await session.get(AnalysisGenerationSession, session_id)
+

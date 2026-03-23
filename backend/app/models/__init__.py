@@ -1,3 +1,4 @@
+from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
@@ -7,11 +8,15 @@ from app.models.stock_instrument import StockInstrument
 from app.models.stock_kline_bar import StockKlineBar
 from app.models.stock_sync_cursor import StockSyncCursor
 from app.models.stock_trade_calendar import StockTradeCalendar
+from app.models.stock_watch_snapshot import StockWatchSnapshot
 from app.models.user import User
+from app.models.user_watchlist_item import UserWatchlistItem
 
 __all__ = [
     "User",
+    "UserWatchlistItem",
     "AnalysisEventLink",
+    "AnalysisGenerationSession",
     "AnalysisReport",
     "NewsEvent",
     "StockInstrument",
@@ -20,4 +25,5 @@ __all__ = [
     "StockAdjFactor",
     "StockKlineBar",
     "StockSyncCursor",
+    "StockWatchSnapshot",
 ]

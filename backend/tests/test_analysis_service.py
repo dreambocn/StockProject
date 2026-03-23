@@ -95,7 +95,9 @@ def test_analysis_service_aggregates_events_and_report(tmp_path: Path) -> None:
         asyncio.run(engine.dispose())
 
 
-def test_analysis_service_builds_events_and_report_from_raw_news(tmp_path: Path) -> None:
+def test_analysis_service_keeps_summary_read_only_before_session_generation(
+    tmp_path: Path,
+) -> None:
     engine, session_maker = _setup_async_session(tmp_path)
 
     async def run_test():
@@ -152,14 +154,11 @@ def test_analysis_service_builds_events_and_report_from_raw_news(tmp_path: Path)
 
             result = await get_stock_analysis_summary(session, "600519.SH")
 
-            assert result["event_count"] == 1
-            assert result["events"][0]["event_id"] == "raw-event-1"
-            assert result["events"][0]["sentiment_label"] == "positive"
-            assert result["events"][0]["event_type"] in {"announcement", "news"}
-            assert result["events"][0]["correlation_score"] is not None
-            assert result["report"] is not None
-            assert result["report"]["summary"]
-            assert result["status"] in {"ready", "partial"}
+            # 新架构下 summary 为纯读取接口，不会在读取时即时生成事件关联与报告。
+            assert result["event_count"] == 0
+            assert result["events"] == []
+            assert result["report"] is None
+            assert result["status"] == "pending"
 
     try:
         asyncio.run(run_test())
