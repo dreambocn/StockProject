@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { MotionPlugin } from '@vueuse/motion'
@@ -7,6 +8,7 @@ import { MotionPlugin } from '@vueuse/motion'
 import AnalysisWorkbenchView from './AnalysisWorkbenchView.vue'
 import { i18n, setAppLocale } from '../i18n'
 import { analysisApi, type StockAnalysisSummaryResponse } from '../api/analysis'
+import { useAuthStore } from '../stores/auth'
 
 const createRouterWithQuery = () =>
   createRouter({
@@ -18,6 +20,20 @@ const createRouterWithQuery = () =>
       { path: '/analysis', component: AnalysisWorkbenchView },
     ],
   })
+
+const mountWorkbench = async (router: ReturnType<typeof createRouter>) => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const authStore = useAuthStore()
+  authStore.initialized = true
+
+  const wrapper = mount(AnalysisWorkbenchView, {
+    global: { plugins: [pinia, router, i18n, ElementPlus, MotionPlugin] },
+  })
+
+  await flushPromises()
+  return { wrapper }
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -32,11 +48,11 @@ describe('AnalysisWorkbenchView', () => {
     await router.isReady()
 
     const spy = vi.spyOn(analysisApi, 'getStockAnalysisSummary')
-    const wrapper = mount(AnalysisWorkbenchView, {
-      global: { plugins: [router, i18n, ElementPlus, MotionPlugin] },
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
     })
-
-    await flushPromises()
+    const { wrapper } = await mountWorkbench(router)
 
     expect(spy).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('请输入 TS Code')
@@ -201,12 +217,12 @@ describe('AnalysisWorkbenchView', () => {
     }
 
     vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(summary)
-
-    const wrapper = mount(AnalysisWorkbenchView, {
-      global: { plugins: [router, i18n, ElementPlus, MotionPlugin] },
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [summary.report!],
     })
 
-    await flushPromises()
+    const { wrapper } = await mountWorkbench(router)
 
     expect(wrapper.text()).toContain('部分完成')
     expect(wrapper.text()).toContain('当前为降级或不完整分析')
@@ -273,12 +289,19 @@ describe('AnalysisWorkbenchView', () => {
     const spy = vi
       .spyOn(analysisApi, 'getStockAnalysisSummary')
       .mockResolvedValue(summary)
-
-    const wrapper = mount(AnalysisWorkbenchView, {
-      global: { plugins: [router, i18n, ElementPlus, MotionPlugin] },
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    const createSessionSpy = vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
+      session_id: null,
+      report_id: null,
+      status: 'completed',
+      reused: false,
+      cached: true,
     })
 
-    await flushPromises()
+    const { wrapper } = await mountWorkbench(router)
 
     expect(wrapper.text()).toContain('分析正在生成')
     expect(wrapper.text()).toContain('刷新分析')
@@ -291,6 +314,7 @@ describe('AnalysisWorkbenchView', () => {
     await refreshButton!.trigger('click')
     await flushPromises()
 
+    expect(createSessionSpy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledTimes(2)
 
     const detailButton = wrapper
@@ -301,5 +325,170 @@ describe('AnalysisWorkbenchView', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/stocks/600519.SH')
+  })
+
+  it('renders markdown summary and report archive entries', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 0,
+      events: [],
+      report: {
+        id: 'report-current',
+        status: 'ready',
+        summary: '# 一级标题\n\n- 条目一',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:00:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [
+        {
+          id: 'report-current',
+          status: 'ready',
+          summary: '# 一级标题\n\n- 条目一',
+          risk_points: [],
+          factor_breakdown: [],
+          generated_at: '2026-03-23T08:00:00Z',
+          trigger_source: 'manual',
+          used_web_search: false,
+          web_search_status: 'disabled',
+          content_format: 'markdown',
+        },
+      ],
+    })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const markdownBody = wrapper.get('[data-testid="analysis-markdown"]')
+    expect(markdownBody.html()).toContain('<h1')
+    expect(wrapper.text()).toContain('历史报告')
+    expect(wrapper.text()).toContain('手动触发')
+  })
+
+  it('creates analysis session and applies streaming delta content', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary')
+      .mockResolvedValueOnce({
+        ts_code: '600519.SH',
+        instrument: null,
+        latest_snapshot: null,
+        status: 'pending',
+        generated_at: null,
+        topic: null,
+        published_from: null,
+        published_to: null,
+        event_count: 0,
+        events: [],
+        report: null,
+      })
+      .mockResolvedValueOnce({
+        ts_code: '600519.SH',
+        instrument: null,
+        latest_snapshot: null,
+        status: 'ready',
+        generated_at: '2026-03-23T08:10:00Z',
+        topic: null,
+        published_from: null,
+        published_to: null,
+        event_count: 0,
+        events: [],
+        report: {
+          id: 'report-latest',
+          status: 'ready',
+          summary: '## 实时更新\n\n- 第一条',
+          risk_points: [],
+          factor_breakdown: [],
+          generated_at: '2026-03-23T08:10:00Z',
+          trigger_source: 'manual',
+          used_web_search: false,
+          web_search_status: 'disabled',
+          content_format: 'markdown',
+        },
+      } as StockAnalysisSummaryResponse)
+
+    vi.spyOn(analysisApi, 'getStockAnalysisReports')
+      .mockResolvedValueOnce({ ts_code: '600519.SH', items: [] })
+      .mockResolvedValueOnce({
+        ts_code: '600519.SH',
+        items: [
+          {
+            id: 'report-latest',
+            status: 'ready',
+            summary: '## 实时更新\n\n- 第一条',
+            risk_points: [],
+            factor_breakdown: [],
+            generated_at: '2026-03-23T08:10:00Z',
+            trigger_source: 'manual',
+            used_web_search: false,
+            web_search_status: 'disabled',
+            content_format: 'markdown',
+          },
+        ],
+      })
+
+    vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
+      session_id: 'session-1',
+      report_id: null,
+      status: 'queued',
+      reused: false,
+      cached: false,
+    })
+    const openSpy = vi
+      .spyOn(analysisApi, 'openAnalysisSessionEvents')
+      .mockImplementation((_sessionId, handlers) => {
+        handlers.onStatus?.({ session_id: 'session-1', status: 'running' })
+        handlers.onDelta?.({
+          session_id: 'session-1',
+          delta: '## 实时更新\n\n- 第一条',
+          content: '## 实时更新\n\n- 第一条',
+        })
+        handlers.onCompleted?.({
+          session_id: 'session-1',
+          report_id: 'report-latest',
+          status: 'ready',
+        })
+        return () => undefined
+      })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const refreshButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('刷新分析'))
+    expect(refreshButton).toBeDefined()
+    await refreshButton!.trigger('click')
+    await flushPromises()
+
+    expect(openSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('实时更新')
+    expect(wrapper.text()).toContain('第一条')
   })
 })

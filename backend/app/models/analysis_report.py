@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -19,6 +19,26 @@ class AnalysisReport(Base):
     topic: Mapped[str | None] = mapped_column(String(64), nullable=True)
     published_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trigger_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="manual", index=True
+    )
+    used_web_search: Mapped[bool] = mapped_column(Boolean, default=False)
+    web_search_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="disabled"
+    )
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    content_format: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="markdown"
+    )
+    web_sources: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON, nullable=True
+    )
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

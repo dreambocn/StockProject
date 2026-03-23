@@ -41,6 +41,7 @@ describe('App', () => {
       routes: [
         { path: '/', component: HomeView },
         { path: '/analysis', component: HomeView },
+        { path: '/watchlist', component: HomeView },
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
@@ -62,6 +63,7 @@ describe('App', () => {
     expect(wrapper.text()).toContain('中文')
     expect(wrapper.text()).toContain('EN')
     expect(wrapper.text()).toContain('分析')
+    expect(wrapper.text()).toContain('关注')
   })
 
   it('moves locale slider when switching language', async () => {
@@ -90,6 +92,7 @@ describe('App', () => {
       routes: [
         { path: '/', component: HomeView },
         { path: '/analysis', component: HomeView },
+        { path: '/watchlist', component: HomeView },
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
@@ -161,6 +164,7 @@ describe('App', () => {
       routes: [
         { path: '/', component: HomeView },
         { path: '/analysis', component: HomeView },
+        { path: '/watchlist', component: HomeView },
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/admin', component: AdminConsoleView },

@@ -55,3 +55,34 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
 
   return payload as T
 }
+
+const parseEventPayload = (event: MessageEvent<string>) => {
+  try {
+    return JSON.parse(event.data) as Record<string, unknown>
+  } catch {
+    return { detail: event.data }
+  }
+}
+
+type SseHandlerMap = Partial<Record<'status' | 'reused' | 'delta' | 'completed' | 'error', (payload: Record<string, unknown>) => void>>
+
+export const openEventSource = (path: string, handlers: SseHandlerMap) => {
+  const source = new EventSource(`${apiBaseUrl}${path}`)
+  const eventNames: Array<keyof SseHandlerMap> = ['status', 'reused', 'delta', 'completed', 'error']
+
+  for (const eventName of eventNames) {
+    const handler = handlers[eventName]
+    if (!handler) {
+      continue
+    }
+    source.addEventListener(eventName, (event) => {
+      handler(parseEventPayload(event as MessageEvent<string>))
+    })
+  }
+
+  source.onerror = () => {
+    handlers.error?.({ detail: 'eventsource_error' })
+  }
+
+  return () => source.close()
+}

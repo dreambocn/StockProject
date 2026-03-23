@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
+import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { MotionPlugin } from '@vueuse/motion'
 
 import StockDetailView from './StockDetailView.vue'
 import { i18n, setAppLocale } from '../i18n'
+import { watchlistApi } from '../api/watchlist'
+import { useAuthStore } from '../stores/auth'
 
 
 const jsonResponse = (payload: unknown) => ({
@@ -610,5 +612,223 @@ describe('StockDetailView', () => {
     expect(router.currentRoute.value.path).toBe('/analysis')
     expect(router.currentRoute.value.query.ts_code).toBe('600000.SH')
     expect(router.currentRoute.value.query.source).toBe('stock_detail')
+  })
+
+  it('toggles watchlist state for authenticated users', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            adj_factor: 2.0,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+    const createSpy = vi.spyOn(watchlistApi, 'createWatchlistItem').mockResolvedValue({
+      id: 'watch-1',
+      ts_code: '600000.SH',
+      hourly_sync_enabled: true,
+      daily_analysis_enabled: true,
+      web_search_enabled: false,
+      last_hourly_sync_at: null,
+      last_daily_analysis_at: null,
+      created_at: '2026-03-23T08:00:00Z',
+      updated_at: '2026-03-23T08:00:00Z',
+      instrument: null,
+      latest_report: null,
+    })
+    const deleteSpy = vi
+      .spyOn(watchlistApi, 'deleteWatchlistItem')
+      .mockResolvedValue({ message: 'ok' })
+
+    setAppLocale('zh-CN')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const authStore = useAuthStore()
+    authStore.accessToken = 'token'
+    authStore.user = {
+      id: 'user-1',
+      username: 'watcher',
+      email: 'watcher@example.com',
+      is_active: true,
+      user_level: 'user',
+    }
+    authStore.initialized = true
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/stocks/:tsCode', component: StockDetailView }],
+    })
+    await router.push('/stocks/600000.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [pinia, router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    const firstAction = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('加入关注'))
+    expect(firstAction).toBeDefined()
+    await firstAction!.trigger('click')
+    await flushPromises()
+
+    expect(createSpy).toHaveBeenCalledWith('token', { ts_code: '600000.SH' })
+    expect(wrapper.text()).toContain('移出关注')
+
+    const secondAction = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('移出关注'))
+    expect(secondAction).toBeDefined()
+    await secondAction!.trigger('click')
+    await flushPromises()
+
+    expect(deleteSpy).toHaveBeenCalledWith('token', '600000.SH')
+    expect(wrapper.text()).toContain('加入关注')
+  })
+
+  it('redirects to login when unauthenticated user tries to add watchlist', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            adj_factor: 2.0,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const authStore = useAuthStore()
+    authStore.initialized = true
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/stocks/:tsCode', component: StockDetailView },
+        { path: '/login', component: { template: '<div>login</div>' } },
+      ],
+    })
+    await router.push('/stocks/600000.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [pinia, router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    const watchlistButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('登录后加入关注'))
+    expect(watchlistButton).toBeDefined()
+
+    await watchlistButton!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(router.currentRoute.value.query.redirect).toBe('/stocks/600000.SH')
   })
 })

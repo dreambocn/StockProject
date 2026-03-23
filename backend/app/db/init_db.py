@@ -91,6 +91,7 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
         # 关键流程：对历史库执行最小列补齐，避免 create_all 不会自动 ALTER 导致运行期写入失败。
         await connection.run_sync(_ensure_stock_instrument_columns)
         await connection.run_sync(_ensure_news_event_columns)
+        await connection.run_sync(_ensure_analysis_report_columns)
 
 
 def _ensure_stock_instrument_columns(sync_connection: Connection) -> None:
@@ -140,6 +141,34 @@ def _ensure_news_event_columns(sync_connection: Connection) -> None:
         sync_connection.execute(
             text(
                 f"ALTER TABLE news_events ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+
+def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "analysis_reports" not in set(inspector.get_table_names()):
+        return
+
+    existing_columns = {
+        item["name"] for item in inspector.get_columns("analysis_reports")
+    }
+    required_column_sql: dict[str, str] = {
+        "trigger_source": "VARCHAR(32) DEFAULT 'manual'",
+        "used_web_search": "BOOLEAN DEFAULT FALSE",
+        "web_search_status": "VARCHAR(16) DEFAULT 'disabled'",
+        "session_id": "VARCHAR(36)",
+        "started_at": "TIMESTAMP",
+        "completed_at": "TIMESTAMP",
+        "content_format": "VARCHAR(16) DEFAULT 'markdown'",
+        "web_sources": "JSON",
+    }
+    for column_name, column_type in required_column_sql.items():
+        if column_name in existing_columns:
+            continue
+        sync_connection.execute(
+            text(
+                f"ALTER TABLE analysis_reports ADD COLUMN {column_name} {column_type}"
             )
         )
 

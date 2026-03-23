@@ -82,6 +82,12 @@ export const router = createRouter({
       name: 'analysis-workbench',
       component: () => import('../views/AnalysisWorkbenchView.vue'),
     },
+    {
+      path: '/watchlist',
+      name: 'watchlist',
+      component: () => import('../views/WatchlistView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

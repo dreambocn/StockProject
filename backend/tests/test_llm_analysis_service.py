@@ -15,11 +15,17 @@ class FakeGenerator:
 
 
 def test_llm_analysis_service_returns_summary(monkeypatch) -> None:
-    async def fake_generator(prompt: str, client=None, max_output_tokens=512):
-        return "模拟中文分析摘要"
+    async def fake_generator(prompt: str, client=None, max_output_tokens=512, use_web_search=False):
+        class FakeResult:
+            text = "模拟中文分析摘要"
+            used_web_search = False
+            web_search_status = "disabled"
+            web_sources = []
+
+        return FakeResult()
 
     monkeypatch.setattr(
-        "app.services.llm_analysis_service.generate_llm_text", fake_generator
+        "app.services.llm_analysis_service.generate_llm_result", fake_generator
     )
 
     async def run_test():
@@ -35,11 +41,11 @@ def test_llm_analysis_service_returns_summary(monkeypatch) -> None:
 
 
 def test_llm_analysis_service_fallback_on_error(monkeypatch) -> None:
-    async def fake_generator(prompt: str, client=None, max_output_tokens=512):
+    async def fake_generator(prompt: str, client=None, max_output_tokens=512, use_web_search=False):
         raise RuntimeError("fail")
 
     monkeypatch.setattr(
-        "app.services.llm_analysis_service.generate_llm_text", fake_generator
+        "app.services.llm_analysis_service.generate_llm_result", fake_generator
     )
 
     async def run_test():

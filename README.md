@@ -52,6 +52,16 @@
    - 新增 `news_events` 表，统一持久化热点新闻与个股新闻（含公告）
    - `GET /api/news/hot` 与 `GET /api/stocks/{ts_code}/news` 已升级为 `Redis -> DB -> 上游` 链路，默认 1 小时刷新窗口
    - 新增 `GET /api/news/events`，支持按 `scope/ts_code/topic/时间范围/分页` 查询持久化新闻事件，便于 AI 直接分析
+- 完成分析会话化能力：
+  - 新增 `analysis_generation_sessions`、`analysis_reports` 归档增强、`analysis_event_links` 结果落库
+  - `GET /api/analysis/stocks/{ts_code}/summary` 已收敛为只读最新快照接口
+  - 新增 `POST /api/analysis/stocks/{ts_code}/sessions`、`GET /api/analysis/sessions/{session_id}/events`、`GET /api/analysis/stocks/{ts_code}/reports`
+  - 支持活跃会话去重、新鲜报告缓存命中、Markdown 报告归档、流式增量输出
+- 完成关注列表与自动归档基础设施：
+  - 新增 `user_watchlist_items`、`stock_watch_snapshots` 两张表
+  - 新增 `GET/POST/PATCH/DELETE /api/watchlist*` 接口
+  - 新增独立 Worker 脚本 `uv run python scripts/run_watchlist_worker.py`
+  - Worker 按“每小时 05 分资讯/快照归档 + 交易日 18:10 日报分析”执行股票级去重任务
 
 ### 前端能力
 
@@ -80,6 +90,9 @@
 - 首页对缺失价格/日期的卡片增加轻量补全：仅补拉该股票最近一条 `daily` 数据并回填展示。
 - 首页仪表盘股票区采用瀑布流布局，并在滚动到底部时自动加载下一页股票数据。
 - 新增股票详情页（最新快照 + 最近 60 个交易日日线）。
+- 分析工作台支持 Markdown 渲染、流式摘要更新、历史归档回看、联网增强开关与加入关注。
+- 个股详情页新增加入/移出关注入口，并支持未登录跳转登录页。
+- 新增关注页 `/watchlist`，支持查看关注股票、进入分析、移除关注与切换小时同步/每日分析/联网增强开关。
 
 ## 项目结构
 
@@ -103,6 +116,8 @@
 - `backend/app/core/security.py`：JWT 与密码安全
 - `backend/app/core/settings.py`：环境配置解析
 - `backend/app/integrations/tushare_gateway.py`：Tushare 数据网关
+- `backend/app/services/watchlist_worker_service.py`：关注列表 Worker 去重、归档与日任务编排
+- `backend/scripts/run_watchlist_worker.py`：关注列表定时 Worker 启动脚本
 
 ## 快速启动
 
@@ -153,6 +168,10 @@ uv run fastapi dev main.py
 - `LLM_API_KEY`（大模型访问密钥，敏感信息，仅放本地 `.env`）
 - `LLM_MODEL`（默认模型，当前为 `gpt-5.1-codex-mini`）
 - `LLM_REASONING_EFFORT`（默认推理强度，当前为 `high`）
+- `LLM_STREAM_ENABLED`（是否启用流式输出，默认 `true`）
+- `LLM_WEB_SEARCH_ENABLED`（是否允许联网搜索增强，默认 `false`）
+- `ANALYSIS_ACTIVE_SESSION_TTL_SECONDS`（活跃分析会话去重 TTL，默认 `300`）
+- `ANALYSIS_REPORT_FRESHNESS_MINUTES`（分析报告新鲜度窗口，默认 `120`）
 - `STOCK_SYNC_TRADE_DAYS`（增量同步交易日窗口，默认 `120`）
 - `STOCK_DAILY_CACHE_TTL_SECONDS`（股票日线缓存秒数，默认 `600`）
 - `STOCK_TRADE_CAL_CACHE_TTL_SECONDS`（交易日历缓存秒数，默认 `86400`）
@@ -192,6 +211,19 @@ uv run python scripts/sync_stocks.py
 - 该命令会同步上市股票主数据与最近 N 个交易日（默认 `120`）行情快照。
 - 股票基础信息按 `L/D/P/G` 全状态同步并落库，行情仍按最近 N 个交易日增量拉取。
 - `N` 可通过 `STOCK_SYNC_TRADE_DAYS` 配置调整。
+
+### 启动关注列表 Worker
+
+```bash
+cd backend
+uv run python scripts/run_watchlist_worker.py
+```
+
+说明：
+
+- Worker 默认轮询当前时间，每小时 `05` 分执行关注股票资讯/快照归档。
+- Worker 默认在 `Asia/Hong_Kong` 时区的交易日 `18:10` 执行关注股票日报分析。
+- 同一股票在同一轮任务中只会执行一次，避免多人关注导致重复调用 AI。
 
 ## Auth API 列表
 
@@ -235,6 +267,21 @@ uv run python scripts/sync_stocks.py
 - `GET /api/news/hot`（支持 `limit/topic`；默认 1 小时窗口内优先走缓存/数据库）
 - `GET /api/news/impact-map`（支持 `topic/candidate_limit`）
 - `GET /api/news/events`（支持 `scope/ts_code/topic/published_from/published_to/page/page_size`；直接查询持久化新闻事件）
+
+## Analysis API 列表
+
+- `GET /api/analysis/stocks/{ts_code}/summary`
+- `POST /api/analysis/stocks/{ts_code}/sessions`
+- `GET /api/analysis/sessions/{session_id}/events`
+- `GET /api/analysis/stocks/{ts_code}/reports`
+
+## Watchlist API 列表
+
+- `GET /api/watchlist`（需登录）
+- `POST /api/watchlist/items`（需登录）
+- `PATCH /api/watchlist/items/{ts_code}`（需登录）
+- `DELETE /api/watchlist/items/{ts_code}`（需登录）
+- `GET /api/watchlist/feed`（需登录）
 
 认证安全语义（重要）：
 

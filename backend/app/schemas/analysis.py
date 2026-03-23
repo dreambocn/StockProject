@@ -42,6 +42,7 @@ class AnalysisEventLinkResponse(BaseModel):
 class AnalysisReportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: str | None = None
     status: Literal["ready", "partial", "pending"]
     summary: str
     risk_points: list[str]
@@ -50,6 +51,38 @@ class AnalysisReportResponse(BaseModel):
     topic: str | None
     published_from: datetime | None
     published_to: datetime | None
+    trigger_source: str = "manual"
+    used_web_search: bool = False
+    web_search_status: Literal["used", "disabled", "unsupported"] = "disabled"
+    session_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    content_format: Literal["markdown"] = "markdown"
+    web_sources: list[dict[str, object]] = []
+
+
+class AnalysisReportArchiveItemResponse(AnalysisReportResponse):
+    pass
+
+
+class AnalysisReportArchiveListResponse(BaseModel):
+    ts_code: str
+    items: list[AnalysisReportArchiveItemResponse]
+
+
+class AnalysisSessionCreateRequest(BaseModel):
+    topic: str | None = None
+    force_refresh: bool = False
+    use_web_search: bool = False
+    trigger_source: Literal["manual", "watchlist_daily"] = "manual"
+
+
+class AnalysisSessionCreateResponse(BaseModel):
+    session_id: str | None
+    report_id: str | None = None
+    status: str
+    reused: bool = False
+    cached: bool = False
 
 
 class StockAnalysisSummaryResponse(BaseModel):

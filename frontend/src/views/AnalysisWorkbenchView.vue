@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import { analysisApi, type StockAnalysisSummaryResponse } from '../api/analysis'
+import MarkdownContent from '../components/MarkdownContent.vue'
+import {
+  analysisApi,
+  type AnalysisReportResponse,
+  type StockAnalysisSummaryResponse,
+} from '../api/analysis'
+import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
+import { useAuthStore } from '../stores/auth'
 
 type EventFilterKey = 'all' | 'high-related' | 'policy' | 'announcement' | 'news' | 'pending'
 type SourceKind = 'hot_news' | 'stock_detail' | 'direct'
@@ -11,12 +18,27 @@ type SourceKind = 'hot_news' | 'stock_detail' | 'direct'
 const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
+const authStore = useAuthStore()
 
 const summary = ref<StockAnalysisSummaryResponse | null>(null)
+const reportArchives = ref<AnalysisReportResponse[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
 const selectedEventFilter = ref<EventFilterKey>('all')
 const showAllFactors = ref(false)
+const selectedReportId = ref<string | null>(null)
+const streamingMarkdown = ref('')
+const streaming = ref(false)
+const useWebSearch = ref(false)
+const watchlistLoading = ref(false)
+const watchlistItem = ref<WatchlistItemResponse | null>(null)
+
+let stopSessionStream: (() => void) | null = null
+
+const stopStreaming = () => {
+  stopSessionStream?.()
+  stopSessionStream = null
+}
 
 const readQueryString = (value: unknown) => {
   if (Array.isArray(value)) {
@@ -91,11 +113,11 @@ const getCorrelationPercent = (value: number | null | undefined) => {
   return Math.max(0, Math.min(100, Math.round(value * 100)))
 }
 
-const translateStatus = (value: StockAnalysisSummaryResponse['status'] | null | undefined) => {
+const translateStatus = (value: StockAnalysisSummaryResponse['status'] | string | null | undefined) => {
   if (!value) {
     return t('analysisWorkbench.pendingStatus')
   }
-  return t(`analysisWorkbench.statusText.${value}`)
+  return t(`analysisWorkbench.statusText.${value}`, value)
 }
 
 const translateSentiment = (value: string | null | undefined) => {
@@ -110,6 +132,13 @@ const translateConfidence = (value: string | null | undefined) => {
     return t('analysisWorkbench.dataMissing')
   }
   return t(`analysisWorkbench.confidenceText.${value}`, value)
+}
+
+const translateTriggerSource = (value: string | null | undefined) => {
+  if (!value) {
+    return t('analysisWorkbench.triggerSourceText.manual')
+  }
+  return t(`analysisWorkbench.triggerSourceText.${value}`, value)
 }
 
 const confidenceRank = (value: string | null | undefined) => {
@@ -148,14 +177,24 @@ const displayStatus = computed(() => translateStatus(summary.value?.status))
 const generatedAtLabel = computed(() =>
   formatDateTime(summary.value?.report?.generated_at ?? summary.value?.generated_at),
 )
-const reportAvailable = computed(() => Boolean(summary.value?.report))
-const withoutReport = computed(() => Boolean(summary.value && !summary.value.report))
+const selectedReport = computed(() => {
+  if (selectedReportId.value) {
+    const archived = reportArchives.value.find((item) => item.id === selectedReportId.value)
+    if (archived) {
+      return archived
+    }
+  }
+  return summary.value?.report ?? reportArchives.value[0] ?? null
+})
+const activeSummaryMarkdown = computed(() => streamingMarkdown.value || selectedReport.value?.summary || '')
+const reportAvailable = computed(() => Boolean(activeSummaryMarkdown.value))
+const withoutReport = computed(() => Boolean(summary.value && !summary.value.report && !streamingMarkdown.value))
 const needsFallbackHint = computed(
-  () => Boolean(summary.value?.report) && summary.value?.status === 'partial',
+  () => Boolean(selectedReport.value) && (selectedReport.value?.status ?? summary.value?.status) === 'partial',
 )
 
 const sortedFactors = computed(() => {
-  const factors = summary.value?.report?.factor_breakdown ?? []
+  const factors = selectedReport.value?.factor_breakdown ?? []
   return [...factors].sort((left, right) => right.weight - left.weight)
 })
 
@@ -264,6 +303,13 @@ const sourceActionLabel = computed(() => {
   return t('analysisWorkbench.backToHome')
 })
 
+const watchlistButtonLabel = computed(() => {
+  if (!authStore.accessToken) {
+    return t('analysisWorkbench.watchlistLogin')
+  }
+  return watchlistItem.value ? t('analysisWorkbench.watchlistRemove') : t('analysisWorkbench.watchlistAdd')
+})
+
 const loadSummary = async () => {
   if (!tsCode.value) {
     summary.value = null
@@ -280,6 +326,9 @@ const loadSummary = async () => {
   try {
     const payload = await analysisApi.getStockAnalysisSummary(tsCode.value)
     summary.value = payload
+    if (!selectedReportId.value && payload.report?.id) {
+      selectedReportId.value = payload.report.id
+    }
     selectedEventFilter.value = 'all'
     showAllFactors.value = false
   } catch {
@@ -288,6 +337,39 @@ const loadSummary = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const loadReports = async () => {
+  if (!tsCode.value) {
+    reportArchives.value = []
+    return
+  }
+  try {
+    const payload = await analysisApi.getStockAnalysisReports(tsCode.value)
+    reportArchives.value = payload.items
+    if (!selectedReportId.value && payload.items[0]?.id) {
+      selectedReportId.value = payload.items[0].id
+    }
+  } catch {
+    reportArchives.value = []
+  }
+}
+
+const loadWatchlistState = async () => {
+  if (!authStore.accessToken || !tsCode.value) {
+    watchlistItem.value = null
+    return
+  }
+  try {
+    const payload = await watchlistApi.getWatchlist(authStore.accessToken)
+    watchlistItem.value = payload.items.find((item) => item.ts_code === tsCode.value) ?? null
+  } catch {
+    watchlistItem.value = null
+  }
+}
+
+const loadWorkbench = async () => {
+  await Promise.all([loadSummary(), loadReports(), loadWatchlistState()])
 }
 
 const goToHotNews = async () => {
@@ -326,14 +408,102 @@ const selectFilter = (filterKey: EventFilterKey) => {
   selectedEventFilter.value = filterKey
 }
 
+const selectReport = (reportId: string | null | undefined) => {
+  if (!reportId) {
+    return
+  }
+  selectedReportId.value = reportId
+  streamingMarkdown.value = ''
+}
+
+const toggleWatchlist = async () => {
+  if (!tsCode.value) {
+    return
+  }
+  if (!authStore.accessToken) {
+    await router.push({
+      path: '/login',
+      query: { redirect: route.fullPath },
+    })
+    return
+  }
+
+  watchlistLoading.value = true
+  try {
+    if (watchlistItem.value) {
+      await watchlistApi.deleteWatchlistItem(authStore.accessToken, tsCode.value)
+      watchlistItem.value = null
+    } else {
+      watchlistItem.value = await watchlistApi.createWatchlistItem(authStore.accessToken, {
+        ts_code: tsCode.value,
+      })
+    }
+  } finally {
+    watchlistLoading.value = false
+  }
+}
+
+const refreshAnalysis = async () => {
+  if (!tsCode.value) {
+    return
+  }
+
+  stopStreaming()
+  streaming.value = true
+  streamingMarkdown.value = ''
+
+  try {
+    const session = await analysisApi.createAnalysisSession(tsCode.value, {
+      topic: topicContext.value || null,
+      force_refresh: true,
+      use_web_search: useWebSearch.value,
+      trigger_source: 'manual',
+    })
+    if (session.cached || !session.session_id) {
+      streaming.value = false
+      await loadWorkbench()
+      return
+    }
+
+    stopSessionStream = analysisApi.openAnalysisSessionEvents(
+      session.session_id,
+      {
+        onDelta: (payload) => {
+          streamingMarkdown.value = String(payload.content ?? '')
+        },
+        onCompleted: async () => {
+          streaming.value = false
+          stopStreaming()
+          await loadWorkbench()
+        },
+        onError: (payload) => {
+          streaming.value = false
+          errorMessage.value = String(payload.detail ?? t('analysisWorkbench.error'))
+          stopStreaming()
+        },
+      },
+      { reused: session.reused },
+    )
+  } catch {
+    streaming.value = false
+    errorMessage.value = t('analysisWorkbench.error')
+  }
+}
+
 onMounted(() => {
-  void loadSummary()
+  void loadWorkbench()
+})
+
+onBeforeUnmount(() => {
+  stopStreaming()
 })
 
 watch(
   () => tsCode.value,
   () => {
-    void loadSummary()
+    selectedReportId.value = null
+    streamingMarkdown.value = ''
+    void loadWorkbench()
   },
 )
 </script>
@@ -359,7 +529,7 @@ watch(
       <p class="analysis-error__title">{{ t('analysisWorkbench.errorTitle') }}</p>
       <p class="analysis-error__desc">{{ errorMessage }}</p>
       <div class="analysis-error__actions">
-        <el-button type="primary" :loading="loading" @click="loadSummary">
+        <el-button type="primary" :loading="loading || streaming" @click="refreshAnalysis">
           {{ t('analysisWorkbench.refreshAction') }}
         </el-button>
         <el-button plain @click="goToSource">
@@ -412,11 +582,18 @@ watch(
             </div>
 
             <div class="analysis-hero__actions">
-              <el-button type="primary" :loading="loading" @click="loadSummary">
+              <label class="analysis-switch">
+                <span>{{ t('analysisWorkbench.webSearchToggle') }}</span>
+                <el-switch v-model="useWebSearch" />
+              </label>
+              <el-button type="primary" :loading="loading || streaming" @click="refreshAnalysis">
                 {{ t('analysisWorkbench.refreshAction') }}
               </el-button>
               <el-button plain :disabled="!hasTsCode" @click="goToStockDetail">
                 {{ t('analysisWorkbench.viewStockDetailAction') }}
+              </el-button>
+              <el-button plain :loading="watchlistLoading" @click="toggleWatchlist">
+                {{ watchlistButtonLabel }}
               </el-button>
               <el-button text @click="goToSource">
                 {{ sourceActionLabel }}
@@ -450,10 +627,13 @@ watch(
               </div>
 
               <template v-if="reportAvailable">
+                <p v-if="streaming" class="analysis-summary__hint">
+                  {{ t('analysisWorkbench.streamHint') }}
+                </p>
                 <p v-if="needsFallbackHint" class="analysis-summary__hint">
                   {{ t('analysisWorkbench.partialHint') }}
                 </p>
-                <p class="analysis-summary__body">{{ summary?.report?.summary }}</p>
+                <MarkdownContent :source="activeSummaryMarkdown" />
               </template>
 
               <template v-else-if="withoutReport">
@@ -464,6 +644,30 @@ watch(
               <template v-else>
                 <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
               </template>
+            </el-card>
+
+            <el-card class="analysis-panel">
+              <div class="analysis-panel__header">
+                <div>
+                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.historyTitle') }}</p>
+                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.historyTitle') }}</h2>
+                </div>
+              </div>
+
+              <div v-if="reportArchives.length > 0" class="analysis-history-list">
+                <button
+                  v-for="reportItem in reportArchives"
+                  :key="reportItem.id ?? reportItem.generated_at"
+                  type="button"
+                  class="analysis-history-item"
+                  :class="{ active: selectedReportId === reportItem.id }"
+                  @click="selectReport(reportItem.id)"
+                >
+                  <strong>{{ formatDateTime(reportItem.generated_at) }}</strong>
+                  <span>{{ translateTriggerSource(reportItem.trigger_source) }}</span>
+                </button>
+              </div>
+              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.historyEmpty') }}</p>
             </el-card>
 
             <el-card class="analysis-panel">
@@ -526,8 +730,8 @@ watch(
                 </div>
               </div>
 
-              <ul v-if="summary?.report?.risk_points?.length" class="analysis-risk-list">
-                <li v-for="point in summary?.report?.risk_points" :key="point">
+              <ul v-if="selectedReport?.risk_points?.length" class="analysis-risk-list">
+                <li v-for="point in selectedReport?.risk_points" :key="point">
                   {{ point }}
                 </li>
               </ul>
@@ -814,6 +1018,13 @@ watch(
   justify-content: flex-end;
 }
 
+.analysis-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #d9e8f7;
+}
+
 .analysis-overview {
   margin-top: 1rem;
   display: grid;
@@ -895,17 +1106,31 @@ watch(
 }
 
 .analysis-factor-list,
-.analysis-event-list {
+.analysis-event-list,
+.analysis-history-list {
   display: grid;
   gap: 0.75rem;
 }
 
+.analysis-history-item,
 .analysis-factor-card,
 .analysis-event-card {
   border-radius: 14px;
   border: 1px solid rgba(123, 197, 255, 0.08);
   background: rgba(8, 14, 25, 0.64);
   padding: 0.82rem 0.88rem;
+}
+
+.analysis-history-item {
+  display: grid;
+  gap: 0.24rem;
+  text-align: left;
+  color: #f5fbff;
+  cursor: pointer;
+}
+
+.analysis-history-item.active {
+  border-color: rgba(123, 197, 255, 0.32);
 }
 
 .analysis-factor-card__header,
