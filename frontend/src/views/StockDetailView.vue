@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { ApiError } from '../api/http'
+import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
 import {
   stocksApi,
   type StockAdjFactor,
@@ -11,6 +12,7 @@ import {
   type StockDetail,
   type StockRelatedNewsItem,
 } from '../api/stocks'
+import { useAuthStore } from '../stores/auth'
 
 type KlinePeriod = 'daily' | 'weekly' | 'monthly'
 type AdjustMode = 'none' | 'qfq' | 'hfq'
@@ -33,15 +35,18 @@ type KlineRow = {
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+const authStore = useAuthStore()
 
 const loading = ref(false)
 const relatedNewsLoading = ref(false)
+const watchlistLoading = ref(false)
 const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
 const relatedNews = ref<StockRelatedNewsItem[]>([])
 const showAllNews = ref(false)
 const adjFactors = ref<StockAdjFactor[]>([])
+const watchlistItem = ref<WatchlistItemResponse | null>(null)
 const selectedPeriod = ref<KlinePeriod>('daily')
 const selectedAdjustMode = ref<AdjustMode>('none')
 const hoveredIndex = ref<number | null>(null)
@@ -58,6 +63,14 @@ const rsiPanelTop = volumePanelTop + volumePanelHeight + panelGap
 const rsiPanelHeight = 80
 
 const tsCode = computed(() => String(route.params.tsCode ?? '').trim().toUpperCase())
+const watchlistButtonLabel = computed(() => {
+  if (!authStore.accessToken) {
+    return t('analysisWorkbench.watchlistLogin')
+  }
+  return watchlistItem.value
+    ? t('analysisWorkbench.watchlistRemove')
+    : t('analysisWorkbench.watchlistAdd')
+})
 
 const formatNumber = (value: number | null, digits = 2) => {
   if (value === null) {
@@ -544,6 +557,23 @@ const loadRelatedNews = async () => {
   }
 }
 
+const loadWatchlistState = async () => {
+  if (!authStore.accessToken || !tsCode.value) {
+    watchlistItem.value = null
+    return
+  }
+
+  try {
+    // 关键流程：详情页只读取当前登录用户的关注清单，不在此处触发任何自动分析副作用。
+    const payload = await watchlistApi.getWatchlist(authStore.accessToken)
+    watchlistItem.value =
+      payload.items.find((item) => item.ts_code === tsCode.value) ?? null
+  } catch {
+    // 降级分支：关注状态读取失败时保持页面主功能可用，只回退到未关注展示。
+    watchlistItem.value = null
+  }
+}
+
 const loadCoreData = async () => {
   if (!tsCode.value) {
     // 关键边界：缺少 tsCode 时不发请求，直接进入错误提示分支，避免无效接口调用。
@@ -585,8 +615,9 @@ watch(
 )
 
 const loadData = async () => {
+  // 关键流程：先稳定主看板数据，再并发补资讯与关注状态，避免额外请求打乱主链路时序。
   await loadCoreData()
-  await loadRelatedNews()
+  await Promise.all([loadRelatedNews(), loadWatchlistState()])
 }
 
 const goBack = async () => {
@@ -605,6 +636,37 @@ const goToAnalysis = async () => {
       source: 'stock_detail',
     },
   })
+}
+
+const toggleWatchlist = async () => {
+  if (!tsCode.value) {
+    return
+  }
+
+  if (!authStore.accessToken) {
+    await router.push({
+      path: '/login',
+      query: { redirect: route.fullPath },
+    })
+    return
+  }
+
+  watchlistLoading.value = true
+  try {
+    if (watchlistItem.value) {
+      await watchlistApi.deleteWatchlistItem(authStore.accessToken, tsCode.value)
+      watchlistItem.value = null
+      return
+    }
+
+    // 关键状态流转：详情页仅新增当前股票关注项，其他自动化开关沿用后端默认值。
+    watchlistItem.value = await watchlistApi.createWatchlistItem(
+      authStore.accessToken,
+      { ts_code: tsCode.value },
+    )
+  } finally {
+    watchlistLoading.value = false
+  }
 }
 
 onMounted(async () => {
@@ -631,6 +693,14 @@ onMounted(async () => {
             @click="goToAnalysis"
           >
             {{ t('analysisWorkbench.enterButton') }}
+          </el-button>
+          <el-button
+            plain
+            :loading="watchlistLoading"
+            data-testid="stock-watchlist-entry"
+            @click="toggleWatchlist"
+          >
+            {{ watchlistButtonLabel }}
           </el-button>
           <el-button text @click="goBack">{{ t('stockDetail.back') }}</el-button>
         </div>

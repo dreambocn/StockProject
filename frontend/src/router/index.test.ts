@@ -17,6 +17,7 @@ describe('router lazy routes', () => {
       'stock-detail',
       'hot-news',
       'analysis-workbench',
+      'watchlist',
     ]
 
     for (const routeName of routeNames) {
@@ -31,4 +32,10 @@ it('registers the analysis workbench route', () => {
   const route = router.getRoutes().find((item) => item.name === 'analysis-workbench')
   expect(route).toBeDefined()
   expect(route?.path).toBe('/analysis')
+})
+
+it('registers the watchlist route', () => {
+  const route = router.getRoutes().find((item) => item.name === 'watchlist')
+  expect(route).toBeDefined()
+  expect(route?.path).toBe('/watchlist')
 })
