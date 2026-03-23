@@ -148,6 +148,11 @@ uv run fastapi dev main.py
 - `CORS_ALLOW_CREDENTIALS`（默认 `true`；当为 `true` 时禁止在白名单中使用 `*`）
 - `CORS_ALLOW_ORIGIN_REGEX`（默认放行 `localhost/127.0.0.1` 任意端口，避免 Vite 端口漂移导致预检失败）
 - `TUSHARE_TOKEN`（Tushare Pro token，用于行情同步）
+- `LLM_BASE_URL`（大模型网关基地址，默认 `https://aixj.vip`）
+- `LLM_WIRE_API`（模型接口类型，当前使用 `responses`）
+- `LLM_API_KEY`（大模型访问密钥，敏感信息，仅放本地 `.env`）
+- `LLM_MODEL`（默认模型，当前为 `gpt-5.1-codex-mini`）
+- `LLM_REASONING_EFFORT`（默认推理强度，当前为 `high`）
 - `STOCK_SYNC_TRADE_DAYS`（增量同步交易日窗口，默认 `120`）
 - `STOCK_DAILY_CACHE_TTL_SECONDS`（股票日线缓存秒数，默认 `600`）
 - `STOCK_TRADE_CAL_CACHE_TTL_SECONDS`（交易日历缓存秒数，默认 `86400`）

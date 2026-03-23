@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     stock_adj_factor_cache_ttl_seconds: int = 3600
     stock_related_news_cache_ttl_seconds: int = 3600
     hot_news_cache_ttl_seconds: int = 3600
+    llm_base_url: str = "https://aixj.vip"
+    llm_wire_api: str = "responses"
+    llm_api_key: str = ""
+    llm_model: str = "gpt-5.1-codex-mini"
+    llm_reasoning_effort: str = "high"
     init_admin_username: str = ""
     init_admin_email: str = ""
     init_admin_password: str = ""

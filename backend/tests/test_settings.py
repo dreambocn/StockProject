@@ -117,3 +117,30 @@ def test_settings_parse_trusted_proxy_ips_normalization() -> None:
     )
 
     assert settings.trusted_proxy_ips_list == ["10.0.0.1", "10.0.0.2"]
+
+
+def test_settings_llm_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_base_url == "https://aixj.vip"
+    assert settings.llm_wire_api == "responses"
+    assert settings.llm_api_key == ""
+    assert settings.llm_model == "gpt-5.1-codex-mini"
+    assert settings.llm_reasoning_effort == "high"
+
+
+def test_settings_accept_custom_llm_values() -> None:
+    settings = Settings(
+        _env_file=None,
+        llm_base_url="https://example.com/llm",
+        llm_wire_api="responses",
+        llm_api_key="test-key",
+        llm_model="gpt-5.1-codex-mini",
+        llm_reasoning_effort="medium",
+    )
+
+    assert settings.llm_base_url == "https://example.com/llm"
+    assert settings.llm_wire_api == "responses"
+    assert settings.llm_api_key == "test-key"
+    assert settings.llm_model == "gpt-5.1-codex-mini"
+    assert settings.llm_reasoning_effort == "medium"
