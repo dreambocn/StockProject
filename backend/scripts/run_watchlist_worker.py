@@ -1,6 +1,13 @@
 import asyncio
+import sys
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+# 直接执行脚本时把 backend 根目录加入模块搜索路径，避免 `app.*` 导入失败。
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.logging import get_logger, setup_logging
 from app.db.init_db import ensure_database_schema
