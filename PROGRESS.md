@@ -179,6 +179,13 @@ Last update: 2026-03-23
   - Added source-aware return actions, refresh action, empty-state guidance, and event filter chips for faster drill-down
   - Hot news page now reads `topic` from route query and keeps candidate entry aligned with the analysis workflow
   - Added backend optimization notes document for follow-up P1/P2 analysis service refactors
+- Completed streamed analysis + watchlist automation foundation:
+  - Added session-based analysis generation with archive history, SSE event stream, latest-summary read model, and active-session de-duplication
+  - Added Markdown report rendering, streamed summary updates, and report-history playback on `/analysis`
+  - Added watchlist APIs, `/watchlist` page, stock-detail/analysis watch actions, and per-item automation toggles
+  - Added `analysis_generation_sessions`, `user_watchlist_items`, and `stock_watch_snapshots` persistence models
+  - Added watchlist worker orchestration service and standalone worker script for hourly news/snapshot sync plus daily analysis
+  - Added backend/frontend regression coverage for analysis sessions, watchlist routes, worker de-duplication, streamed UI, and watchlist interactions
 
 ## In Progress
 
