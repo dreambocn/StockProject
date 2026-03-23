@@ -3,6 +3,10 @@ import { buildQueryString } from './query'
 
 
 export type HotNewsItem = {
+  event_id: string | null
+  cluster_key: string | null
+  providers: string[]
+  source_coverage: string
   title: string
   summary: string | null
   published_at: string | null
@@ -11,6 +15,13 @@ export type HotNewsItem = {
   macro_topic: string
 }
 
+export type AnchorEvent = {
+  event_id: string | null
+  title: string
+  published_at: string | null
+  providers: string[]
+  source_coverage: string
+}
 
 export type MacroImpactProfile = {
   topic: string
@@ -18,11 +29,16 @@ export type MacroImpactProfile = {
   beneficiary_sectors: string[]
   pressure_sectors: string[]
   a_share_targets: string[]
+  anchor_event: AnchorEvent | null
   a_share_candidates: {
     ts_code: string
     symbol: string
     name: string
     industry: string | null
+    relevance_score: number
+    match_reasons: string[]
+    evidence_summary: string
+    source_hit_count: number
   }[]
 }
 

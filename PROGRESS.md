@@ -190,12 +190,27 @@ Last update: 2026-03-23
   - Root `start-dev.bat` now launches backend API, watchlist worker, and frontend dev server together
   - Local development can verify watchlist hourly sync and daily analysis without manually opening a third terminal
 
+- Completed Phase 5 multi-source hot-event enhancement:
+  - Added hot-news event metadata (`event_id/cluster_key/providers/source_coverage`) and optional Tushare major-news merge with graceful fallback
+  - Upgraded impact map with `anchor_event`, deterministic candidate relevance scoring, Chinese match reasons, and stable ranked output
+  - Extended analysis persistence and session keys with `anchor_event_id/anchor_event_title/structured_sources`
+  - `summary/reports/sessions` now support `topic + event_id`, with topic-level fallback hint when the anchor event is unavailable
+  - Hot-news candidates now route to stock detail with event context; stock detail preserves event context into analysis workbench
+  - Analysis workbench now requests event-scoped data, pins anchor events to top, and shows structured source evidence chips
+  - Added backend/frontend regression coverage for event metadata, anchor-event impact map, event-scoped analysis lookup, and routed UI context preservation
+- Completed Phase 5 follow-up for persistence and citations:
+  - Hot-news page now persists per-topic anchor-event selection in local storage, so refresh/re-entry keeps the user's last manual anchor choice
+  - LLM response handling now parses `url_citation` annotations into structured `web_sources`
+  - Streamed analysis generation now keeps web citations by reading the final Responses payload after stream completion
+  - Analysis workbench now renders web citations as a separate structured source list instead of mixing them into Markdown正文
+  - Added regression tests for anchor persistence, citation extraction, streamed citation retention, and citation rendering
+
 ## In Progress
 
 - None.
 
 ## Next Suggested Items
 
-- Phase 5 (planned): make hot-news impact panel dynamic candidates clickable and route to stock detail.
-- Phase 5 (planned): add server-side candidate relevance scoring and stable ranked output.
-- Phase 5 (planned): link hot-news impact candidates into event-volatility explanation flow.
+- Phase 5 follow-up: add per-topic manual anchor-event selector persistence across refreshes.
+- Phase 5 follow-up: enrich candidate evidence with hot-search / research-report source counts when third-party source quality is stable.
+- Phase 5 follow-up: parse and expose structured web-search citations in analysis reports.

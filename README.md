@@ -267,15 +267,19 @@ uv run python scripts/run_watchlist_worker.py
 ## News API 列表
 
 - `GET /api/news/hot`（支持 `limit/topic`；默认 1 小时窗口内优先走缓存/数据库）
-- `GET /api/news/impact-map`（支持 `topic/candidate_limit`）
+- `GET /api/news/hot` 现返回 `event_id/cluster_key/providers/source_coverage`
+- `GET /api/news/impact-map`（支持 `topic/candidate_limit`；返回 `anchor_event` 与候选股相关度信息）
 - `GET /api/news/events`（支持 `scope/ts_code/topic/published_from/published_to/page/page_size`；直接查询持久化新闻事件）
 
 ## Analysis API 列表
 
-- `GET /api/analysis/stocks/{ts_code}/summary`
+- `GET /api/analysis/stocks/{ts_code}/summary`（支持 `topic/event_id`）
 - `POST /api/analysis/stocks/{ts_code}/sessions`
+- `POST /api/analysis/stocks/{ts_code}/sessions` 支持 `event_id/use_web_search`
 - `GET /api/analysis/sessions/{session_id}/events`
-- `GET /api/analysis/stocks/{ts_code}/reports`
+- `GET /api/analysis/stocks/{ts_code}/reports`（支持 `topic/event_id`）
+- 分析报告中的 `web_sources` 现会解析并返回结构化引用（`title/url/source/published_at/snippet`）
+- 热点页会在本地持久化每个 topic 的锚点事件选择，刷新后继续沿用
 
 ## Watchlist API 列表
 

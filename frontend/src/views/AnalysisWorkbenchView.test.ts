@@ -266,6 +266,121 @@ describe('AnalysisWorkbenchView', () => {
     expect(router.currentRoute.value.query.topic).toBe('regulation_policy')
   })
 
+  it('passes event context to api and pins anchor event to top', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: {
+        ts_code: '600519.SH',
+        topic: 'commodity_supply',
+        event_id: 'evt-anchor',
+        event_title: '国际油价高位震荡',
+        source: 'hot_news',
+      },
+    })
+    await router.isReady()
+
+    const summary: StockAnalysisSummaryResponse = {
+      ts_code: '600519.SH',
+      instrument: {
+        ts_code: '600519.SH',
+        symbol: '600519',
+        name: '贵州茅台',
+        area: '',
+        industry: '白酒',
+        fullname: '',
+        enname: null,
+        cnspell: null,
+        market: '主板',
+        exchange: 'SSE',
+        curr_type: '',
+        list_status: 'L',
+        list_date: null,
+        delist_date: null,
+        is_hs: 'N',
+        act_name: null,
+        act_ent_type: null,
+      },
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: 'commodity_supply',
+      event_context_status: 'direct',
+      event_context_message: null,
+      published_from: null,
+      published_to: null,
+      event_count: 2,
+      events: [
+        {
+          event_id: 'evt-other',
+          scope: 'hot',
+          title: '其他事件',
+          published_at: '2026-03-23T09:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'commodity_supply',
+          event_type: 'news',
+          event_tags: ['新闻'],
+          sentiment_label: 'neutral',
+          sentiment_score: 0.1,
+          anchor_trade_date: null,
+          window_return_pct: 4.2,
+          window_volatility: 1.1,
+          abnormal_volume_ratio: 1.2,
+          correlation_score: 0.95,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-anchor',
+          scope: 'hot',
+          title: '国际油价高位震荡',
+          published_at: '2026-03-22T09:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'commodity_supply',
+          event_type: 'news',
+          event_tags: ['原油'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.8,
+          anchor_trade_date: null,
+          window_return_pct: 1.1,
+          window_volatility: 0.8,
+          abnormal_volume_ratio: 1.1,
+          correlation_score: 0.62,
+          confidence: 'medium',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        status: 'ready',
+        summary: '锚点事件带来结构化影响。',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        anchor_event_id: 'evt-anchor',
+        anchor_event_title: '国际油价高位震荡',
+        structured_sources: [{ provider: 'akshare', count: 1 }],
+      },
+    }
+
+    const summarySpy = vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(summary)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [summary.report!],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(summarySpy).toHaveBeenCalledWith('600519.SH', {
+      topic: 'commodity_supply',
+      eventId: 'evt-anchor',
+    })
+    expect(wrapper.text()).toContain('国际油价高位震荡')
+    const eventTitles = wrapper.findAll('[data-testid="analysis-event-title"]').map((item) => item.text())
+    expect(eventTitles[0]).toBe('国际油价高位震荡')
+  })
+
   it('renders hero actions as a split toolbar with grouped controls', async () => {
     setAppLocale('zh-CN')
     const router = createRouterWithQuery()
@@ -456,6 +571,87 @@ describe('AnalysisWorkbenchView', () => {
     expect(markdownBody.html()).toContain('<h1')
     expect(wrapper.text()).toContain('历史报告')
     expect(wrapper.text()).toContain('手动触发')
+  })
+
+  it('renders structured web citations separately from markdown body', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', event_id: 'evt-anchor', event_title: '国际油价高位震荡' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: 'commodity_supply',
+      event_context_status: 'direct',
+      event_context_message: null,
+      published_from: null,
+      published_to: null,
+      event_count: 1,
+      events: [
+        {
+          event_id: 'evt-anchor',
+          scope: 'hot',
+          title: '国际油价高位震荡',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'commodity_supply',
+          event_type: 'news',
+          event_tags: ['原油'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.7,
+          anchor_trade_date: null,
+          window_return_pct: 1.2,
+          window_volatility: 0.8,
+          abnormal_volume_ratio: 1.1,
+          correlation_score: 0.85,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        id: 'report-web',
+        status: 'ready',
+        summary: '## 核心判断\n\n原油事件带动风险偏好修复。',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: true,
+        web_search_status: 'used',
+        content_format: 'markdown',
+        structured_sources: [{ provider: 'akshare', count: 1 }],
+        web_sources: [
+          {
+            title: '国际油价收涨',
+            url: 'https://finance.example.com/oil',
+            source: 'Reuters',
+            published_at: '2026-03-23T08:05:00Z',
+            snippet: '市场继续关注供给端扰动。',
+          },
+        ],
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).toContain('国际油价收涨')
+    expect(wrapper.text()).toContain('Reuters')
+    expect(wrapper.text()).toContain('市场继续关注供给端扰动')
+    expect(wrapper.get('[data-testid="analysis-markdown"]').html()).toContain('核心判断')
+    const citationLink = wrapper.find('a[href="https://finance.example.com/oil"]')
+    expect(citationLink.exists()).toBe(true)
   })
 
   it('creates analysis session and applies streaming delta content', async () => {

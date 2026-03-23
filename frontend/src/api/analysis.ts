@@ -1,6 +1,7 @@
 import { requestJson } from './http'
 import { openEventSource } from './http'
 import type { StockDailySnapshot, StockInstrument } from './stocks'
+import { buildQueryString } from './query'
 
 export type FactorWeightItemResponse = {
   factor_key: string
@@ -38,6 +39,9 @@ export type AnalysisReportResponse = {
   risk_points: string[]
   factor_breakdown: FactorWeightItemResponse[]
   generated_at: string
+  anchor_event_id?: string | null
+  anchor_event_title?: string | null
+  structured_sources?: Array<{ provider?: string; count?: number }>
   trigger_source?: 'manual' | 'watchlist_daily'
   used_web_search?: boolean
   web_search_status?: 'used' | 'disabled' | 'unsupported'
@@ -45,7 +49,7 @@ export type AnalysisReportResponse = {
   started_at?: string | null
   completed_at?: string | null
   content_format?: 'markdown'
-  web_sources?: Array<{ title?: string; url?: string; source?: string; published_at?: string | null }>
+  web_sources?: Array<{ title?: string; url?: string; source?: string; published_at?: string | null; snippet?: string | null }>
 }
 
 export type StockAnalysisSummaryResponse = {
@@ -55,6 +59,8 @@ export type StockAnalysisSummaryResponse = {
   status: 'ready' | 'partial' | 'pending'
   generated_at: string | null
   topic: string | null
+  event_context_status?: 'direct' | 'topic_fallback' | 'none'
+  event_context_message?: string | null
   published_from: string | null
   published_to: string | null
   event_count: number
@@ -98,15 +104,31 @@ export type AnalysisSessionErrorEvent = {
 }
 
 export const analysisApi = {
-  async getStockAnalysisSummary(tsCode: string) {
+  async getStockAnalysisSummary(
+    tsCode: string,
+    options?: { topic?: string | null; eventId?: string | null },
+  ) {
+    const query = buildQueryString({
+      topic: options?.topic || undefined,
+      event_id: options?.eventId || undefined,
+    })
     return requestJson<StockAnalysisSummaryResponse>(
-      `/api/analysis/stocks/${encodeURIComponent(tsCode)}/summary`,
+      `/api/analysis/stocks/${encodeURIComponent(tsCode)}/summary${query}`,
     )
   },
 
-  async getStockAnalysisReports(tsCode: string, limit = 10) {
+  async getStockAnalysisReports(
+    tsCode: string,
+    limit = 10,
+    options?: { topic?: string | null; eventId?: string | null },
+  ) {
+    const query = buildQueryString({
+      limit,
+      topic: options?.topic || undefined,
+      event_id: options?.eventId || undefined,
+    })
     return requestJson<AnalysisReportArchiveListResponse>(
-      `/api/analysis/stocks/${encodeURIComponent(tsCode)}/reports?limit=${limit}`,
+      `/api/analysis/stocks/${encodeURIComponent(tsCode)}/reports${query}`,
     )
   },
 
@@ -114,6 +136,7 @@ export const analysisApi = {
     tsCode: string,
     payload: {
       topic?: string | null
+      event_id?: string | null
       force_refresh?: boolean
       use_web_search?: boolean
       trigger_source?: 'manual' | 'watchlist_daily'

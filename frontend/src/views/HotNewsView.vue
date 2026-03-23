@@ -9,12 +9,14 @@ import { ApiError } from '../api/http'
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const HOT_NEWS_ANCHOR_STORAGE_KEY = 'hot-news-anchor-event-selections'
 
 const loading = ref(false)
 const impactLoading = ref(false)
 const errorMessage = ref('')
 const items = ref<HotNewsItem[]>([])
 const impactProfiles = ref<MacroImpactProfile[]>([])
+const selectedAnchorEventIds = ref<Record<string, string>>({})
 const topicOptions = [
   'all',
   'geopolitical_conflict',
@@ -73,6 +75,61 @@ const loadImpactProfiles = async () => {
   }
 }
 
+const getTopicEvents = (topic: string) =>
+  items.value.filter((item) => item.macro_topic === topic)
+
+const readPersistedAnchorSelection = () => {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return {}
+  }
+  try {
+    const raw = window.localStorage.getItem(HOT_NEWS_ANCHOR_STORAGE_KEY)
+    if (!raw) {
+      return {}
+    }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return {}
+    }
+    return parsed as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+const persistAnchorSelection = (value: Record<string, string>) => {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return
+  }
+  try {
+    window.localStorage.setItem(HOT_NEWS_ANCHOR_STORAGE_KEY, JSON.stringify(value))
+  } catch {
+    // 降级分支：本地存储不可用时仅保留当前内存状态，不影响页面主链路。
+  }
+}
+
+const syncAnchorEventSelection = () => {
+  const persistedSelection = readPersistedAnchorSelection()
+  const nextSelection = { ...persistedSelection, ...selectedAnchorEventIds.value }
+  impactProfiles.value.forEach((profile) => {
+    const current = nextSelection[profile.topic]
+    if (current) {
+      return
+    }
+    const defaultEventId = profile.anchor_event?.event_id
+    if (defaultEventId) {
+      nextSelection[profile.topic] = defaultEventId
+      return
+    }
+    const firstTopicEvent = getTopicEvents(profile.topic)[0]
+    if (firstTopicEvent?.event_id) {
+      nextSelection[profile.topic] = firstTopicEvent.event_id
+    }
+  })
+  selectedAnchorEventIds.value = nextSelection
+  persistAnchorSelection(nextSelection)
+}
+
 const selectTopic = async (topic: string) => {
   if (selectedTopic.value === topic) {
     return
@@ -87,6 +144,7 @@ const selectTopic = async (topic: string) => {
 
 onMounted(async () => {
   await Promise.all([loadHotNews(), loadImpactProfiles()])
+  syncAnchorEventSelection()
 })
 
 watch(
@@ -98,15 +156,43 @@ watch(
     }
     selectedTopic.value = normalized
     await Promise.all([loadHotNews(), loadImpactProfiles()])
+    syncAnchorEventSelection()
   },
 )
 
-const goToAnalysis = async (tsCode: string, topic: string) => {
+const getAnchorEventForTopic = (profile: MacroImpactProfile) => {
+  const selectedEventId = selectedAnchorEventIds.value[profile.topic]
+  const matchedEvent = getTopicEvents(profile.topic).find((item) => item.event_id === selectedEventId)
+  if (matchedEvent) {
+    return matchedEvent
+  }
+  return (
+    getTopicEvents(profile.topic).find((item) => item.event_id === profile.anchor_event?.event_id)
+    ?? getTopicEvents(profile.topic)[0]
+    ?? null
+  )
+}
+
+const selectAnchorEvent = (topic: string, eventId: string | null) => {
+  if (!eventId) {
+    return
+  }
+  const nextSelection = {
+    ...selectedAnchorEventIds.value,
+    [topic]: eventId,
+  }
+  selectedAnchorEventIds.value = nextSelection
+  persistAnchorSelection(nextSelection)
+}
+
+const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
+  const anchorEvent = getAnchorEventForTopic(profile)
   await router.push({
-    path: '/analysis',
+    path: `/stocks/${encodeURIComponent(tsCode)}`,
     query: {
-      ts_code: tsCode,
-      topic,
+      topic: profile.topic,
+      event_id: anchorEvent?.event_id ?? undefined,
+      event_title: anchorEvent?.title ?? profile.anchor_event?.title ?? undefined,
       source: 'hot_news',
     },
   })
@@ -148,6 +234,23 @@ const goToAnalysis = async (tsCode: string, topic: string) => {
       <div v-else class="impact-list">
         <article v-for="profile in impactProfiles" :key="profile.topic" class="impact-item">
           <p class="impact-topic">{{ t(`hotNews.topics.${profile.topic}`) }}</p>
+          <div v-if="getAnchorEventForTopic(profile)" class="impact-anchor">
+            <strong>{{ t('hotNews.anchorEvent') }}:</strong>
+            <span class="impact-anchor__title">{{ getAnchorEventForTopic(profile)?.title }}</span>
+            <span class="analysis-token">{{ getAnchorEventForTopic(profile)?.source_coverage ?? profile.anchor_event?.source_coverage }}</span>
+          </div>
+          <div v-if="getTopicEvents(profile.topic).length > 1" class="impact-anchor-switcher">
+            <button
+              v-for="eventItem in getTopicEvents(profile.topic)"
+              :key="eventItem.event_id ?? eventItem.title"
+              type="button"
+              class="topic-filter-chip"
+              :class="{ active: selectedAnchorEventIds[profile.topic] === eventItem.event_id }"
+              @click="selectAnchorEvent(profile.topic, eventItem.event_id)"
+            >
+              {{ eventItem.title }}
+            </button>
+          </div>
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.assets') }}:</strong> {{ profile.affected_assets.join(' / ') }}</p>
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.beneficiarySectors') }}:</strong> {{ profile.beneficiary_sectors.join(' / ') }}</p>
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.pressureSectors') }}:</strong> {{ profile.pressure_sectors.join(' / ') }}</p>
@@ -160,14 +263,18 @@ const goToAnalysis = async (tsCode: string, topic: string) => {
                 :key="candidate.ts_code"
                 class="impact-candidate-item"
               >
-                <span>{{ `${candidate.name}(${candidate.ts_code})` }}</span>
+                <span class="impact-candidate-main">
+                  <strong>{{ `${candidate.name}(${candidate.ts_code})` }}</strong>
+                  <span class="analysis-token">{{ candidate.relevance_score }}</span>
+                  <span class="impact-candidate-reason">{{ candidate.evidence_summary }}</span>
+                </span>
                 <el-button
-                  text
+                  plain
                   size="small"
                   class="impact-candidate-action"
-                  @click="goToAnalysis(candidate.ts_code, profile.topic)"
+                  @click="goToStockDetail(candidate.ts_code, profile)"
                 >
-                  {{ t('hotNews.enterAnalysis') }}
+                  {{ t('hotNews.viewDetail') }}
                 </el-button>
               </span>
             </span>
@@ -261,6 +368,25 @@ h1 {
   color: var(--terminal-muted);
 }
 
+.impact-anchor {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+  color: var(--terminal-text);
+}
+
+.impact-anchor__title {
+  color: var(--terminal-text);
+}
+
+.impact-anchor-switcher {
+  margin-top: 0.4rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
 .impact-candidate-list {
   display: inline-flex;
   flex-direction: column;
@@ -272,10 +398,22 @@ h1 {
   align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.impact-candidate-main {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.impact-candidate-reason {
+  color: var(--terminal-muted);
+  font-size: 0.78rem;
 }
 
 .impact-candidate-action {
-  padding: 0;
   color: var(--terminal-primary);
 }
 

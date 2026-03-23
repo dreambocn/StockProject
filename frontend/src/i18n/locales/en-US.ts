@@ -30,6 +30,8 @@ export default {
     title: 'Hot News',
     refresh: 'Refresh',
     enterAnalysis: 'Analyze This Stock',
+    viewDetail: 'View Detail',
+    anchorEvent: 'Anchor Event',
     empty: 'No hot news yet',
     openLink: 'Open source',
     filterLabel: 'Topic Filter',
@@ -54,6 +56,7 @@ export default {
   stockDetail: {
     kicker: 'MARKET PROFILE',
     back: 'Back to dashboard',
+    backToHotTopic: 'Back to Hot Topic',
     latestClose: 'Latest Close',
     latestChange: 'Latest Change',
     industry: 'Industry',

@@ -614,6 +614,108 @@ describe('StockDetailView', () => {
     expect(router.currentRoute.value.query.source).toBe('stock_detail')
   })
 
+  it('renders hot-news context and preserves event query when entering analysis', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            adj_factor: 2.0,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/stocks/:tsCode', component: StockDetailView },
+        { path: '/analysis', component: { template: '<div>analysis</div>' } },
+      ],
+    })
+    await router.push({
+      path: '/stocks/600000.SH',
+      query: {
+        source: 'hot_news',
+        topic: 'commodity_supply',
+        event_id: 'evt-hot-1',
+        event_title: '国际油价高位震荡',
+      },
+    })
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('国际油价高位震荡')
+    expect(wrapper.text()).toContain('大宗供给')
+
+    const analysisButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('分析此股票'))
+    expect(analysisButton).toBeDefined()
+
+    await analysisButton!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/analysis')
+    expect(router.currentRoute.value.query.topic).toBe('commodity_supply')
+    expect(router.currentRoute.value.query.event_id).toBe('evt-hot-1')
+    expect(router.currentRoute.value.query.event_title).toBe('国际油价高位震荡')
+    expect(router.currentRoute.value.query.source).toBe('hot_news')
+  })
+
   it('toggles watchlist state for authenticated users', async () => {
     const fetchMock = vi
       .fn()

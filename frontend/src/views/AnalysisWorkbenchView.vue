@@ -165,6 +165,7 @@ const tsCode = computed(() => readQueryString(route.query.ts_code).toUpperCase()
 const source = computed(() => readQueryString(route.query.source))
 const topicContext = computed(() => readQueryString(route.query.topic))
 const eventId = computed(() => readQueryString(route.query.event_id))
+const eventTitle = computed(() => readQueryString(route.query.event_title))
 const hasTsCode = computed(() => Boolean(tsCode.value))
 
 const sourceKind = computed<SourceKind>(() => {
@@ -220,6 +221,12 @@ const hasMoreFactors = computed(() => sortedFactors.value.length > 3)
 const sortedEvents = computed(() => {
   const events = summary.value?.events ?? []
   return [...events].sort((left, right) => {
+    if (left.event_id === eventId.value && right.event_id !== eventId.value) {
+      return -1
+    }
+    if (right.event_id === eventId.value && left.event_id !== eventId.value) {
+      return 1
+    }
     const correlationDelta =
       getCorrelationPercent(right.correlation_score) - getCorrelationPercent(left.correlation_score)
     if (correlationDelta !== 0) {
@@ -299,7 +306,11 @@ const contextItems = computed(() =>
     topicContext.value
       ? `${t('analysisWorkbench.contextTopic')}: ${topicContext.value}`
       : null,
-    eventId.value ? `${t('analysisWorkbench.contextEvent')}: ${eventId.value}` : null,
+    eventTitle.value
+      ? `${t('analysisWorkbench.contextEvent')}: ${eventTitle.value}`
+      : eventId.value
+        ? `${t('analysisWorkbench.contextEvent')}: ${eventId.value}`
+        : null,
     summary.value?.instrument?.industry
       ? `${t('analysisWorkbench.contextIndustry')}: ${summary.value.instrument.industry}`
       : null,
@@ -337,7 +348,10 @@ const loadSummary = async () => {
   errorMessage.value = ''
 
   try {
-    const payload = await analysisApi.getStockAnalysisSummary(tsCode.value)
+    const payload = await analysisApi.getStockAnalysisSummary(tsCode.value, {
+      topic: topicContext.value || null,
+      eventId: eventId.value || null,
+    })
     summary.value = payload
     if (!selectedReportId.value && payload.report?.id) {
       selectedReportId.value = payload.report.id
@@ -358,7 +372,10 @@ const loadReports = async () => {
     return
   }
   try {
-    const payload = await analysisApi.getStockAnalysisReports(tsCode.value)
+    const payload = await analysisApi.getStockAnalysisReports(tsCode.value, 10, {
+      topic: topicContext.value || null,
+      eventId: eventId.value || null,
+    })
     reportArchives.value = payload.items
     if (!selectedReportId.value && payload.items[0]?.id) {
       selectedReportId.value = payload.items[0].id
@@ -483,6 +500,7 @@ const refreshAnalysis = async () => {
   try {
     const session = await analysisApi.createAnalysisSession(tsCode.value, {
       topic: topicContext.value || null,
+      event_id: eventId.value || null,
       force_refresh: true,
       use_web_search: useWebSearch.value,
       trigger_source: 'manual',
@@ -527,7 +545,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => tsCode.value,
+  () => `${tsCode.value}|${topicContext.value}|${eventId.value}`,
   () => {
     selectedReportId.value = null
     streamingMarkdown.value = ''
@@ -725,6 +743,38 @@ watch(
                 <p v-if="needsFallbackHint" class="analysis-summary__hint">
                   {{ t('analysisWorkbench.partialHint') }}
                 </p>
+                <p v-if="summary?.event_context_message" class="analysis-summary__hint">
+                  {{ summary.event_context_message }}
+                </p>
+                <div
+                  v-if="selectedReport?.structured_sources?.length"
+                  class="analysis-source-evidence"
+                >
+                  <span
+                    v-for="sourceItem in selectedReport.structured_sources"
+                    :key="`${sourceItem.provider}-${sourceItem.count}`"
+                    class="analysis-token"
+                  >
+                    {{ `${sourceItem.provider ?? 'source'} × ${sourceItem.count ?? 0}` }}
+                  </span>
+                </div>
+                <div
+                  v-if="selectedReport?.web_sources?.length"
+                  class="analysis-web-source-list"
+                >
+                  <a
+                    v-for="webSource in selectedReport.web_sources"
+                    :key="`${webSource.url ?? webSource.title}-${webSource.published_at ?? ''}`"
+                    class="analysis-web-source-item"
+                    :href="webSource.url"
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    <strong>{{ webSource.title ?? webSource.url }}</strong>
+                    <span v-if="webSource.source">{{ webSource.source }}</span>
+                    <span v-if="webSource.snippet">{{ webSource.snippet }}</span>
+                  </a>
+                </div>
                 <MarkdownContent :source="activeSummaryMarkdown" />
               </template>
 
@@ -861,6 +911,7 @@ watch(
                   v-for="event in filteredEvents"
                   :key="event.event_id"
                   class="analysis-event-card"
+                  :class="{ 'analysis-event-card--anchor': event.event_id === eventId }"
                 >
                   <div class="analysis-event-card__header">
                     <p data-testid="analysis-event-title" class="analysis-event-card__title">
@@ -1307,6 +1358,34 @@ watch(
   color: #ffd58a;
 }
 
+.analysis-source-evidence {
+  margin-bottom: 0.8rem;
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.analysis-web-source-list {
+  margin-bottom: 0.8rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.analysis-web-source-item {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 197, 255, 0.14);
+  background: rgba(8, 14, 25, 0.58);
+  color: #d9e8f7;
+  text-decoration: none;
+}
+
+.analysis-web-source-item strong {
+  color: #f5fbff;
+}
+
 .analysis-summary__body {
   margin: 0;
   color: #e7f0fb;
@@ -1334,6 +1413,11 @@ watch(
   border: 1px solid rgba(123, 197, 255, 0.08);
   background: rgba(8, 14, 25, 0.64);
   padding: 0.82rem 0.88rem;
+}
+
+.analysis-event-card--anchor {
+  border-color: rgba(123, 197, 255, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.08);
 }
 
 .analysis-history-item {

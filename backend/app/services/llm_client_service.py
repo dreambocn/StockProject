@@ -65,6 +65,18 @@ def _extract_output_text(response: object) -> str:
     raise RuntimeError("llm response missing output text")
 
 
+def _iter_output_text_contents(response: object) -> list[object]:
+    output_items = getattr(response, "output", None) or []
+    contents: list[object] = []
+    for item in output_items:
+        content_items = getattr(item, "content", None) or []
+        for content in content_items:
+            content_type = str(getattr(content, "type", "") or "")
+            if content_type == "output_text" or getattr(content, "annotations", None):
+                contents.append(content)
+    return contents
+
+
 @dataclass
 class LlmTextResult:
     text: str
@@ -116,10 +128,41 @@ def _is_web_search_unsupported(error: Exception) -> bool:
     return "web_search" in message or "tool" in message or "unsupported" in message
 
 
-def _extract_web_sources(_: object) -> list[dict[str, object]]:
-    # 当前兼容网关未稳定暴露标准 citation 结构时，先返回空列表；
-    # 后续若网关补齐 annotations，可在这里统一解析。
-    return []
+def _extract_web_sources(response: object) -> list[dict[str, object]]:
+    extracted_sources: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+    for content in _iter_output_text_contents(response):
+        annotations = getattr(content, "annotations", None) or []
+        content_text = str(getattr(content, "text", "") or "")
+        for annotation in annotations:
+            annotation_type = str(getattr(annotation, "type", "") or "")
+            if annotation_type != "url_citation":
+                continue
+            url = str(getattr(annotation, "url", "") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            snippet: str | None = None
+            start_index = getattr(annotation, "start_index", None)
+            end_index = getattr(annotation, "end_index", None)
+            if isinstance(start_index, int) and isinstance(end_index, int):
+                if 0 <= start_index < end_index <= len(content_text):
+                    snippet_text = content_text[start_index:end_index].strip()
+                    if snippet_text:
+                        snippet = snippet_text
+
+            extracted_sources.append(
+                {
+                    "title": getattr(annotation, "title", None),
+                    "url": url,
+                    "source": getattr(annotation, "source", None),
+                    "published_at": getattr(annotation, "published_at", None),
+                    "snippet": snippet,
+                }
+            )
+
+    return extracted_sources
 
 
 async def generate_llm_result(
@@ -213,6 +256,112 @@ async def generate_llm_text(
         use_web_search=use_web_search,
     )
     return result.text
+
+
+async def generate_streamed_llm_result(
+    prompt: str,
+    *,
+    client: Any | None = None,
+    settings: Settings | None = None,
+    system_instruction: str | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    max_output_tokens: int = 512,
+    use_web_search: bool = False,
+) -> LlmTextResult:
+    resolved_settings = settings or get_settings()
+    resolved_client = client or build_openai_client(resolved_settings)
+
+    if not resolved_settings.llm_stream_enabled:
+        return await generate_llm_result(
+            prompt,
+            client=resolved_client,
+            settings=resolved_settings,
+            system_instruction=system_instruction,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            use_web_search=use_web_search,
+        )
+
+    request_kwargs = _build_create_kwargs(
+        prompt=prompt,
+        system_instruction=system_instruction,
+        resolved_settings=resolved_settings,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        max_output_tokens=max_output_tokens,
+        use_web_search=use_web_search,
+    )
+    web_search_requested = bool(
+        use_web_search and resolved_settings.llm_web_search_enabled
+    )
+
+    queue: asyncio.Queue[tuple[str, object | None]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def _run_stream() -> None:
+        try:
+            with resolved_client.responses.stream(**request_kwargs) as stream:
+                for event in stream:
+                    event_type = str(getattr(event, "type", "") or "")
+                    if event_type == "response.output_text.delta":
+                        delta = str(getattr(event, "delta", "") or "")
+                        if delta:
+                            loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
+                final_response = stream.get_final_response()
+                loop.call_soon_threadsafe(queue.put_nowait, ("final", final_response))
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+
+    worker = asyncio.create_task(asyncio.to_thread(_run_stream))
+    chunks: list[str] = []
+    final_response: object | None = None
+    try:
+        while True:
+            kind, payload = await queue.get()
+            if kind == "delta":
+                chunks.append(str(payload or ""))
+                continue
+            if kind == "final":
+                final_response = payload
+                continue
+            if kind == "error":
+                error = payload if isinstance(payload, Exception) else RuntimeError("llm stream failed")
+                if not web_search_requested or not _is_web_search_unsupported(error):
+                    raise error
+                fallback_result = await generate_llm_result(
+                    prompt,
+                    client=resolved_client,
+                    settings=resolved_settings,
+                    system_instruction=system_instruction,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    max_output_tokens=max_output_tokens,
+                    use_web_search=False,
+                )
+                return LlmTextResult(
+                    text=fallback_result.text,
+                    used_web_search=False,
+                    web_search_status="unsupported",
+                    web_sources=[],
+                )
+            break
+    finally:
+        await worker
+
+    resolved_text = "".join(chunks).strip()
+    if not resolved_text and final_response is not None:
+        resolved_text = _extract_output_text(final_response)
+
+    return LlmTextResult(
+        text=resolved_text,
+        used_web_search=web_search_requested,
+        web_search_status="used" if web_search_requested else "disabled",
+        web_sources=_extract_web_sources(final_response) if final_response is not None else [],
+    )
 
 
 async def stream_llm_text(

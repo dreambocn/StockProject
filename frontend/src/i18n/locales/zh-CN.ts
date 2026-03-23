@@ -30,6 +30,8 @@ export default {
     title: '热点新闻',
     refresh: '刷新热点',
     enterAnalysis: '研判此股',
+    viewDetail: '查看详情',
+    anchorEvent: '联动事件',
     empty: '暂无热点新闻',
     openLink: '查看原文',
     filterLabel: '主题筛选',
@@ -54,6 +56,7 @@ export default {
   stockDetail: {
     kicker: 'MARKET PROFILE',
     back: '返回仪表盘',
+    backToHotTopic: '返回热点主题',
     latestClose: '最新收盘',
     latestChange: '最新涨跌幅',
     industry: '行业',

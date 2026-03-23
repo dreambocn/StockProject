@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.core.settings import Settings
 from app.services.llm_client_service import (
     build_openai_base_url,
+    generate_llm_result,
     generate_llm_text,
     stream_llm_text,
 )
@@ -31,6 +32,27 @@ class _FakeResponsesApi:
                 yield SimpleNamespace(type="response.output_text.delta", delta="Hello")
                 yield SimpleNamespace(type="response.output_text.delta", delta=" Markdown")
                 yield SimpleNamespace(type="response.completed")
+
+            def get_final_response(self_inner):
+                return SimpleNamespace(
+                    output=[
+                        SimpleNamespace(
+                            content=[
+                                SimpleNamespace(
+                                    type="output_text",
+                                    text="Hello Markdown",
+                                    annotations=[
+                                        SimpleNamespace(
+                                            type="url_citation",
+                                            title="国际油价收涨",
+                                            url="https://finance.example.com/oil",
+                                        )
+                                    ],
+                                )
+                            ]
+                        )
+                    ]
+                )
 
         return _StreamContext()
 
@@ -137,6 +159,69 @@ def test_generate_llm_text_supports_system_instruction() -> None:
         system_text = payload["input"][0]["content"][0]["text"]
         assert "不要输出过程说明" in system_text
         assert "不要描述工具调用" in system_text
+
+    asyncio.run(_run())
+
+
+def test_generate_llm_result_extracts_web_sources_from_annotations() -> None:
+    async def _run() -> None:
+        class _AnnotatedResponsesApi(_FakeResponsesApi):
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    output_text="OK",
+                    output=[
+                        SimpleNamespace(
+                            content=[
+                                SimpleNamespace(
+                                    type="output_text",
+                                    text="OK",
+                                    annotations=[
+                                        SimpleNamespace(
+                                            type="url_citation",
+                                            title="国际油价收涨",
+                                            url="https://finance.example.com/oil",
+                                        ),
+                                        SimpleNamespace(
+                                            type="url_citation",
+                                            title="国际油价收涨",
+                                            url="https://finance.example.com/oil",
+                                        ),
+                                    ],
+                                )
+                            ],
+                        )
+                    ],
+                )
+
+        fake_client = _FakeClient()
+        fake_client.responses = _AnnotatedResponsesApi()
+        settings = Settings(
+            _env_file=None,
+            llm_base_url="https://aixj.vip",
+            llm_wire_api="responses",
+            llm_api_key="test-key",
+            llm_model="gpt-5.1-codex-mini",
+            llm_reasoning_effort="high",
+            llm_web_search_enabled=True,
+        )
+
+        result = await generate_llm_result(
+            "请总结最新消息",
+            client=fake_client,
+            settings=settings,
+            use_web_search=True,
+        )
+
+        assert result.web_sources == [
+            {
+                "title": "国际油价收涨",
+                "url": "https://finance.example.com/oil",
+                "source": None,
+                "published_at": None,
+                "snippet": None,
+            }
+        ]
 
     asyncio.run(_run())
 

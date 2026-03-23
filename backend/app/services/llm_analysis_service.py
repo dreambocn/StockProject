@@ -8,7 +8,7 @@ from app.services.analysis_prompt_service import (
     build_analysis_system_instruction,
 )
 from app.services.factor_weight_service import FactorWeight
-from app.services.llm_client_service import generate_llm_result, stream_llm_text
+from app.services.llm_client_service import generate_llm_result, generate_streamed_llm_result
 
 
 @dataclass
@@ -141,18 +141,17 @@ async def generate_stock_analysis_report(
     web_sources: list[dict[str, object]] = []
     try:
         if on_delta is not None:
-            chunks: list[str] = []
-            async for delta in stream_llm_text(
+            llm_result = await generate_streamed_llm_result(
                 prompt,
                 client=client,
                 system_instruction=system_instruction,
                 max_output_tokens=512,
                 use_web_search=use_web_search,
-            ):
-                chunks.append(delta)
-            used_web_search = use_web_search
-            web_search_status = "used" if use_web_search else "disabled"
-            summary = _sanitize_analysis_summary("".join(chunks).strip())
+            )
+            used_web_search = llm_result.used_web_search
+            web_search_status = llm_result.web_search_status
+            web_sources = llm_result.web_sources
+            summary = _sanitize_analysis_summary(llm_result.text)
             if not summary:
                 raise RuntimeError("dirty llm summary")
             await on_delta(summary)

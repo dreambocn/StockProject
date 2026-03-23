@@ -63,6 +63,13 @@ const rsiPanelTop = volumePanelTop + volumePanelHeight + panelGap
 const rsiPanelHeight = 80
 
 const tsCode = computed(() => String(route.params.tsCode ?? '').trim().toUpperCase())
+const source = computed(() => String(route.query.source ?? '').trim())
+const topicContext = computed(() => String(route.query.topic ?? '').trim())
+const eventIdContext = computed(() => String(route.query.event_id ?? '').trim())
+const eventTitleContext = computed(() => String(route.query.event_title ?? '').trim())
+const showHotNewsContext = computed(() =>
+  source.value === 'hot_news' && Boolean(topicContext.value || eventTitleContext.value),
+)
 const watchlistButtonLabel = computed(() => {
   if (!authStore.accessToken) {
     return t('analysisWorkbench.watchlistLogin')
@@ -624,6 +631,13 @@ const goBack = async () => {
   await router.push('/')
 }
 
+const goBackToHotTopic = async () => {
+  await router.push({
+    path: '/news/hot',
+    query: topicContext.value ? { topic: topicContext.value } : {},
+  })
+}
+
 const goToAnalysis = async () => {
   if (!tsCode.value) {
     return
@@ -633,7 +647,10 @@ const goToAnalysis = async () => {
     path: '/analysis',
     query: {
       ts_code: tsCode.value,
-      source: 'stock_detail',
+      source: source.value === 'hot_news' ? 'hot_news' : 'stock_detail',
+      topic: topicContext.value || undefined,
+      event_id: eventIdContext.value || undefined,
+      event_title: eventTitleContext.value || undefined,
     },
   })
 }
@@ -684,6 +701,13 @@ onMounted(async () => {
           <p data-testid="stock-fullname" class="fullname-line">
             {{ detail?.instrument.fullname ?? '--' }}
           </p>
+          <div v-if="showHotNewsContext" class="hot-context-bar">
+            <span class="analysis-token">{{ t(`hotNews.topics.${topicContext || 'other'}`) }}</span>
+            <span class="hot-context-bar__title">{{ eventTitleContext }}</span>
+            <el-button text size="small" @click="goBackToHotTopic">
+              {{ t('stockDetail.backToHotTopic') }}
+            </el-button>
+          </div>
         </div>
         <div class="title-actions">
           <el-button
@@ -1019,6 +1043,18 @@ onMounted(async () => {
   gap: 0.45rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.hot-context-bar {
+  margin-top: 0.6rem;
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.hot-context-bar__title {
+  color: var(--terminal-text);
 }
 
 .title-actions__analysis {
