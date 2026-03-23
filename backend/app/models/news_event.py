@@ -27,6 +27,11 @@ class NewsEvent(Base):
     url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     publisher: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
+    external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    cluster_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    source_priority: Mapped[int] = mapped_column(nullable=False, default=0, index=True)
+    evidence_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="hot", index=True)
     macro_topic: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
     )

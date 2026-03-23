@@ -27,11 +27,12 @@ def build_analysis_key(
     *,
     ts_code: str,
     topic: str | None,
+    anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
 ) -> str:
     return (
-        f"{ts_code.strip().upper()}|{(topic or '').strip()}|"
+        f"{ts_code.strip().upper()}|{(topic or '').strip()}|{(anchor_event_id or '').strip()}|"
         f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}"
     )
 
@@ -60,6 +61,7 @@ async def load_recent_news_events(
     ts_code: str,
     *,
     topic: str | None,
+    anchor_event_id: str | None,
     published_from: datetime | None,
     published_to: datetime | None,
     limit: int,
@@ -86,7 +88,37 @@ async def load_recent_news_events(
     statement = statement.order_by(
         NewsEvent.published_at.desc(), NewsEvent.created_at.desc()
     ).limit(limit)
-    return (await session.execute(statement)).scalars().all()
+    rows = (await session.execute(statement)).scalars().all()
+
+    if not anchor_event_id:
+        return rows
+
+    anchor_row = await session.get(NewsEvent, anchor_event_id)
+    if anchor_row is None:
+        return rows
+
+    ordered_rows: list[NewsEvent] = [anchor_row]
+    seen_ids = {anchor_row.id}
+    if anchor_row.cluster_key:
+        sibling_statement = (
+            select(NewsEvent)
+            .where(NewsEvent.cluster_key == anchor_row.cluster_key)
+            .order_by(NewsEvent.source_priority.desc(), NewsEvent.published_at.desc())
+        )
+        sibling_rows = (await session.execute(sibling_statement)).scalars().all()
+        for sibling in sibling_rows:
+            if sibling.id in seen_ids:
+                continue
+            ordered_rows.append(sibling)
+            seen_ids.add(sibling.id)
+
+    for row in rows:
+        if row.id in seen_ids:
+            continue
+        ordered_rows.append(row)
+        seen_ids.add(row.id)
+
+    return ordered_rows[:limit]
 
 
 async def load_price_window_rows(
@@ -158,12 +190,15 @@ async def create_analysis_report(
     published_to: datetime | None,
     generated_at: datetime,
     trigger_source: str,
+    anchor_event_id: str | None,
+    anchor_event_title: str | None,
     used_web_search: bool,
     web_search_status: str,
     session_id: str | None,
     started_at: datetime | None,
     completed_at: datetime | None,
     content_format: str,
+    structured_sources: list[dict[str, object]] | None,
     web_sources: list[dict[str, object]] | None,
 ) -> AnalysisReport:
     report = AnalysisReport(
@@ -177,12 +212,15 @@ async def create_analysis_report(
         published_to=published_to,
         generated_at=generated_at,
         trigger_source=trigger_source,
+        anchor_event_id=anchor_event_id,
+        anchor_event_title=anchor_event_title,
         used_web_search=used_web_search,
         web_search_status=web_search_status,
         session_id=session_id,
         started_at=started_at,
         completed_at=completed_at,
         content_format=content_format,
+        structured_sources=structured_sources,
         web_sources=web_sources,
     )
     session.add(report)
@@ -190,7 +228,7 @@ async def create_analysis_report(
 
 
 async def load_analysis_events(
-    session: AsyncSession, ts_code: str, limit: int = 20
+    session: AsyncSession, ts_code: str, limit: int = 20, anchor_event_id: str | None = None
 ) -> list[dict[str, object | None]]:
     news_alias = aliased(NewsEvent)
     statement = (
@@ -225,6 +263,16 @@ async def load_analysis_events(
             }
         )
 
+    if anchor_event_id:
+        events.sort(
+            key=lambda item: (
+                0 if item["event_id"] == anchor_event_id else 1,
+                -(float(item["correlation_score"]) if item["correlation_score"] is not None else -1.0),
+                item["published_at"] or datetime.min,
+            ),
+            reverse=False,
+        )
+
     return events
 
 
@@ -233,10 +281,15 @@ async def load_latest_report(
     ts_code: str,
     *,
     topic: str | None = None,
+    anchor_event_id: str | None = None,
 ) -> AnalysisReport | None:
     statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code)
     if topic:
         statement = statement.where(AnalysisReport.topic == topic)
+    if anchor_event_id is None:
+        statement = statement.where(AnalysisReport.anchor_event_id.is_(None))
+    else:
+        statement = statement.where(AnalysisReport.anchor_event_id == anchor_event_id)
     statement = statement.order_by(AnalysisReport.generated_at.desc()).limit(1)
     return (await session.execute(statement)).scalar_one_or_none()
 
@@ -246,6 +299,7 @@ async def load_latest_fresh_report(
     *,
     ts_code: str,
     topic: str | None,
+    anchor_event_id: str | None,
     freshness_minutes: int,
 ) -> AnalysisReport | None:
     freshness_threshold = datetime.now(UTC) - timedelta(minutes=freshness_minutes)
@@ -258,6 +312,10 @@ async def load_latest_fresh_report(
         statement = statement.where(AnalysisReport.topic.is_(None))
     else:
         statement = statement.where(AnalysisReport.topic == topic)
+    if anchor_event_id is None:
+        statement = statement.where(AnalysisReport.anchor_event_id.is_(None))
+    else:
+        statement = statement.where(AnalysisReport.anchor_event_id == anchor_event_id)
     statement = statement.order_by(AnalysisReport.generated_at.desc()).limit(1)
     return (await session.execute(statement)).scalar_one_or_none()
 
@@ -266,14 +324,18 @@ async def list_analysis_reports(
     session: AsyncSession,
     *,
     ts_code: str,
+    topic: str | None = None,
+    anchor_event_id: str | None = None,
     limit: int,
 ) -> list[AnalysisReport]:
-    statement = (
-        select(AnalysisReport)
-        .where(AnalysisReport.ts_code == ts_code)
-        .order_by(AnalysisReport.generated_at.desc())
-        .limit(limit)
-    )
+    statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code)
+    if topic:
+        statement = statement.where(AnalysisReport.topic == topic)
+    if anchor_event_id is None:
+        statement = statement.where(AnalysisReport.anchor_event_id.is_(None))
+    else:
+        statement = statement.where(AnalysisReport.anchor_event_id == anchor_event_id)
+    statement = statement.order_by(AnalysisReport.generated_at.desc()).limit(limit)
     return (await session.execute(statement)).scalars().all()
 
 
@@ -283,6 +345,7 @@ async def create_analysis_session_record(
     analysis_key: str,
     ts_code: str,
     topic: str | None,
+    anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
 ) -> AnalysisGenerationSession:
@@ -290,6 +353,7 @@ async def create_analysis_session_record(
         analysis_key=analysis_key,
         ts_code=ts_code,
         topic=topic,
+        anchor_event_id=anchor_event_id,
         use_web_search=use_web_search,
         trigger_source=trigger_source,
         trigger_source_group=build_trigger_source_group(trigger_source),

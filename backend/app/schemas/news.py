@@ -4,6 +4,10 @@ from pydantic import BaseModel
 
 
 class HotNewsItemResponse(BaseModel):
+    event_id: str | None = None
+    cluster_key: str | None = None
+    providers: list[str] = []
+    source_coverage: str = "AK"
     title: str
     summary: str | None
     published_at: datetime | None
@@ -28,6 +32,18 @@ class MacroImpactCandidateResponse(BaseModel):
     symbol: str
     name: str
     industry: str | None
+    relevance_score: int = 0
+    match_reasons: list[str] = []
+    evidence_summary: str = ""
+    source_hit_count: int = 0
+
+
+class AnchorEventResponse(BaseModel):
+    event_id: str | None = None
+    title: str
+    published_at: datetime | None
+    providers: list[str] = []
+    source_coverage: str = "AK"
 
 
 class MacroImpactProfileResponse(BaseModel):
@@ -36,6 +52,7 @@ class MacroImpactProfileResponse(BaseModel):
     beneficiary_sectors: list[str]
     pressure_sectors: list[str]
     a_share_targets: list[str]
+    anchor_event: AnchorEventResponse | None = None
     a_share_candidates: list[MacroImpactCandidateResponse]
 
 

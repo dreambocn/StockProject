@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime
 
 from sqlalchemy import delete, func, select
@@ -9,10 +10,19 @@ from app.schemas.news import (
     NewsEventResponse,
     StockRelatedNewsItemResponse,
 )
+from app.services.news_mapper_service import (
+    build_cluster_key,
+    normalize_provider,
+    providers_to_source_coverage,
+)
 
 
-def _to_hot_news_response(row: NewsEvent) -> HotNewsItemResponse:
+def _to_hot_news_response(row: NewsEvent, providers: list[str]) -> HotNewsItemResponse:
     return HotNewsItemResponse(
+        event_id=row.id,
+        cluster_key=row.cluster_key or row.id,
+        providers=providers,
+        source_coverage=providers_to_source_coverage(providers),
         title=row.title,
         summary=row.summary,
         published_at=row.published_at,
@@ -35,6 +45,18 @@ def _to_stock_news_response(row: NewsEvent) -> StockRelatedNewsItemResponse:
     )
 
 
+def _derive_news_provider(source: str) -> str:
+    return normalize_provider(None, source)
+
+
+def _derive_source_priority(provider: str) -> int:
+    if provider == "tushare":
+        return 30
+    if provider == "akshare":
+        return 20
+    return 10
+
+
 async def replace_hot_news_rows(
     *,
     session: AsyncSession,
@@ -48,8 +70,13 @@ async def replace_hot_news_rows(
         .where(NewsEvent.cache_variant == cache_variant)
     )
     for row in rows:
+        provider = normalize_provider(
+            row.providers[0] if row.providers else None,
+            row.source,
+        )
         session.add(
             NewsEvent(
+                id=row.event_id or None,
                 scope="hot",
                 cache_variant=cache_variant,
                 ts_code=None,
@@ -60,6 +87,16 @@ async def replace_hot_news_rows(
                 url=row.url,
                 publisher=None,
                 source=row.source,
+                provider=provider,
+                external_id=None,
+                cluster_key=row.cluster_key
+                or build_cluster_key(
+                    title=row.title,
+                    published_at=row.published_at,
+                    macro_topic=row.macro_topic,
+                ),
+                source_priority=_derive_source_priority(provider),
+                evidence_kind="hot",
                 macro_topic=row.macro_topic,
                 fetched_at=fetched_at,
             )
@@ -77,14 +114,33 @@ async def load_hot_news_rows_from_db(
         select(NewsEvent)
         .where(NewsEvent.scope == "hot")
         .where(NewsEvent.cache_variant == cache_variant)
+        .order_by(
+            NewsEvent.source_priority.desc(),
+            NewsEvent.published_at.desc(),
+            NewsEvent.created_at.desc(),
+        )
     )
     if topic != "all":
         statement = statement.where(NewsEvent.macro_topic == topic)
-    statement = statement.order_by(
-        NewsEvent.published_at.desc(), NewsEvent.created_at.desc()
-    ).limit(limit)
+
     rows = (await session.execute(statement)).scalars().all()
-    return [_to_hot_news_response(row) for row in rows]
+    grouped_rows: dict[str, list[NewsEvent]] = defaultdict(list)
+    for row in rows:
+        grouped_rows[row.cluster_key or row.id].append(row)
+
+    aggregated: list[HotNewsItemResponse] = []
+    for key, grouped in grouped_rows.items():
+        representative = grouped[0]
+        providers = sorted(
+            {
+                normalize_provider(item.provider, item.source)
+                for item in grouped
+            }
+        )
+        aggregated.append(_to_hot_news_response(representative, providers))
+
+    aggregated.sort(key=lambda item: item.published_at or datetime.min, reverse=True)
+    return aggregated[:limit]
 
 
 async def load_latest_hot_news_fetch_at(
@@ -112,6 +168,7 @@ async def replace_policy_news_rows(
         .where(NewsEvent.cache_variant == "policy_source")
     )
     for row in rows:
+        provider = _derive_news_provider(row.source)
         session.add(
             NewsEvent(
                 scope="policy",
@@ -124,6 +181,15 @@ async def replace_policy_news_rows(
                 url=row.url,
                 publisher=row.publisher,
                 source=row.source,
+                provider=provider,
+                external_id=None,
+                cluster_key=build_cluster_key(
+                    title=row.title,
+                    published_at=row.published_at,
+                    macro_topic=row.macro_topic,
+                ),
+                source_priority=_derive_source_priority(provider),
+                evidence_kind="macro_event",
                 macro_topic=row.macro_topic,
                 fetched_at=fetched_at,
             )
@@ -161,6 +227,7 @@ async def load_policy_news_rows(
         for row in rows
     ]
 
+
 async def replace_stock_news_rows(
     *,
     session: AsyncSession,
@@ -177,6 +244,7 @@ async def replace_stock_news_rows(
         .where(NewsEvent.cache_variant == cache_variant)
     )
     for row in rows:
+        provider = _derive_news_provider(row.source)
         session.add(
             NewsEvent(
                 scope="stock",
@@ -189,6 +257,15 @@ async def replace_stock_news_rows(
                 url=row.url,
                 publisher=row.publisher,
                 source=row.source,
+                provider=provider,
+                external_id=None,
+                cluster_key=build_cluster_key(
+                    title=row.title,
+                    published_at=row.published_at,
+                    macro_topic=None,
+                ),
+                source_priority=_derive_source_priority(provider),
+                evidence_kind="announcement" if row.source == "cninfo_announcement" else "stock_news",
                 macro_topic=None,
                 fetched_at=fetched_at,
             )

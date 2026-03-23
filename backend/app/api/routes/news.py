@@ -8,6 +8,7 @@ from app.core.settings import get_settings
 from app.db.session import get_db_session
 from app.integrations.akshare_gateway import fetch_hot_news
 from app.integrations.policy_gateway import fetch_policy_events
+from app.integrations.tushare_gateway import TushareGateway
 from app.schemas.news import (
     HotNewsItemResponse,
     MacroImpactProfileResponse,
@@ -19,6 +20,7 @@ from app.services.news_mapper_service import (
     list_macro_impact_profiles,
     map_hot_news_rows,
     map_policy_news_rows,
+    map_tushare_major_news_rows,
 )
 from app.services.news_repository import (
     load_hot_news_rows_from_db,
@@ -101,15 +103,29 @@ async def get_hot_news(
         )
 
     async def fetch_remote_and_persist() -> list[HotNewsItemResponse]:
+        mapped: list[HotNewsItemResponse] = []
+
         try:
-            rows = await fetch_hot_news()
-        except Exception as exc:
+            ak_rows = await fetch_hot_news()
+            mapped.extend(map_hot_news_rows(ak_rows))
+        except Exception:
+            pass
+
+        settings = get_settings()
+        if settings.tushare_token.strip():
+            try:
+                gateway = TushareGateway(settings.tushare_token)
+                ts_rows = await gateway.fetch_major_news()
+                mapped.extend(map_tushare_major_news_rows(ts_rows))
+            except Exception:
+                pass
+
+        if not mapped:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="hot news upstream unavailable",
-            ) from exc
+            )
 
-        mapped = map_hot_news_rows(rows)
         fetched_at = datetime.now(UTC)
         # 关键流程：热点新闻按整批回源结果统一落库，后续不论页面展示还是 AI 分析，
         # 都可以直接从数据库按 topic/时间窗口检索，不必再次访问三方接口。
@@ -121,9 +137,12 @@ async def get_hot_news(
         )
         await session.commit()
 
-        if normalized_topic != "all":
-            mapped = [item for item in mapped if item.macro_topic == normalized_topic]
-        return mapped[:limit]
+        return await load_hot_news_rows_from_db(
+            session=session,
+            cache_variant=HOT_NEWS_CACHE_VARIANT,
+            topic=normalized_topic,
+            limit=limit,
+        )
 
     return await get_news_rows(
         cache_key=cache_key,

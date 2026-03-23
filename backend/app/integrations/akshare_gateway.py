@@ -54,3 +54,19 @@ async def fetch_stock_announcements(
         return _to_records(frame)
 
     return await asyncio.to_thread(_run)
+
+
+async def fetch_stock_hot_search() -> list[dict[str, object]]:
+    def _run() -> list[dict[str, object]]:
+        frame = ak.stock_hot_search_baidu()
+        return _to_records(frame)
+
+    return await asyncio.to_thread(_run)
+
+
+async def fetch_stock_research_reports() -> list[dict[str, object]]:
+    def _run() -> list[dict[str, object]]:
+        frame = ak.stock_research_report_em(symbol="")
+        return _to_records(frame)
+
+    return await asyncio.to_thread(_run)

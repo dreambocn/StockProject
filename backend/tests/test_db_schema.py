@@ -52,6 +52,11 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
         assert "sentiment_score" in news_columns
         assert "event_tags" in news_columns
         assert "analysis_status" in news_columns
+        assert "provider" in news_columns
+        assert "external_id" in news_columns
+        assert "cluster_key" in news_columns
+        assert "source_priority" in news_columns
+        assert "evidence_kind" in news_columns
         async with engine.begin() as connection:
             report_columns = await connection.run_sync(
                 lambda sync_conn: {
@@ -68,6 +73,18 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
         assert "completed_at" in report_columns
         assert "content_format" in report_columns
         assert "web_sources" in report_columns
+        assert "anchor_event_id" in report_columns
+        assert "anchor_event_title" in report_columns
+        assert "structured_sources" in report_columns
+        async with engine.begin() as connection:
+            session_columns = await connection.run_sync(
+                lambda sync_conn: {
+                    item["name"]
+                    for item in inspect(sync_conn).get_columns("analysis_generation_sessions")
+                }
+            )
+
+        assert "anchor_event_id" in session_columns
 
         await engine.dispose()
 

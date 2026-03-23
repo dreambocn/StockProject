@@ -70,6 +70,18 @@ def _resolve_event_type(*, scope: str, source: str, event_tags: list[str]) -> st
     return "news"
 
 
+def _build_structured_sources(events: list[dict[str, object | None]]) -> list[dict[str, object]]:
+    provider_counts: dict[str, int] = {}
+    for event in events:
+        source = str(event.get("source") or "").lower()
+        provider = "tushare" if "tushare" in source else "akshare"
+        provider_counts[provider] = provider_counts.get(provider, 0) + 1
+    return [
+        {"provider": provider, "count": count}
+        for provider, count in sorted(provider_counts.items(), key=lambda item: item[0])
+    ]
+
+
 def _serialize_report(
     report_obj: object | None,
 ) -> dict[str, object] | None:
@@ -88,12 +100,15 @@ def _serialize_report(
             "published_from": getattr(report_obj, "published_from", None),
             "published_to": getattr(report_obj, "published_to", None),
             "trigger_source": getattr(report_obj, "trigger_source", "manual"),
+            "anchor_event_id": getattr(report_obj, "anchor_event_id", None),
+            "anchor_event_title": getattr(report_obj, "anchor_event_title", None),
             "used_web_search": getattr(report_obj, "used_web_search", False),
             "web_search_status": getattr(report_obj, "web_search_status", "disabled"),
             "session_id": getattr(report_obj, "session_id", None),
             "started_at": getattr(report_obj, "started_at", None),
             "completed_at": getattr(report_obj, "completed_at", None),
             "content_format": getattr(report_obj, "content_format", "markdown"),
+            "structured_sources": getattr(report_obj, "structured_sources", None) or [],
             "web_sources": getattr(report_obj, "web_sources", None) or [],
         }
     )
@@ -111,6 +126,7 @@ async def get_stock_analysis_summary(
     ts_code: str,
     *,
     topic: str | None = None,
+    event_id: str | None = None,
     published_from: datetime | None = None,
     published_to: datetime | None = None,
     event_limit: int = 20,
@@ -122,12 +138,27 @@ async def get_stock_analysis_summary(
         session,
         normalized_ts_code,
         limit=event_limit,
+        anchor_event_id=event_id,
     )
     persisted_report = await load_latest_report(
         session,
         normalized_ts_code,
         topic=topic,
+        anchor_event_id=event_id,
     )
+    event_context_status: Literal["direct", "topic_fallback", "none"] = "none"
+    event_context_message: str | None = None
+    if event_id and persisted_report is None:
+        persisted_report = await load_latest_report(
+            session,
+            normalized_ts_code,
+            topic=topic,
+            anchor_event_id=None,
+        )
+        event_context_status = "topic_fallback"
+        event_context_message = "未找到指定锚点事件，已回退到主题级分析"
+    elif event_id:
+        event_context_status = "direct"
 
     instrument_obj = (
         StockInstrumentResponse.model_validate(instrument) if instrument else None
@@ -167,6 +198,8 @@ async def get_stock_analysis_summary(
         "status": status,
         "generated_at": generated_at,
         "topic": resolved_topic,
+        "event_context_status": event_context_status,
+        "event_context_message": event_context_message,
         "published_from": resolved_published_from,
         "published_to": resolved_published_to,
         "event_count": len(event_payloads),
@@ -178,12 +211,14 @@ async def get_stock_analysis_summary(
 
 
 async def list_stock_analysis_report_archives(
-    session: AsyncSession, ts_code: str, *, limit: int
+    session: AsyncSession, ts_code: str, *, topic: str | None = None, event_id: str | None = None, limit: int
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
     reports = await list_analysis_reports(
         session,
         ts_code=normalized_ts_code,
+        topic=topic,
+        anchor_event_id=event_id,
         limit=limit,
     )
     return {
@@ -197,6 +232,7 @@ async def start_analysis_session(
     ts_code: str,
     *,
     topic: str | None,
+    event_id: str | None,
     force_refresh: bool,
     use_web_search: bool,
     trigger_source: str,
@@ -211,6 +247,7 @@ async def start_analysis_session(
     analysis_key = build_analysis_key(
         ts_code=normalized_ts_code,
         topic=topic,
+        anchor_event_id=event_id,
         use_web_search=use_web_search,
         trigger_source=trigger_source,
     )
@@ -222,6 +259,7 @@ async def start_analysis_session(
             session,
             ts_code=normalized_ts_code,
             topic=topic,
+            anchor_event_id=event_id,
             freshness_minutes=settings.analysis_report_freshness_minutes,
         )
         if fresh_report is not None:
@@ -260,6 +298,7 @@ async def start_analysis_session(
             analysis_key=analysis_key,
             ts_code=normalized_ts_code,
             topic=topic,
+            anchor_event_id=event_id,
             use_web_search=use_web_search,
             trigger_source=trigger_source,
         )
@@ -311,6 +350,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 session,
                 session_row.ts_code,
                 topic=session_row.topic,
+                anchor_event_id=session_row.anchor_event_id,
                 published_from=None,
                 published_to=None,
                 limit=20,
@@ -455,12 +495,22 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 published_to=None,
                 generated_at=report_result.generated_at,
                 trigger_source=session_row.trigger_source,
+                anchor_event_id=session_row.anchor_event_id,
+                anchor_event_title=next(
+                    (
+                        str(item.get("title"))
+                        for item in event_payloads
+                        if item.get("event_id") == session_row.anchor_event_id
+                    ),
+                    None,
+                ),
                 used_web_search=report_result.used_web_search,
                 web_search_status=report_result.web_search_status,
                 session_id=session_id,
                 started_at=session_row.started_at,
                 completed_at=report_result.generated_at,
                 content_format="markdown",
+                structured_sources=_build_structured_sources(event_payloads),
                 web_sources=report_result.web_sources,
             )
             await session.flush()

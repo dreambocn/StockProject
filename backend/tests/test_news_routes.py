@@ -139,6 +139,7 @@ def news_client(tmp_path: Path) -> TestClient:
 
     fake_redis = FakeRedisClient()
     original_get_redis_client = news_routes.get_redis_client
+    original_fetch_major_news = news_routes.TushareGateway.fetch_major_news
 
     asyncio.run(_create_tables())
     asyncio.run(_seed_data())
@@ -150,11 +151,17 @@ def news_client(tmp_path: Path) -> TestClient:
     app.dependency_overrides[get_db_session] = _override_session
     news_routes.get_redis_client = lambda: fake_redis
 
+    async def _fake_fetch_major_news(self) -> list[dict[str, object]]:
+        return []
+
+    news_routes.TushareGateway.fetch_major_news = _fake_fetch_major_news
+
     with TestClient(app) as client:
         yield client
 
     app.dependency_overrides.pop(get_db_session, None)
     news_routes.get_redis_client = original_get_redis_client
+    news_routes.TushareGateway.fetch_major_news = original_fetch_major_news
     asyncio.run(engine.dispose())
 
 
@@ -173,7 +180,7 @@ def test_hot_news_route_calls_gateway_once_and_returns_remote_rows(
 
     assert response.status_code == 200
     assert called["count"] == 1
-    assert response.json() == []
+    assert len(response.json()) > 0
 
 
 def test_hot_news_response_contains_normalized_fields(
@@ -199,6 +206,38 @@ def test_hot_news_response_contains_normalized_fields(
     assert payload[0]["summary"] == "避险情绪升温"
     assert payload[0]["source"] == "eastmoney_global"
     assert payload[0]["macro_topic"] == "geopolitical_conflict"
+
+
+def test_hot_news_response_contains_event_cluster_and_provider_fields(
+    news_client: TestClient, monkeypatch
+) -> None:
+    async def fake_fetch_hot_news() -> list[dict[str, object]]:
+        return [
+            {
+                "标题": "中东局势升级",
+                "摘要": "避险情绪升温",
+                "发布时间": "2026-03-03 09:00:00",
+                "链接": "https://finance.example.com/a/2",
+            }
+        ]
+
+    monkeypatch.setattr("app.api.routes.news.fetch_hot_news", fake_fetch_hot_news)
+    async def fake_fetch_major_news(self) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(
+        "app.api.routes.news.TushareGateway.fetch_major_news",
+        fake_fetch_major_news,
+    )
+
+    response = news_client.get("/api/news/hot")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["event_id"]
+    assert payload[0]["cluster_key"]
+    assert payload[0]["providers"] == ["akshare"]
+    assert payload[0]["source_coverage"] == "AK"
 
 
 def test_hot_news_supports_macro_topic_filter(
@@ -311,6 +350,26 @@ def test_impact_map_returns_dynamic_a_share_candidates(
     assert len(candidates) > 0
     assert any(item["name"] == "中国海油" for item in candidates)
     assert any(item["name"] == "山东黄金" for item in candidates)
+
+
+def test_impact_map_returns_anchor_event_and_scored_candidates(
+    news_client: TestClient,
+) -> None:
+    response = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["anchor_event"]["event_id"]
+    assert payload[0]["anchor_event"]["title"] == "国际油价高位震荡"
+    assert payload[0]["anchor_event"]["source_coverage"] in {"AK", "TS", "AK+TS"}
+    first_candidate = payload[0]["a_share_candidates"][0]
+    assert first_candidate["relevance_score"] >= 35
+    assert first_candidate["source_hit_count"] >= 1
+    assert first_candidate["match_reasons"]
+    assert isinstance(first_candidate["evidence_summary"], str)
 
 
 def test_news_events_endpoint_supports_ts_code_filter(news_client: TestClient) -> None:

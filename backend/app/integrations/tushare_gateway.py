@@ -168,3 +168,38 @@ class TushareGateway:
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)
+
+    async def fetch_major_news(self, **kwargs) -> list[dict[str, object]]:
+        def _run() -> list[dict[str, object]]:
+            frame = self._client.major_news(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_announcements(self, **kwargs) -> list[dict[str, object]]:
+        def _run() -> list[dict[str, object]]:
+            frame = self._client.anns_d(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_cctv_news(self, **kwargs) -> list[dict[str, object]]:
+        def _run() -> list[dict[str, object]]:
+            frame = self._client.cctv_news(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_economic_calendar(self, **kwargs) -> list[dict[str, object]]:
+        def _run() -> list[dict[str, object]]:
+            frame = self._client.eco_cal(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)
+
+    async def fetch_ths_members(self, **kwargs) -> list[dict[str, object]]:
+        def _run() -> list[dict[str, object]]:
+            frame = self._client.ths_member(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            return frame.to_dict(orient="records")
+
+        return await asyncio.to_thread(_run)

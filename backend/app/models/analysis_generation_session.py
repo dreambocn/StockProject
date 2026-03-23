@@ -16,6 +16,9 @@ class AnalysisGenerationSession(Base):
     analysis_key: Mapped[str] = mapped_column(String(256), index=True)
     ts_code: Mapped[str] = mapped_column(String(12), index=True)
     topic: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    anchor_event_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
     use_web_search: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     trigger_source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="manual", index=True

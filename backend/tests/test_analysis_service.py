@@ -164,3 +164,88 @@ def test_analysis_service_keeps_summary_read_only_before_session_generation(
         asyncio.run(run_test())
     finally:
         asyncio.run(engine.dispose())
+
+
+def test_analysis_service_filters_report_by_anchor_event_id(tmp_path: Path) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                NewsEvent(
+                    id="evt-hot-1",
+                    scope="hot",
+                    cache_variant="global",
+                    title="国际油价高位震荡",
+                    summary="原油供需偏紧",
+                    published_at=datetime(2026, 3, 3, 10, 0, tzinfo=timezone.utc),
+                    url="https://example.com/hot-1",
+                    publisher="测试源",
+                    source="eastmoney_global",
+                    macro_topic="commodity_supply",
+                    fetched_at=datetime(2026, 3, 3, 10, 5, tzinfo=timezone.utc),
+                )
+            )
+            session.add(
+                AnalysisEventLink(
+                    event_id="evt-hot-1",
+                    ts_code="600519.SH",
+                    correlation_score=0.91,
+                    confidence="high",
+                    link_status="linked",
+                )
+            )
+            session.add_all(
+                [
+                    AnalysisReport(
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="事件一报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        topic="commodity_supply",
+                        anchor_event_id="evt-hot-1",
+                        anchor_event_title="国际油价高位震荡",
+                        structured_sources=[{"provider": "akshare", "count": 1}],
+                        generated_at=datetime(2026, 3, 3, 10, 10, tzinfo=timezone.utc),
+                    ),
+                    AnalysisReport(
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="普通主题报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        topic="commodity_supply",
+                        anchor_event_id=None,
+                        anchor_event_title=None,
+                        structured_sources=[],
+                        generated_at=datetime(2026, 3, 3, 10, 11, tzinfo=timezone.utc),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            result = await get_stock_analysis_summary(
+                session,
+                "600519.SH",
+                topic="commodity_supply",
+                event_id="evt-hot-1",
+            )
+
+            assert result["report"]["summary"] == "事件一报告"
+            assert result["report"]["anchor_event_id"] == "evt-hot-1"
+            assert result["report"]["structured_sources"] == [{"provider": "akshare", "count": 1}]
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())

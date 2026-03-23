@@ -134,6 +134,11 @@ def _ensure_news_event_columns(sync_connection: Connection) -> None:
         "sentiment_score": "NUMERIC(12, 6)",
         "event_tags": "TEXT",
         "analysis_status": "VARCHAR(16)",
+        "provider": "VARCHAR(32) DEFAULT 'internal'",
+        "external_id": "VARCHAR(128)",
+        "cluster_key": "VARCHAR(255)",
+        "source_priority": "INTEGER DEFAULT 0",
+        "evidence_kind": "VARCHAR(32) DEFAULT 'hot'",
     }
     for column_name, column_type in required_column_sql.items():
         if column_name in existing_columns:
@@ -161,6 +166,9 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         "started_at": "TIMESTAMP",
         "completed_at": "TIMESTAMP",
         "content_format": "VARCHAR(16) DEFAULT 'markdown'",
+        "anchor_event_id": "VARCHAR(36)",
+        "anchor_event_title": "VARCHAR(255)",
+        "structured_sources": "JSON",
         "web_sources": "JSON",
     }
     for column_name, column_type in required_column_sql.items():
@@ -169,6 +177,19 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         sync_connection.execute(
             text(
                 f"ALTER TABLE analysis_reports ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+    if "analysis_generation_sessions" not in set(inspector.get_table_names()):
+        return
+
+    session_columns = {
+        item["name"] for item in inspector.get_columns("analysis_generation_sessions")
+    }
+    if "anchor_event_id" not in session_columns:
+        sync_connection.execute(
+            text(
+                "ALTER TABLE analysis_generation_sessions ADD COLUMN anchor_event_id VARCHAR(36)"
             )
         )
 

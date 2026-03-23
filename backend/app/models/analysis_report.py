@@ -36,6 +36,15 @@ class AnalysisReport(Base):
     content_format: Mapped[str] = mapped_column(
         String(16), nullable=False, default="markdown"
     )
+    anchor_event_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    anchor_event_title: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    structured_sources: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON, nullable=True
+    )
     web_sources: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON, nullable=True
     )

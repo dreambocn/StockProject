@@ -58,6 +58,9 @@ class AnalysisReportResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     content_format: Literal["markdown"] = "markdown"
+    anchor_event_id: str | None = None
+    anchor_event_title: str | None = None
+    structured_sources: list[dict[str, object]] = []
     web_sources: list[dict[str, object]] = []
 
 
@@ -72,6 +75,7 @@ class AnalysisReportArchiveListResponse(BaseModel):
 
 class AnalysisSessionCreateRequest(BaseModel):
     topic: str | None = None
+    event_id: str | None = None
     force_refresh: bool = False
     use_web_search: bool = False
     trigger_source: Literal["manual", "watchlist_daily"] = "manual"
@@ -94,6 +98,8 @@ class StockAnalysisSummaryResponse(BaseModel):
     status: Literal["ready", "partial", "pending"]
     generated_at: datetime | None
     topic: str | None
+    event_context_status: Literal["direct", "topic_fallback", "none"] = "none"
+    event_context_message: str | None = None
     published_from: datetime | None
     published_to: datetime | None
     event_count: int
