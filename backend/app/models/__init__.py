@@ -1,3 +1,5 @@
+from app.models.analysis_event_link import AnalysisEventLink
+from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_adj_factor import StockAdjFactor
 from app.models.stock_daily_snapshot import StockDailySnapshot
@@ -9,6 +11,8 @@ from app.models.user import User
 
 __all__ = [
     "User",
+    "AnalysisEventLink",
+    "AnalysisReport",
     "NewsEvent",
     "StockInstrument",
     "StockDailySnapshot",

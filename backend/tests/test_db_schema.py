@@ -33,9 +33,22 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
             after_tables = await connection.run_sync(
                 lambda sync_conn: inspect(sync_conn).get_table_names()
             )
+            news_columns = await connection.run_sync(
+                lambda sync_conn: {
+                    item["name"]
+                    for item in inspect(sync_conn).get_columns("news_events")
+                }
+            )
 
         assert "users" in after_tables
         assert "news_events" in after_tables
+        assert "analysis_event_links" in after_tables
+        assert "analysis_reports" in after_tables
+        assert "event_type" in news_columns
+        assert "sentiment_label" in news_columns
+        assert "sentiment_score" in news_columns
+        assert "event_tags" in news_columns
+        assert "analysis_status" in news_columns
 
         await engine.dispose()
 

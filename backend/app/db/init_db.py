@@ -1,8 +1,7 @@
 from collections.abc import Callable, Awaitable
 
 import asyncpg
-from sqlalchemy import or_, select
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, or_, select, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -91,6 +90,7 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
 
         # 关键流程：对历史库执行最小列补齐，避免 create_all 不会自动 ALTER 导致运行期写入失败。
         await connection.run_sync(_ensure_stock_instrument_columns)
+        await connection.run_sync(_ensure_news_event_columns)
 
 
 def _ensure_stock_instrument_columns(sync_connection: Connection) -> None:
@@ -115,6 +115,31 @@ def _ensure_stock_instrument_columns(sync_connection: Connection) -> None:
         sync_connection.execute(
             text(
                 f"ALTER TABLE stock_instruments ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+
+def _ensure_news_event_columns(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "news_events" not in set(inspector.get_table_names()):
+        return
+
+    existing_columns = {
+        item["name"] for item in inspector.get_columns("news_events")
+    }
+    required_column_sql: dict[str, str] = {
+        "event_type": "VARCHAR(32)",
+        "sentiment_label": "VARCHAR(16)",
+        "sentiment_score": "NUMERIC(12, 6)",
+        "event_tags": "TEXT",
+        "analysis_status": "VARCHAR(16)",
+    }
+    for column_name, column_type in required_column_sql.items():
+        if column_name in existing_columns:
+            continue
+        sync_connection.execute(
+            text(
+                f"ALTER TABLE news_events ADD COLUMN {column_name} {column_type}"
             )
         )
 
