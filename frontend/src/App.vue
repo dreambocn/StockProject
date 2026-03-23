@@ -70,6 +70,7 @@ const handleAuthAction = async () => {
       <nav class="terminal-nav">
         <router-link to="/">{{ t('nav.dashboard') }}</router-link>
         <router-link to="/news/hot">{{ t('nav.hotNews') }}</router-link>
+        <router-link to="/analysis">{{ t('nav.analysis') }}</router-link>
         <router-link v-if="showAdminNav" to="/admin">{{ t('nav.admin') }}</router-link>
         <router-link to="/profile">{{ t('nav.profile') }}</router-link>
         <div class="locale-switch" role="group" :aria-label="t('nav.language')">

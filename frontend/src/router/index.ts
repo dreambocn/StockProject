@@ -77,6 +77,11 @@ export const router = createRouter({
       name: 'hot-news',
       component: () => import('../views/HotNewsView.vue'),
     },
+    {
+      path: '/analysis',
+      name: 'analysis-workbench',
+      component: () => import('../views/AnalysisWorkbenchView.vue'),
+    },
   ],
 })
 

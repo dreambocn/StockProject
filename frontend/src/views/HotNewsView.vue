@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { newsApi, type HotNewsItem, type MacroImpactProfile } from '../api/news'
 import { ApiError } from '../api/http'
 
 const { t } = useI18n()
+const router = useRouter()
 
 const loading = ref(false)
 const impactLoading = ref(false)
@@ -78,6 +80,17 @@ const selectTopic = async (topic: string) => {
 onMounted(async () => {
   await Promise.all([loadHotNews(), loadImpactProfiles()])
 })
+
+const goToAnalysis = async (tsCode: string, topic: string) => {
+  await router.push({
+    path: '/analysis',
+    query: {
+      ts_code: tsCode,
+      topic,
+      source: 'hot_news',
+    },
+  })
+}
 </script>
 
 <template>
@@ -121,8 +134,22 @@ onMounted(async () => {
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.targets') }}:</strong> {{ profile.a_share_targets.join(' / ') }}</p>
           <p class="impact-row">
             <strong>{{ t('hotNews.impactPanel.candidates') }}:</strong>
-            <span v-if="profile.a_share_candidates.length > 0">
-              {{ profile.a_share_candidates.map((item) => `${item.name}(${item.ts_code})`).join(' / ') }}
+            <span v-if="profile.a_share_candidates.length > 0" class="impact-candidate-list">
+              <span
+                v-for="candidate in profile.a_share_candidates"
+                :key="candidate.ts_code"
+                class="impact-candidate-item"
+              >
+                <span>{{ `${candidate.name}(${candidate.ts_code})` }}</span>
+                <el-button
+                  text
+                  size="small"
+                  class="impact-candidate-action"
+                  @click="goToAnalysis(candidate.ts_code, profile.topic)"
+                >
+                  {{ t('hotNews.enterAnalysis') }}
+                </el-button>
+              </span>
             </span>
             <span v-else>--</span>
           </p>
@@ -212,6 +239,24 @@ h1 {
   margin: 0.3rem 0 0;
   font-size: 0.83rem;
   color: var(--terminal-muted);
+}
+
+.impact-candidate-list {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.32rem;
+}
+
+.impact-candidate-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.impact-candidate-action {
+  padding: 0;
+  color: var(--terminal-primary);
 }
 
 .topic-filter-panel {

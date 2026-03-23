@@ -593,6 +593,20 @@ const goBack = async () => {
   await router.push('/')
 }
 
+const goToAnalysis = async () => {
+  if (!tsCode.value) {
+    return
+  }
+
+  await router.push({
+    path: '/analysis',
+    query: {
+      ts_code: tsCode.value,
+      source: 'stock_detail',
+    },
+  })
+}
+
 onMounted(async () => {
   await loadData()
 })
@@ -609,7 +623,17 @@ onMounted(async () => {
             {{ detail?.instrument.fullname ?? '--' }}
           </p>
         </div>
-        <el-button text @click="goBack">{{ t('stockDetail.back') }}</el-button>
+        <div class="title-actions">
+          <el-button
+            type="primary"
+            plain
+            data-testid="stock-analysis-entry"
+            @click="goToAnalysis"
+          >
+            {{ t('analysisWorkbench.enterButton') }}
+          </el-button>
+          <el-button text @click="goBack">{{ t('stockDetail.back') }}</el-button>
+        </div>
       </div>
 
       <el-alert v-if="errorMessage" class="detail-alert" :title="errorMessage" type="error" :closable="false" show-icon />
@@ -918,6 +942,13 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 0.9rem;
+}
+
+.title-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .panel-kicker {
@@ -1308,6 +1339,11 @@ h2 {
   .title-row {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .title-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .daily-actions {

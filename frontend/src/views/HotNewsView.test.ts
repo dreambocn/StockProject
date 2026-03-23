@@ -174,4 +174,62 @@ describe('HotNewsView', () => {
     expect(filteredImpactCall[0]).toContain('/api/news/impact-map?')
     expect(filteredImpactCall[0]).toContain('topic=geopolitical_conflict')
   })
+
+  it('navigates to analysis workbench from a-share candidate entry', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            topic: 'commodity_supply',
+            affected_assets: ['原油'],
+            beneficiary_sectors: ['油气开采'],
+            pressure_sectors: ['航空运输'],
+            a_share_targets: ['中国海油'],
+            a_share_candidates: [
+              {
+                ts_code: '600938.SH',
+                symbol: '600938',
+                name: '中国海油',
+                industry: '石油开采',
+              },
+            ],
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/news/hot', component: HotNewsView },
+        { path: '/analysis', component: { template: '<div>analysis</div>' } },
+      ],
+    })
+    await router.push('/news/hot')
+    await router.isReady()
+
+    const wrapper = mount(HotNewsView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    const actionButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('进入分析'))
+    expect(actionButton).toBeDefined()
+
+    await actionButton!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/analysis')
+    expect(router.currentRoute.value.query.ts_code).toBe('600938.SH')
+    expect(router.currentRoute.value.query.source).toBe('hot_news')
+    expect(router.currentRoute.value.query.topic).toBe('commodity_supply')
+  })
 })

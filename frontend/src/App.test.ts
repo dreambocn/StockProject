@@ -40,6 +40,7 @@ describe('App', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', component: HomeView },
+        { path: '/analysis', component: HomeView },
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
@@ -60,6 +61,7 @@ describe('App', () => {
     expect(wrapper.text()).toContain('股票仪表盘')
     expect(wrapper.text()).toContain('中文')
     expect(wrapper.text()).toContain('EN')
+    expect(wrapper.text()).toContain('分析')
   })
 
   it('moves locale slider when switching language', async () => {
@@ -87,6 +89,7 @@ describe('App', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', component: HomeView },
+        { path: '/analysis', component: HomeView },
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
@@ -157,6 +160,7 @@ describe('App', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', component: HomeView },
+        { path: '/analysis', component: HomeView },
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/admin', component: AdminConsoleView },
