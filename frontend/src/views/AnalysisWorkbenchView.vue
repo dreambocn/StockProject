@@ -612,26 +612,79 @@ watch(
               </div>
             </div>
 
-            <div class="analysis-hero__actions">
-              <label class="analysis-switch">
-                <span>{{ t('analysisWorkbench.webSearchToggle') }}</span>
-                <el-switch :model-value="useWebSearch" @update:model-value="updateUseWebSearch" />
-              </label>
-              <p v-if="showWebSearchInheritedHint" class="analysis-switch__hint">
-                {{ t('analysisWorkbench.webSearchInheritedHint') }}
-              </p>
-              <el-button type="primary" :loading="loading || streaming" @click="refreshAnalysis">
-                {{ t('analysisWorkbench.refreshAction') }}
-              </el-button>
-              <el-button plain :disabled="!hasTsCode" @click="goToStockDetail">
-                {{ t('analysisWorkbench.viewStockDetailAction') }}
-              </el-button>
-              <el-button plain :loading="watchlistLoading" @click="toggleWatchlist">
-                {{ watchlistButtonLabel }}
-              </el-button>
-              <el-button text @click="goToSource">
-                {{ sourceActionLabel }}
-              </el-button>
+            <div class="analysis-hero__actions" data-testid="analysis-hero-toolbar">
+              <div class="analysis-hero__controls" data-testid="analysis-hero-controls">
+                <div class="analysis-switch">
+                  <div class="analysis-switch__copy">
+                    <span class="analysis-switch__label" data-testid="analysis-switch-label">
+                      {{ t('analysisWorkbench.webSearchToggle') }}
+                    </span>
+                    <p v-if="showWebSearchInheritedHint" class="analysis-switch__hint">
+                      {{ t('analysisWorkbench.webSearchInheritedHint') }}
+                    </p>
+                  </div>
+                  <div class="analysis-switch__toggle" data-testid="analysis-switch-toggle">
+                    <el-switch
+                      :model-value="useWebSearch"
+                      @update:model-value="updateUseWebSearch"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="analysis-hero__action-cluster"
+                data-testid="analysis-hero-action-cluster"
+              >
+                <div
+                  class="analysis-hero__action-rail"
+                  data-testid="analysis-hero-action-rail"
+                >
+                  <div
+                    class="analysis-hero__primary-actions"
+                    data-testid="analysis-hero-primary-actions"
+                  >
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--primary"
+                      type="primary"
+                      :loading="loading || streaming"
+                      @click="refreshAnalysis"
+                    >
+                      {{ t('analysisWorkbench.refreshAction') }}
+                    </el-button>
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      plain
+                      :disabled="!hasTsCode"
+                      @click="goToStockDetail"
+                    >
+                      {{ t('analysisWorkbench.viewStockDetailAction') }}
+                    </el-button>
+                  </div>
+
+                  <div
+                    class="analysis-hero__secondary-actions"
+                    data-testid="analysis-hero-secondary-actions"
+                  >
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      plain
+                      :loading="watchlistLoading"
+                      @click="toggleWatchlist"
+                    >
+                      {{ watchlistButtonLabel }}
+                    </el-button>
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      data-testid="analysis-source-action"
+                      plain
+                      @click="goToSource"
+                    >
+                      {{ sourceActionLabel }}
+                    </el-button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1057,25 +1110,134 @@ watch(
 }
 
 .analysis-hero__actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.analysis-hero__controls {
+  display: grid;
   gap: 0.6rem;
-  flex-wrap: wrap;
+  align-content: center;
+  padding: 0.9rem 1rem;
+  min-width: 0;
+  border: 1px solid rgba(123, 197, 255, 0.12);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(10, 18, 32, 0.88), rgba(8, 14, 25, 0.74));
+  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.05);
+}
+
+.analysis-hero__action-cluster {
+  display: flex;
+  align-items: stretch;
   justify-content: flex-end;
-  align-items: center;
+  padding: 0.55rem;
+  min-width: 0;
+  border: 1px solid rgba(123, 197, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(8, 14, 25, 0.72);
+  box-shadow:
+    inset 0 0 0 1px rgba(123, 197, 255, 0.04),
+    0 12px 32px rgba(0, 0, 0, 0.14);
+}
+
+.analysis-hero__action-rail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.analysis-hero__action-rail .el-button + .el-button {
+  margin-left: 0;
+}
+
+.analysis-hero__primary-actions,
+.analysis-hero__secondary-actions {
+  display: contents;
 }
 
 .analysis-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 0.7rem;
   color: #d9e8f7;
+}
+
+.analysis-switch__copy {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.analysis-switch__label {
+  min-width: 0;
+  display: block;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.analysis-switch__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.analysis-switch__toggle :deep(.el-switch) {
+  flex: 0 0 auto;
+  padding: 0.2rem 0;
 }
 
 .analysis-switch__hint {
   margin: 0;
-  max-width: 18rem;
   font-size: 0.78rem;
+  line-height: 1.55;
   color: color-mix(in srgb, var(--terminal-primary) 62%, white 38%);
+}
+
+.analysis-action-btn {
+  min-width: 0;
+  width: 100%;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  border-radius: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.analysis-action-btn--primary {
+  box-shadow: 0 10px 24px rgba(64, 158, 255, 0.2);
+}
+
+.analysis-action-btn--outline.el-button.is-plain {
+  border-color: rgba(123, 197, 255, 0.18);
+  background: rgba(10, 18, 32, 0.72);
+  color: #eef6ff;
+  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.05);
+}
+
+.analysis-action-btn--outline.el-button.is-plain:hover,
+.analysis-action-btn--outline.el-button.is-plain:focus-visible {
+  border-color: rgba(123, 197, 255, 0.34);
+  background: rgba(20, 34, 56, 0.9);
+  color: #f5fbff;
+}
+
+.analysis-action-btn--outline.el-button.is-plain:active {
+  border-color: rgba(87, 184, 255, 0.42);
+  background: rgba(16, 28, 47, 0.96);
+}
+
+.analysis-action-btn--outline.el-button.is-disabled,
+.analysis-action-btn--outline.el-button.is-plain.is-disabled {
+  border-color: rgba(123, 197, 255, 0.12);
+  background: rgba(10, 18, 32, 0.42);
+  color: rgba(238, 246, 255, 0.52);
 }
 
 .analysis-overview {
@@ -1338,11 +1500,26 @@ watch(
     align-items: flex-start;
   }
 
-  .analysis-hero__actions,
   .analysis-empty__actions,
   .analysis-error__actions {
     width: 100%;
-    justify-content: flex-start;
+  }
+
+  .analysis-hero__actions {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-hero__action-cluster {
+    width: 100%;
+  }
+
+  .analysis-hero__primary-actions,
+  .analysis-hero__secondary-actions {
+    display: contents;
+  }
+
+  .analysis-action-btn {
+    width: 100%;
   }
 
   .analysis-overview {
@@ -1355,6 +1532,26 @@ watch(
 
   .analysis-loading__grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .analysis-hero__controls,
+  .analysis-hero__action-cluster {
+    padding: 0.85rem;
+  }
+
+  .analysis-hero__primary-actions,
+  .analysis-hero__secondary-actions {
+    display: contents;
+  }
+
+  .analysis-hero__action-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-action-btn--primary {
+    box-shadow: 0 10px 24px rgba(64, 158, 255, 0.2);
   }
 }
 </style>

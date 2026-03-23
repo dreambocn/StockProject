@@ -266,6 +266,73 @@ describe('AnalysisWorkbenchView', () => {
     expect(router.currentRoute.value.query.topic).toBe('regulation_policy')
   })
 
+  it('renders hero actions as a split toolbar with grouped controls', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', topic: 'regulation_policy', source: 'hot_news' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: 'regulation_policy',
+      published_from: null,
+      published_to: null,
+      event_count: 0,
+      events: [],
+      report: {
+        id: 'report-toolbar',
+        status: 'ready',
+        summary: '## 快报摘要',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const toolbar = wrapper.get('[data-testid="analysis-hero-toolbar"]')
+    expect(toolbar.find('[data-testid="analysis-hero-controls"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-hero-action-cluster"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-hero-action-rail"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-hero-primary-actions"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-hero-secondary-actions"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-switch-label"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-switch-toggle"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="analysis-hero-action-cluster"]').classes()).toContain(
+      'analysis-hero__action-cluster',
+    )
+    expect(toolbar.find('[data-testid="analysis-source-action"]').classes()).toContain('is-plain')
+    expect(toolbar.find('[data-testid="analysis-source-action"]').classes()).not.toContain('is-text')
+    expect(toolbar.findAll('.analysis-action-btn--outline')).toHaveLength(3)
+
+    const orderedButtons = toolbar
+      .findAll('button')
+      .map((item) => item.text().trim())
+      .filter(Boolean)
+    expect(orderedButtons).toHaveLength(4)
+    expect(orderedButtons[0]).toBe('刷新分析')
+    expect(orderedButtons[1]).toBe('查看个股详情')
+    expect(orderedButtons[2]).toContain('关注')
+    expect(orderedButtons[3]).toBe('返回热点主题')
+  })
+
   it('shows pending workspace with refresh action when report is missing', async () => {
     setAppLocale('zh-CN')
     const router = createRouterWithQuery()
