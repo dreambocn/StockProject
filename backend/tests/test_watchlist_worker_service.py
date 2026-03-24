@@ -359,6 +359,48 @@ def test_run_hourly_watchlist_sync_logs_warning_for_item_failure(
     )
 
 
+def test_run_hourly_watchlist_sync_refreshes_candidate_evidence_on_schedule(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            await _seed_watchlist_users(session)
+            refresh_calls: list[tuple[datetime, bool]] = []
+
+            async def fake_refresh_candidate_evidence_caches(
+                *,
+                session,
+                now: datetime,
+                include_research_report: bool,
+            ) -> dict[str, int]:
+                _ = session
+                refresh_calls.append((now, include_research_report))
+                return {"hot_search_rows": 1, "research_report_rows": 0}
+
+            await run_hourly_watchlist_sync(
+                session,
+                now=datetime(2026, 3, 23, 9, 5, tzinfo=UTC),
+                refresh_candidate_evidence_caches_fn=fake_refresh_candidate_evidence_caches,
+            )
+            await run_hourly_watchlist_sync(
+                session,
+                now=datetime(2026, 3, 23, 12, 5, tzinfo=UTC),
+                refresh_candidate_evidence_caches_fn=fake_refresh_candidate_evidence_caches,
+            )
+
+            assert refresh_calls == [
+                (datetime(2026, 3, 23, 9, 5, tzinfo=UTC), False),
+                (datetime(2026, 3, 23, 12, 5, tzinfo=UTC), True),
+            ]
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
 def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
     tmp_path: Path,
     monkeypatch,

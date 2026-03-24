@@ -2,11 +2,18 @@ import asyncio
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
+from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
 from app.models.stock_instrument import StockInstrument
-from app.services.candidate_evidence_service import get_candidate_evidence_snapshots
+from app.services.candidate_evidence_service import (
+    HOT_SEARCH_CACHE_KEY,
+    RESEARCH_REPORT_CACHE_KEY,
+    get_candidate_evidence_snapshots,
+    refresh_candidate_evidence_caches,
+)
 
 
 class FakeRedisClient:
@@ -282,6 +289,168 @@ def test_candidate_evidence_service_filters_research_reports_by_recent_30_days(
             assert snapshot.latest_published_at == datetime(
                 2026, 3, 18, 0, 0, tzinfo=UTC
             )
+
+    asyncio.run(_run())
+
+
+def test_candidate_evidence_service_uses_default_redis_getter_for_cache_io(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_maker = _build_session_factory(tmp_path)
+    redis_client = FakeRedisClient()
+
+    async def _run() -> None:
+        async with session_maker() as session:
+            await get_candidate_evidence_snapshots(
+                session=session,
+                ts_codes=["600938.SH"],
+                now=datetime(2026, 3, 24, 10, 0, tzinfo=UTC),
+                fetch_hot_search_rows=lambda: _async_value(
+                    [
+                        {
+                            "股票代码": "600938",
+                            "股票名称": "中国海油",
+                            "当前排名": 1,
+                            "搜索指数": 980123,
+                        }
+                    ]
+                ),
+                fetch_research_report_rows=lambda: _async_value([]),
+            )
+
+    # 关键回归：默认路径必须使用真实 Redis getter，而不是返回 None 的占位函数。
+    monkeypatch.setattr(
+        "app.services.candidate_evidence_service.get_redis_client",
+        lambda: redis_client,
+    )
+
+    asyncio.run(_run())
+
+    assert HOT_SEARCH_CACHE_KEY in redis_client._store
+
+
+def test_refresh_candidate_evidence_caches_archives_history_and_keeps_latest_batch(
+    tmp_path: Path,
+) -> None:
+    session_maker = _build_session_factory(tmp_path)
+    redis_client = FakeRedisClient()
+
+    async def _run() -> None:
+        async with session_maker() as session:
+            await refresh_candidate_evidence_caches(
+                session=session,
+                now=datetime(2026, 3, 24, 0, 5, tzinfo=UTC),
+                redis_client_getter=lambda: redis_client,
+                fetch_hot_search_rows=lambda: _async_value(
+                    [
+                        {
+                            "股票代码": "600938",
+                            "股票名称": "中国海油",
+                            "当前排名": 5,
+                            "搜索指数": 600000,
+                        }
+                    ]
+                ),
+                fetch_research_report_rows=lambda: _async_value([]),
+                include_research_report=False,
+            )
+            await refresh_candidate_evidence_caches(
+                session=session,
+                now=datetime(2026, 3, 24, 1, 5, tzinfo=UTC),
+                redis_client_getter=lambda: redis_client,
+                fetch_hot_search_rows=lambda: _async_value(
+                    [
+                        {
+                            "股票代码": "600938",
+                            "股票名称": "中国海油",
+                            "当前排名": 2,
+                            "搜索指数": 900000,
+                        }
+                    ]
+                ),
+                fetch_research_report_rows=lambda: _async_value([]),
+                include_research_report=False,
+            )
+
+            archive_rows = (
+                await session.execute(
+                    select(StockCandidateEvidenceCache).where(
+                        StockCandidateEvidenceCache.evidence_kind == "hot_search"
+                    )
+                )
+            ).scalars().all()
+            assert len(archive_rows) == 2
+
+            snapshots = await get_candidate_evidence_snapshots(
+                session=session,
+                ts_codes=["600938.SH"],
+                now=datetime(2026, 3, 24, 2, 0, tzinfo=UTC),
+                redis_client_getter=lambda: redis_client,
+                allow_remote_fetch=False,
+            )
+
+            assert snapshots["600938.SH"].hot_search_count == 1
+            assert snapshots["600938.SH"].evidence_items[0].summary == "百度热搜排名第 2 位；搜索热度 900000"
+            assert HOT_SEARCH_CACHE_KEY in redis_client._store
+
+    asyncio.run(_run())
+
+
+def test_candidate_evidence_service_uses_db_latest_batch_when_remote_fetch_disabled(
+    tmp_path: Path,
+) -> None:
+    session_maker = _build_session_factory(tmp_path)
+
+    async def _run() -> None:
+        async with session_maker() as session:
+            warm_redis = FakeRedisClient()
+            stale_redis = FakeRedisClient()
+            hot_calls = {"count": 0}
+            report_calls = {"count": 0}
+
+            async def fake_hot_rows() -> list[dict[str, object]]:
+                hot_calls["count"] += 1
+                return [
+                    {
+                        "股票代码": "600938",
+                        "股票名称": "中国海油",
+                        "当前排名": 1,
+                        "搜索指数": 990000,
+                    }
+                ]
+
+            async def fake_report_rows() -> list[dict[str, object]]:
+                report_calls["count"] += 1
+                return []
+
+            await refresh_candidate_evidence_caches(
+                session=session,
+                now=datetime(2026, 3, 24, 0, 5, tzinfo=UTC),
+                redis_client_getter=lambda: warm_redis,
+                fetch_hot_search_rows=fake_hot_rows,
+                fetch_research_report_rows=fake_report_rows,
+                include_research_report=False,
+            )
+            hot_calls["count"] = 0
+            report_calls["count"] = 0
+
+            snapshots = await get_candidate_evidence_snapshots(
+                session=session,
+                ts_codes=["600938.SH"],
+                now=datetime(2026, 3, 26, 12, 0, tzinfo=UTC),
+                redis_client_getter=lambda: stale_redis,
+                allow_remote_fetch=False,
+                fetch_hot_search_rows=fake_hot_rows,
+                fetch_research_report_rows=fake_report_rows,
+                hot_search_refresh_window_seconds=3600,
+                research_report_refresh_window_seconds=3600,
+            )
+
+            assert snapshots["600938.SH"].hot_search_count == 1
+            assert hot_calls["count"] == 0
+            assert report_calls["count"] == 0
+            assert RESEARCH_REPORT_CACHE_KEY not in stale_redis._store
 
     asyncio.run(_run())
 

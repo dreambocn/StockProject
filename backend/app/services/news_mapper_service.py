@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import re
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news_event import NewsEvent
@@ -78,6 +78,9 @@ SOURCE_COVERAGE_MAP: dict[str, str] = {
     "tushare": "TS",
     "internal": "IN",
 }
+
+CANDIDATE_POOL_MULTIPLIER = 4
+MAX_CANDIDATE_POOL_SIZE = 24
 
 
 def detect_macro_topic(*, title: str, summary: str | None) -> str:
@@ -196,6 +199,121 @@ def _to_evidence_item_payload(
     limit: int,
 ) -> list[dict[str, object | None]]:
     return [item.model_dump(mode="json") for item in items[: max(1, min(limit, 5))]]
+
+
+def _build_base_candidate_signals(
+    *,
+    instrument: StockInstrument,
+    target_names: set[str],
+    keywords: tuple[str, ...],
+    news_count: int,
+    announcement_count: int,
+) -> tuple[int, list[str], int]:
+    score = 0
+    reasons: list[str] = []
+    signal_hits = 0
+    haystack = f"{instrument.industry or ''} {instrument.name or ''} {instrument.fullname or ''}"
+
+    if instrument.name in target_names:
+        score += 35
+        reasons.append("命中主题目标股")
+        signal_hits += 1
+
+    matched_keywords = [keyword for keyword in keywords if keyword in haystack]
+    if matched_keywords:
+        score += 15
+        reasons.append(f"命中行业关键词：{matched_keywords[0]}")
+        signal_hits += 1
+
+    if news_count > 0:
+        score += 10
+        reasons.append(f"近7日相关新闻 {news_count} 条")
+        signal_hits += 1
+
+    if announcement_count > 0:
+        score += 10
+        reasons.append(f"近7日公告 {announcement_count} 条")
+        signal_hits += 1
+
+    return score, reasons, signal_hits
+
+
+async def _load_recent_stock_event_counts(
+    *,
+    session: AsyncSession,
+    recent_since: datetime,
+) -> dict[str, dict[str, int]]:
+    statement = (
+        select(
+            NewsEvent.ts_code,
+            func.sum(
+                case(
+                    (NewsEvent.source == "cninfo_announcement", 1),
+                    else_=0,
+                )
+            ).label("announcement_count"),
+            func.sum(
+                case(
+                    (NewsEvent.source == "cninfo_announcement", 0),
+                    else_=1,
+                )
+            ).label("news_count"),
+        )
+        .where(
+            NewsEvent.scope == "stock",
+            NewsEvent.published_at >= recent_since,
+            NewsEvent.ts_code.is_not(None),
+        )
+        .group_by(NewsEvent.ts_code)
+    )
+    rows = (await session.execute(statement)).all()
+    return {
+        str(ts_code): {
+            "news": int(news_count or 0),
+            "announcement": int(announcement_count or 0),
+        }
+        for ts_code, announcement_count, news_count in rows
+        if ts_code
+    }
+
+
+async def _load_anchor_events_by_topic(
+    *,
+    session: AsyncSession,
+    topics: set[str],
+) -> dict[str, dict[str, object]]:
+    if not topics:
+        return {}
+
+    statement = (
+        select(NewsEvent)
+        .where(
+            NewsEvent.scope == "hot",
+            NewsEvent.macro_topic.in_(topics),
+        )
+        .order_by(
+            NewsEvent.macro_topic.asc(),
+            NewsEvent.source_priority.desc(),
+            NewsEvent.published_at.desc(),
+            NewsEvent.created_at.desc(),
+        )
+    )
+    rows = (await session.execute(statement)).scalars().all()
+
+    anchor_events: dict[str, dict[str, object]] = {}
+    for row in rows:
+        topic = row.macro_topic
+        if not topic or topic in anchor_events:
+            continue
+        normalized_provider = normalize_provider(row.provider, row.source)
+        anchor_events[topic] = {
+            "event_id": row.id,
+            "title": row.title,
+            "published_at": row.published_at,
+            "providers": [normalized_provider],
+            "source_coverage": providers_to_source_coverage([normalized_provider]),
+        }
+    return anchor_events
 
 
 def list_macro_impact_profiles(topic: str) -> list[dict[str, object]]:
@@ -400,104 +518,111 @@ async def attach_dynamic_a_share_candidates(
 ) -> list[dict[str, object]]:
     statement = select(StockInstrument).where(StockInstrument.list_status == "L")
     instruments = (await session.execute(statement)).scalars().all()
-    try:
-        candidate_evidence_by_ts_code = await get_candidate_evidence_snapshots(
-            session=session,
-            ts_codes=[item.ts_code for item in instruments if item.ts_code],
-            evidence_item_limit=evidence_item_limit,
-        )
-    except Exception:
-        # 关键降级：候选增强快照异常时仅丢弃增强信息，基础候选链路继续执行。
-        candidate_evidence_by_ts_code = {}
-
     recent_since = datetime.now(UTC) - timedelta(days=7)
-    recent_news_statement = select(NewsEvent).where(
-        NewsEvent.scope == "stock",
-        NewsEvent.published_at >= recent_since,
+    stock_event_counts = await _load_recent_stock_event_counts(
+        session=session,
+        recent_since=recent_since,
     )
-    recent_news_rows = (await session.execute(recent_news_statement)).scalars().all()
-    stock_event_counts: dict[str, dict[str, int]] = defaultdict(lambda: {"news": 0, "announcement": 0})
-    for row in recent_news_rows:
-        if not row.ts_code:
-            continue
-        if row.source == "cninfo_announcement":
-            stock_event_counts[row.ts_code]["announcement"] += 1
-        else:
-            stock_event_counts[row.ts_code]["news"] += 1
-
-    hot_statement = select(NewsEvent).where(NewsEvent.scope == "hot").order_by(
-        NewsEvent.source_priority.desc(),
-        NewsEvent.published_at.desc(),
-        NewsEvent.created_at.desc(),
+    topics = {str(profile.get("topic") or "other") for profile in profiles}
+    anchor_events_by_topic = await _load_anchor_events_by_topic(
+        session=session,
+        topics=topics,
     )
-    hot_rows = (await session.execute(hot_statement)).scalars().all()
+    candidate_pool_limit = min(
+        MAX_CANDIDATE_POOL_SIZE,
+        max(per_topic_limit, per_topic_limit * CANDIDATE_POOL_MULTIPLIER),
+    )
+    base_candidates_by_topic: dict[str, list[dict[str, object]]] = {}
+    candidate_pool_ts_codes: set[str] = set()
 
     for profile in profiles:
         topic = str(profile.get("topic") or "other")
         keywords = MACRO_TOPIC_INDUSTRY_KEYWORDS.get(topic, ())
         target_names = set(profile.get("a_share_targets") or [])
-        profile["anchor_event"] = None
-        for row in hot_rows:
-            if row.macro_topic != topic:
-                continue
-            normalized_provider = normalize_provider(row.provider, row.source)
-            profile["anchor_event"] = {
-                "event_id": row.id,
-                "title": row.title,
-                "published_at": row.published_at,
-                "providers": [normalized_provider],
-                "source_coverage": providers_to_source_coverage([normalized_provider]),
-            }
-            break
-
-        candidates: list[dict[str, object]] = []
+        profile["anchor_event"] = anchor_events_by_topic.get(topic)
+        base_candidates: list[dict[str, object]] = []
         for instrument in instruments:
-            score = 0
-            reasons: list[str] = []
-            evidence_snapshot = candidate_evidence_by_ts_code.get(
+            event_counts = stock_event_counts.get(
                 instrument.ts_code,
-                CandidateEvidenceSummaryResponse(ts_code=instrument.ts_code),
+                {"news": 0, "announcement": 0},
             )
-            haystack = f"{instrument.industry or ''} {instrument.name or ''} {instrument.fullname or ''}"
-            if instrument.name in target_names:
-                score += 35
-                reasons.append("命中主题目标股")
-            matched_keywords = [keyword for keyword in keywords if keyword in haystack]
-            if matched_keywords:
-                score += 15
-                reasons.append(f"命中行业关键词：{matched_keywords[0]}")
-            news_count = stock_event_counts[instrument.ts_code]["news"]
-            if news_count > 0:
-                score += 10
-                reasons.append(f"近7日相关新闻 {news_count} 条")
-            announcement_count = stock_event_counts[instrument.ts_code]["announcement"]
-            if announcement_count > 0:
-                score += 10
-                reasons.append(f"近7日公告 {announcement_count} 条")
-            if evidence_snapshot.hot_search_count > 0:
-                score += 5
-                reasons.append(f"百度热搜命中 {evidence_snapshot.hot_search_count} 次")
-            if evidence_snapshot.research_report_count > 0:
-                score += 5
-                reasons.append(f"近30日研报 {evidence_snapshot.research_report_count} 篇")
-            if score <= 0:
+            news_count = int(event_counts["news"])
+            announcement_count = int(event_counts["announcement"])
+            score, reasons, signal_hits = _build_base_candidate_signals(
+                instrument=instrument,
+                target_names=target_names,
+                keywords=keywords,
+                news_count=news_count,
+                announcement_count=announcement_count,
+            )
+            if score <= 0 or not instrument.ts_code:
                 continue
 
-            source_hit_count = (
-                int(instrument.name in target_names)
-                + int(bool(matched_keywords))
-                + int(news_count > 0)
-                + int(announcement_count > 0)
-                + int(evidence_snapshot.hot_search_count > 0)
-                + int(evidence_snapshot.research_report_count > 0)
-            )
-            normalized_score = min(score, 100)
-            candidates.append(
+            base_candidates.append(
                 {
                     "ts_code": instrument.ts_code,
                     "symbol": instrument.symbol,
                     "name": instrument.name,
                     "industry": instrument.industry,
+                    "base_score": score,
+                    "base_reasons": reasons,
+                    "base_signal_hits": signal_hits,
+                }
+            )
+
+        base_candidates.sort(
+            key=lambda item: (
+                -int(item["base_score"]),
+                -int(item["base_signal_hits"]),
+                str(item["ts_code"]),
+            )
+        )
+        pooled_candidates = base_candidates[:candidate_pool_limit]
+        base_candidates_by_topic[topic] = pooled_candidates
+        candidate_pool_ts_codes.update(
+            str(item["ts_code"]) for item in pooled_candidates if item.get("ts_code")
+        )
+
+    try:
+        candidate_evidence_by_ts_code = await get_candidate_evidence_snapshots(
+            session=session,
+            ts_codes=sorted(candidate_pool_ts_codes),
+            evidence_item_limit=evidence_item_limit,
+            allow_remote_fetch=False,
+        )
+    except Exception:
+        # 关键降级：候选增强快照异常时仅丢弃增强信息，基础候选链路继续执行。
+        candidate_evidence_by_ts_code = {}
+
+    for profile in profiles:
+        topic = str(profile.get("topic") or "other")
+        candidates: list[dict[str, object]] = []
+        for base_candidate in base_candidates_by_topic.get(topic, []):
+            ts_code = str(base_candidate["ts_code"])
+            evidence_snapshot = candidate_evidence_by_ts_code.get(
+                ts_code,
+                CandidateEvidenceSummaryResponse(ts_code=ts_code),
+            )
+            reasons = list(base_candidate["base_reasons"])
+            score = int(base_candidate["base_score"])
+            source_hit_count = int(base_candidate["base_signal_hits"])
+
+            if evidence_snapshot.hot_search_count > 0:
+                score += 5
+                reasons.append(f"百度热搜命中 {evidence_snapshot.hot_search_count} 次")
+                source_hit_count += 1
+            if evidence_snapshot.research_report_count > 0:
+                score += 5
+                reasons.append(f"近30日研报 {evidence_snapshot.research_report_count} 篇")
+                source_hit_count += 1
+
+            normalized_score = min(score, 100)
+            candidates.append(
+                {
+                    "ts_code": ts_code,
+                    "symbol": base_candidate["symbol"],
+                    "name": base_candidate["name"],
+                    "industry": base_candidate["industry"],
                     "relevance_score": normalized_score,
                     "match_reasons": reasons,
                     "evidence_summary": "；".join(reasons),

@@ -97,6 +97,48 @@ def news_client(tmp_path: Path) -> TestClient:
                     ),
                     NewsEvent(
                         scope="stock",
+                    StockInstrument(
+                        ts_code="600900.SH",
+                        symbol="600900",
+                        name="长江电力",
+                        fullname="中国长江电力股份有限公司",
+                        area="北京",
+                        industry="电力",
+                        market="主板",
+                        exchange="SSE",
+                        list_status="L",
+                        list_date=date(2003, 11, 18),
+                        delist_date=None,
+                        is_hs="N",
+                    ),
+                    StockInstrument(
+                        ts_code="000333.SZ",
+                        symbol="000333",
+                        name="美的集团",
+                        fullname="美的集团股份有限公司",
+                        area="广东",
+                        industry="家用电器",
+                        market="主板",
+                        exchange="SZSE",
+                        list_status="L",
+                        list_date=date(2013, 9, 18),
+                        delist_date=None,
+                        is_hs="N",
+                    ),
+                    StockInstrument(
+                        ts_code="601318.SH",
+                        symbol="601318",
+                        name="中国平安",
+                        fullname="中国平安保险(集团)股份有限公司",
+                        area="广东",
+                        industry="保险",
+                        market="主板",
+                        exchange="SSE",
+                        list_status="L",
+                        list_date=date(2007, 3, 1),
+                        delist_date=None,
+                        is_hs="N",
+                    ),
                         cache_variant="with_announcements",
                         ts_code="600029.SH",
                         symbol="600029",
@@ -555,6 +597,31 @@ def test_impact_map_enhanced_evidence_promotes_candidate_order(
                 latest_published_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
                 source_breakdown=[
                     CandidateEvidenceSourceBreakdownResponse(
+def test_impact_map_only_requests_evidence_for_candidate_pool(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    captured_ts_codes: list[str] = []
+
+    async def fake_candidate_snapshots(*args, **kwargs) -> dict[str, CandidateEvidenceSummaryResponse]:
+        _ = args
+        captured_ts_codes.extend(kwargs["ts_codes"])
+        return {}
+
+    monkeypatch.setattr(
+        "app.services.news_mapper_service.get_candidate_evidence_snapshots",
+        fake_candidate_snapshots,
+    )
+
+    response = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply", "candidate_limit": 1},
+    )
+
+    assert response.status_code == 200
+    assert sorted(captured_ts_codes) == ["600547.SH", "600938.SH"]
+
+
                         source="hot_search",
                         count=1,
                     ),

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache.redis import get_redis_client
 from app.core.settings import get_settings
 from app.integrations.akshare_gateway import (
     fetch_stock_hot_search,
@@ -278,6 +279,7 @@ async def _get_evidence_rows(
     ]
     | Callable[[list[dict[str, object]], dict[str, StockInstrument], dict[str, StockInstrument]], list[CandidateEvidenceItemResponse]],
     redis_client_getter: RedisClientGetter,
+    allow_remote_fetch: bool = True,
 ) -> list[CandidateEvidenceItemResponse]:
     async def read_cache(key: str) -> list[CandidateEvidenceItemResponse] | None:
         return await read_cached_model_rows(
@@ -312,6 +314,8 @@ async def _get_evidence_rows(
         )
 
     async def fetch_remote_and_persist() -> list[CandidateEvidenceItemResponse]:
+        if not allow_remote_fetch:
+            raise RuntimeError("candidate evidence remote fetch disabled")
         raw_rows = await fetch_remote_rows()
         fetched_at = now
         instruments_by_symbol, instruments_by_name = await _load_instrument_lookup(session)
@@ -353,6 +357,49 @@ async def _get_evidence_rows(
     )
 
 
+async def _refresh_evidence_rows(
+    *,
+    session: AsyncSession,
+    evidence_kind: str,
+    cache_key: str,
+    ttl_seconds: int,
+    now: datetime,
+    fetch_remote_rows: FetchCandidateEvidenceRowsFn,
+    redis_client_getter: RedisClientGetter,
+) -> list[CandidateEvidenceItemResponse]:
+    raw_rows = await fetch_remote_rows()
+    instruments_by_symbol, instruments_by_name = await _load_instrument_lookup(session)
+
+    if evidence_kind == HOT_SEARCH_EVIDENCE_KIND:
+        mapped_rows = _map_hot_search_rows(
+            raw_rows=raw_rows,
+            fetched_at=now,
+            instruments_by_symbol=instruments_by_symbol,
+            instruments_by_name=instruments_by_name,
+        )
+    else:
+        mapped_rows = _map_research_report_rows(
+            raw_rows=raw_rows,
+            instruments_by_symbol=instruments_by_symbol,
+            instruments_by_name=instruments_by_name,
+        )
+
+    await replace_stock_candidate_evidence_rows(
+        session=session,
+        evidence_kind=evidence_kind,
+        fetched_at=now,
+        rows=mapped_rows,
+    )
+    await session.commit()
+    await write_cached_model_rows(
+        cache_key,
+        mapped_rows,
+        ttl_seconds=ttl_seconds,
+        redis_client_getter=redis_client_getter,
+    )
+    return mapped_rows
+
+
 def _build_source_breakdown(
     hot_search_count: int,
     research_report_count: int,
@@ -388,6 +435,7 @@ async def get_candidate_evidence_snapshots(
     hot_search_refresh_window_seconds: int | None = None,
     research_report_cache_ttl_seconds: int | None = None,
     research_report_refresh_window_seconds: int | None = None,
+    allow_remote_fetch: bool = True,
 ) -> dict[str, CandidateEvidenceSummaryResponse]:
     normalized_ts_codes = _normalize_ts_code_list(ts_codes)
     if not normalized_ts_codes:
@@ -395,7 +443,9 @@ async def get_candidate_evidence_snapshots(
 
     settings = get_settings()
     resolved_now = now or datetime.now(UTC)
-    resolved_redis_getter = redis_client_getter or (lambda: None)
+    # 关键缓存边界：默认值必须返回真实 Redis 客户端，不能用 None 占位，
+    # 否则缓存读写会退化成 AttributeError，热点页每次都会重复走慢路径。
+    resolved_redis_getter = redis_client_getter or get_redis_client
 
     hot_search_rows: list[CandidateEvidenceItemResponse] = []
     research_report_rows: list[CandidateEvidenceItemResponse] = []
@@ -413,6 +463,7 @@ async def get_candidate_evidence_snapshots(
             fetch_remote_rows=fetch_hot_search_rows,
             mapper=_map_hot_search_rows,
             redis_client_getter=resolved_redis_getter,
+            allow_remote_fetch=allow_remote_fetch,
         )
     except Exception:
         hot_search_rows = []
@@ -430,6 +481,7 @@ async def get_candidate_evidence_snapshots(
             fetch_remote_rows=fetch_research_report_rows,
             mapper=_map_research_report_rows,
             redis_client_getter=resolved_redis_getter,
+            allow_remote_fetch=allow_remote_fetch,
         )
     except Exception:
         research_report_rows = []
@@ -477,3 +529,44 @@ async def get_candidate_evidence_snapshots(
         )
 
     return snapshots
+
+
+async def refresh_candidate_evidence_caches(
+    *,
+    session: AsyncSession,
+    now: datetime | None = None,
+    redis_client_getter: RedisClientGetter | None = None,
+    fetch_hot_search_rows: FetchCandidateEvidenceRowsFn = fetch_stock_hot_search,
+    fetch_research_report_rows: FetchCandidateEvidenceRowsFn = fetch_stock_research_reports,
+    include_research_report: bool = True,
+) -> dict[str, int]:
+    settings = get_settings()
+    resolved_now = now or datetime.now(UTC)
+    resolved_redis_getter = redis_client_getter or get_redis_client
+
+    hot_rows = await _refresh_evidence_rows(
+        session=session,
+        evidence_kind=HOT_SEARCH_EVIDENCE_KIND,
+        cache_key=HOT_SEARCH_CACHE_KEY,
+        ttl_seconds=settings.candidate_hot_search_cache_ttl_seconds,
+        now=resolved_now,
+        fetch_remote_rows=fetch_hot_search_rows,
+        redis_client_getter=resolved_redis_getter,
+    )
+
+    research_rows: list[CandidateEvidenceItemResponse] = []
+    if include_research_report:
+        research_rows = await _refresh_evidence_rows(
+            session=session,
+            evidence_kind=RESEARCH_REPORT_EVIDENCE_KIND,
+            cache_key=RESEARCH_REPORT_CACHE_KEY,
+            ttl_seconds=settings.candidate_research_report_cache_ttl_seconds,
+            now=resolved_now,
+            fetch_remote_rows=fetch_research_report_rows,
+            redis_client_getter=resolved_redis_getter,
+        )
+
+    return {
+        "hot_search_rows": len(hot_rows),
+        "research_report_rows": len(research_rows),
+    }

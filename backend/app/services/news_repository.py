@@ -371,11 +371,8 @@ async def replace_stock_candidate_evidence_rows(
     fetched_at: datetime,
     rows: list[CandidateEvidenceItemResponse],
 ) -> None:
-    await session.execute(
-        delete(StockCandidateEvidenceCache).where(
-            StockCandidateEvidenceCache.evidence_kind == evidence_kind
-        )
-    )
+    # 关键归档边界：候选证据改为按抓取批次追加保存，方便后续大模型按时间回放；
+    # Redis 承担最新批次的热缓存，数据库保留历史批次作为冷数据真相源。
     for row in rows:
         session.add(
             StockCandidateEvidenceCache(
@@ -433,3 +430,11 @@ async def load_latest_candidate_evidence_fetch_at(
         .where(StockCandidateEvidenceCache.evidence_kind == evidence_kind)
     )
     return (await session.execute(statement)).scalar_one_or_none()
+    latest_fetched_at = await load_latest_candidate_evidence_fetch_at(
+        session=session,
+        evidence_kind=evidence_kind,
+    )
+    if latest_fetched_at is None:
+        return []
+
+        .where(StockCandidateEvidenceCache.fetched_at == latest_fetched_at)

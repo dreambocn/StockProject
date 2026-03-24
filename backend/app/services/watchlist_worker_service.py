@@ -21,6 +21,7 @@ from app.models.stock_trade_calendar import StockTradeCalendar
 from app.models.stock_watch_snapshot import StockWatchSnapshot
 from app.models.user_watchlist_item import UserWatchlistItem
 from app.services.analysis_service import start_analysis_session
+from app.services.candidate_evidence_service import refresh_candidate_evidence_caches
 from app.services.news_mapper_service import (
     map_stock_announcement_rows,
     map_stock_news_rows,
@@ -299,9 +300,41 @@ async def run_hourly_watchlist_sync(
     *,
     now: datetime,
     sync_stock_watch_context: Callable[..., Awaitable[None]] = sync_stock_watch_context,
+    refresh_candidate_evidence_caches_fn: Callable[..., Awaitable[dict[str, int]]] | None = None,
 ) -> dict[str, int]:
     processed = 0
     skipped = 0
+    if refresh_candidate_evidence_caches_fn is not None:
+        settings = get_settings()
+        include_research_report = (
+            settings.candidate_research_refresh_interval_hours > 0
+            and now.hour % settings.candidate_research_refresh_interval_hours == 0
+        )
+
+        try:
+            # 关键流程：热点页的候选证据由后台小时任务预刷新，前台请求只读 Redis/DB，
+            # 避免用户首屏直接触发东方财富全市场研报分页抓取。
+            refresh_result = await refresh_candidate_evidence_caches_fn(
+                session=session,
+                now=now,
+                include_research_report=include_research_report,
+            )
+            logger.info(
+                "event=candidate_evidence_refresh_completed hot_search_rows=%s research_report_rows=%s include_research_report=%s now=%s",
+                refresh_result["hot_search_rows"],
+                refresh_result["research_report_rows"],
+                include_research_report,
+                now.isoformat(),
+            )
+        except Exception as exc:
+            await session.rollback()
+            # 降级分支：候选证据刷新失败不应阻断 watchlist 小时同步，避免后台任务互相拖死。
+            logger.warning(
+                "event=candidate_evidence_refresh_failed stage=%s error_type=%s message=候选证据定时刷新失败，继续执行自选股小时同步",
+                "hourly_prefetch",
+                type(exc).__name__,
+                exc_info=exc,
+            )
 
     for ts_code in await list_hourly_sync_targets(session):
         try:

@@ -13,6 +13,7 @@ from app.core.logging import get_logger, setup_logging
 from app.db.init_db import ensure_database_schema
 from app.db.session import SessionLocal
 from app.services.watchlist_worker_service import (
+    refresh_candidate_evidence_caches,
     is_trade_day,
     run_daily_watchlist_analysis,
     run_hourly_watchlist_sync,
@@ -39,7 +40,11 @@ async def _run_once(
         if should_run_hourly(now):
             current_hourly_marker = now.strftime("%Y%m%d%H")
             if current_hourly_marker != hourly_marker:
-                result = await run_hourly_watchlist_sync(session, now=now)
+                result = await run_hourly_watchlist_sync(
+                    session,
+                    now=now,
+                    refresh_candidate_evidence_caches_fn=refresh_candidate_evidence_caches,
+                )
                 LOGGER.info(
                     "event=watchlist_hourly_sync processed=%s skipped=%s now=%s",
                     result["processed"],
