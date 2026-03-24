@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache.redis import get_redis_client
+from app.core.logging import get_logger
 from app.core.settings import get_settings
 from app.db.session import get_db_session
 from app.integrations.akshare_gateway import fetch_hot_news
@@ -38,6 +39,7 @@ from app.services.stock_cache_service import (
 
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 HOT_NEWS_CACHE_PREFIX = "news:hot"
 HOT_NEWS_CACHE_VARIANT = "global"
@@ -108,8 +110,13 @@ async def get_hot_news(
         try:
             ak_rows = await fetch_hot_news()
             mapped.extend(map_hot_news_rows(ak_rows))
-        except Exception:
-            pass
+        except Exception as exc:
+            # 关键降级：AkShare 失败时继续尝试其他来源，并记录可追踪日志。
+            logger.warning(
+                "event=hot_news_upstream_degraded provider=%s error_type=%s message=热点上游拉取失败",
+                "akshare",
+                type(exc).__name__,
+            )
 
         settings = get_settings()
         if settings.tushare_token.strip():
@@ -117,8 +124,13 @@ async def get_hot_news(
                 gateway = TushareGateway(settings.tushare_token)
                 ts_rows = await gateway.fetch_major_news()
                 mapped.extend(map_tushare_major_news_rows(ts_rows))
-            except Exception:
-                pass
+            except Exception as exc:
+                # 关键降级：Tushare 失败时不阻断接口，回退到可用来源并记录日志。
+                logger.warning(
+                    "event=hot_news_upstream_degraded provider=%s error_type=%s message=热点上游拉取失败",
+                    "tushare",
+                    type(exc).__name__,
+                )
 
         if not mapped:
             raise HTTPException(
@@ -226,7 +238,7 @@ async def get_macro_impact_map(
 
     # 关键流程：影响面板先返回稳定的规则映射，再补充数据库动态候选标的，保证可解释与可扩展兼容。
     profiles = list_macro_impact_profiles(normalized_topic)
-    # 易误用边界：动态候选依赖股票基础库，若数据库查询失败则降级为空候选，避免影响主接口可用性。
+    # 易误用边界：动态候选补充失败时要保留基础候选结果，避免路由层把已有候选误清空。
     try:
         if session is not None:
             profiles = await attach_dynamic_a_share_candidates(
@@ -235,9 +247,11 @@ async def get_macro_impact_map(
                 per_topic_limit=candidate_limit,
                 evidence_item_limit=candidate_evidence_limit,
             )
-    except Exception:
-        for profile in profiles:
-            profile["a_share_candidates"] = []
+    except Exception as exc:
+        logger.warning(
+            "event=impact_map_dynamic_candidates_degraded error_type=%s message=候选增强失败，保留基础结果",
+            type(exc).__name__,
+        )
 
     return [MacroImpactProfileResponse.model_validate(item) for item in profiles]
 

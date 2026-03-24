@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -308,6 +309,68 @@ def test_hot_news_upstream_error_falls_back_to_db(
     assert len(payload) > 0
 
 
+def test_hot_news_logs_warning_when_akshare_upstream_fails(
+    news_client: TestClient, monkeypatch
+) -> None:
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fake_fetch_hot_news() -> list[dict[str, object]]:
+        raise RuntimeError("akshare upstream down")
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr("app.api.routes.news.fetch_hot_news", fake_fetch_hot_news)
+    monkeypatch.setattr("app.api.routes.news.logger.warning", fake_warning)
+
+    response = news_client.get("/api/news/hot")
+
+    assert response.status_code == 200
+    assert any(
+        call_args[:2] == ("akshare", "RuntimeError")
+        for _message, call_args in warning_calls
+    )
+
+
+def test_hot_news_logs_warning_when_tushare_upstream_fails(
+    news_client: TestClient, monkeypatch
+) -> None:
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fake_fetch_hot_news() -> list[dict[str, object]]:
+        return []
+
+    async def fake_fetch_major_news(_self) -> list[dict[str, object]]:
+        raise RuntimeError("tushare upstream down")
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr("app.api.routes.news.fetch_hot_news", fake_fetch_hot_news)
+    monkeypatch.setattr(
+        "app.api.routes.news.TushareGateway.fetch_major_news",
+        fake_fetch_major_news,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.news.get_settings",
+        lambda: SimpleNamespace(
+            tushare_token="test-token",
+            hot_news_cache_ttl_seconds=3600,
+        ),
+    )
+    monkeypatch.setattr("app.api.routes.news.logger.warning", fake_warning)
+
+    response = news_client.get("/api/news/hot")
+
+    assert response.status_code == 200
+    assert any(
+        call_args[:2] == ("tushare", "RuntimeError")
+        for _message, call_args in warning_calls
+    )
+
+
 def test_hot_news_uses_cache_and_persists_to_db(
     news_client: TestClient, monkeypatch
 ) -> None:
@@ -562,6 +625,66 @@ def test_impact_map_keeps_base_candidates_when_enhancement_snapshot_fails(
     # 降级后增强字段应保持默认空态，接口结构不变。
     assert candidates[0]["source_breakdown"] == []
     assert candidates[0]["evidence_items"] == []
+
+
+def test_impact_map_route_keeps_existing_candidates_when_attach_raises(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def fake_profiles(_topic: str) -> list[dict[str, object]]:
+        return [
+            {
+                "topic": "commodity_supply",
+                "affected_assets": ["原油"],
+                "beneficiary_sectors": ["油气开采"],
+                "pressure_sectors": ["航空运输"],
+                "a_share_targets": ["中国海油"],
+                "anchor_event": None,
+                "a_share_candidates": [
+                    {
+                        "ts_code": "600938.SH",
+                        "symbol": "600938",
+                        "name": "中国海油",
+                        "industry": "石油开采",
+                        "relevance_score": 35,
+                        "match_reasons": ["命中主题目标股"],
+                        "evidence_summary": "命中主题目标股",
+                        "source_hit_count": 1,
+                        "source_breakdown": [],
+                        "freshness_score": 0,
+                        "candidate_confidence": "中",
+                        "evidence_items": [],
+                    }
+                ],
+            }
+        ]
+
+    async def fake_attach_dynamic_a_share_candidates(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("dynamic attach failed")
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr("app.api.routes.news.list_macro_impact_profiles", fake_profiles)
+    monkeypatch.setattr(
+        "app.api.routes.news.attach_dynamic_a_share_candidates",
+        fake_attach_dynamic_a_share_candidates,
+    )
+    monkeypatch.setattr("app.api.routes.news.logger.warning", fake_warning)
+
+    response = news_client.get("/api/news/impact-map", params={"topic": "commodity_supply"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["a_share_candidates"][0]["name"] == "中国海油"
+    assert any(
+        call_args[:1] == ("RuntimeError",)
+        for _message, call_args in warning_calls
+    )
 
 
 def test_news_events_endpoint_supports_ts_code_filter(news_client: TestClient) -> None:

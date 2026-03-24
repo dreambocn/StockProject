@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.core.settings import get_settings
 from app.integrations.akshare_gateway import (
     fetch_stock_announcements,
@@ -25,6 +26,9 @@ from app.services.news_mapper_service import (
     map_stock_news_rows,
 )
 from app.services.news_repository import replace_stock_news_rows
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -155,7 +159,13 @@ async def _load_watch_snapshot_payload(
             start_date=start_date,
             end_date=end_date,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "event=watchlist_snapshot_fetch_degraded ts_code=%s stage=%s error_type=%s message=快照回源失败，回退本地快照",
+            ts_code,
+            "snapshot",
+            type(exc).__name__,
+        )
         rows = []
 
     if rows:
@@ -223,7 +233,17 @@ async def sync_stock_watch_context(
         raise ValueError(f"stock symbol not found: {ts_code}")
 
     # 关键流程：小时同步统一把新闻和公告落入 news_events，后续分析接口直接复用同一事件池。
-    stock_news_rows = await fetch_stock_news(symbol)
+    try:
+        stock_news_rows = await fetch_stock_news(symbol)
+    except Exception as exc:
+        # 关键降级：新闻抓取失败时回退为空列表，保证小时同步链路不断。
+        logger.warning(
+            "event=watchlist_news_fetch_degraded ts_code=%s stage=%s error_type=%s message=新闻抓取失败，回退为空列表",
+            ts_code,
+            "news",
+            type(exc).__name__,
+        )
+        stock_news_rows = []
     mapped_news = map_stock_news_rows(
         ts_code=ts_code,
         symbol=symbol,
@@ -232,7 +252,14 @@ async def sync_stock_watch_context(
 
     try:
         announcement_rows = await fetch_stock_announcements(symbol=symbol)
-    except Exception:
+    except Exception as exc:
+        # 关键降级：公告抓取失败时回退为空列表，避免中断后续入库与快照归档。
+        logger.warning(
+            "event=watchlist_news_fetch_degraded ts_code=%s stage=%s error_type=%s message=公告抓取失败，回退为空列表",
+            ts_code,
+            "announcement",
+            type(exc).__name__,
+        )
         announcement_rows = []
 
     mapped_announcements = map_stock_announcement_rows(
@@ -282,8 +309,16 @@ async def run_hourly_watchlist_sync(
             await mark_hourly_sync_completed(session, ts_code=ts_code, synced_at=now)
             await session.commit()
             processed += 1
-        except Exception:
+        except Exception as exc:
             await session.rollback()
+            # 降级分支：单只股票小时同步失败时仅跳过该项，避免一次异常阻断整批任务。
+            logger.warning(
+                "event=watchlist_item_sync_failed ts_code=%s stage=%s error_type=%s message=小时同步失败",
+                ts_code,
+                "hourly_sync",
+                type(exc).__name__,
+                exc_info=exc,
+            )
             skipped += 1
 
     return {"processed": processed, "skipped": skipped}
@@ -331,8 +366,16 @@ async def run_daily_watchlist_analysis(
             )
             await session.commit()
             processed += 1
-        except Exception:
+        except Exception as exc:
             await session.rollback()
+            # 降级分支：单只股票每日报告失败时继续处理后续标的，统计语义保持不变。
+            logger.warning(
+                "event=watchlist_item_analysis_failed ts_code=%s stage=%s error_type=%s message=每日报告分析失败",
+                target.ts_code,
+                "daily_analysis",
+                type(exc).__name__,
+                exc_info=exc,
+            )
             skipped += 1
 
     return {"processed": processed, "skipped": skipped}

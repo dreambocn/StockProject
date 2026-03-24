@@ -13,6 +13,7 @@ from app.models.user_watchlist_item import UserWatchlistItem
 from app.services.watchlist_worker_service import (
     run_daily_watchlist_analysis,
     run_hourly_watchlist_sync,
+    sync_stock_watch_context,
 )
 
 
@@ -213,3 +214,209 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
         asyncio.run(run_test())
     finally:
         asyncio.run(engine.dispose())
+
+
+def test_sync_stock_watch_context_logs_warning_when_announcement_fetch_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fake_fetch_stock_news(_symbol: str) -> list[dict[str, object]]:
+        return []
+
+    async def fake_fetch_stock_announcements(*, symbol: str) -> list[dict[str, object]]:
+        _ = symbol
+        raise RuntimeError("announcement upstream down")
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.fetch_stock_news",
+        fake_fetch_stock_news,
+    )
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.fetch_stock_announcements",
+        fake_fetch_stock_announcements,
+    )
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.logger.warning",
+        fake_warning,
+    )
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            await _seed_watchlist_users(session)
+            now = datetime(2026, 3, 23, 9, 5, tzinfo=UTC)
+            await sync_stock_watch_context(session=session, ts_code="600519.SH", now=now)
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+    assert any(
+        call_args[:3] == ("600519.SH", "announcement", "RuntimeError")
+        for _message, call_args in warning_calls
+    )
+
+
+def test_sync_stock_watch_context_logs_warning_when_news_fetch_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fake_fetch_stock_news(_symbol: str) -> list[dict[str, object]]:
+        raise RuntimeError("news upstream down")
+
+    async def fake_fetch_stock_announcements(*, symbol: str) -> list[dict[str, object]]:
+        _ = symbol
+        return []
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.fetch_stock_news",
+        fake_fetch_stock_news,
+    )
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.fetch_stock_announcements",
+        fake_fetch_stock_announcements,
+    )
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.logger.warning",
+        fake_warning,
+    )
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            await _seed_watchlist_users(session)
+            now = datetime(2026, 3, 23, 9, 5, tzinfo=UTC)
+            await sync_stock_watch_context(session=session, ts_code="600519.SH", now=now)
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+    assert any(
+        call_args[:3] == ("600519.SH", "news", "RuntimeError")
+        for _message, call_args in warning_calls
+    )
+
+
+def test_run_hourly_watchlist_sync_logs_warning_for_item_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.logger.warning",
+        fake_warning,
+    )
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            await _seed_watchlist_users(session)
+            session.add(UserWatchlistItem(user_id="user-1", ts_code="600519.SH"))
+            await session.commit()
+
+            async def fake_sync_stock_watch_context(*, session, ts_code: str, now: datetime):
+                _ = session, ts_code, now
+                raise RuntimeError("sync failed")
+
+            now = datetime(2026, 3, 23, 9, 5, tzinfo=UTC)
+            result = await run_hourly_watchlist_sync(
+                session,
+                now=now,
+                sync_stock_watch_context=fake_sync_stock_watch_context,
+            )
+
+            assert result["processed"] == 0
+            assert result["skipped"] == 1
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+    assert any(
+        call_args[:3] == ("600519.SH", "hourly_sync", "RuntimeError")
+        for _message, call_args in warning_calls
+    )
+
+
+def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def fake_warning(message: str, *args: object, **kwargs: object) -> None:
+        _ = kwargs
+        warning_calls.append((message, args))
+
+    monkeypatch.setattr(
+        "app.services.watchlist_worker_service.logger.warning",
+        fake_warning,
+    )
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            await _seed_watchlist_users(session)
+            session.add(UserWatchlistItem(user_id="user-1", ts_code="600519.SH"))
+            await session.commit()
+
+            async def fake_start_analysis_session(
+                _session,
+                _ts_code: str,
+                *,
+                topic: str | None,
+                force_refresh: bool,
+                use_web_search: bool,
+                trigger_source: str,
+                execute_inline: bool,
+            ):
+                _ = (
+                    topic,
+                    force_refresh,
+                    use_web_search,
+                    trigger_source,
+                    execute_inline,
+                )
+                raise RuntimeError("analysis failed")
+
+            now = datetime(2026, 3, 23, 18, 10, tzinfo=UTC)
+            result = await run_daily_watchlist_analysis(
+                session,
+                now=now,
+                start_analysis_session_fn=fake_start_analysis_session,
+                execute_inline=True,
+            )
+
+            assert result["processed"] == 0
+            assert result["skipped"] == 1
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+    assert any(
+        call_args[:3] == ("600519.SH", "daily_analysis", "RuntimeError")
+        for _message, call_args in warning_calls
+    )
