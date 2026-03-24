@@ -45,6 +45,10 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
         assert "analysis_event_links" in after_tables
         assert "analysis_reports" in after_tables
         assert "analysis_generation_sessions" in after_tables
+        assert "analysis_evaluation_datasets" in after_tables
+        assert "analysis_evaluation_cases" in after_tables
+        assert "analysis_evaluation_runs" in after_tables
+        assert "analysis_evaluation_case_results" in after_tables
         assert "web_source_metadata_cache" in after_tables
         assert "user_watchlist_items" in after_tables
         assert "stock_watch_snapshots" in after_tables
@@ -86,6 +90,41 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
             )
 
         assert "anchor_event_id" in session_columns
+
+        async with engine.begin() as connection:
+            evaluation_run_columns = await connection.run_sync(
+                lambda sync_conn: {
+                    item["name"]
+                    for item in inspect(sync_conn).get_columns(
+                        "analysis_evaluation_runs"
+                    )
+                }
+            )
+            evaluation_result_columns = await connection.run_sync(
+                lambda sync_conn: {
+                    item["name"]
+                    for item in inspect(sync_conn).get_columns(
+                        "analysis_evaluation_case_results"
+                    )
+                }
+            )
+
+        assert "run_key" in evaluation_run_columns
+        assert "variant_key" in evaluation_run_columns
+        assert "prompt_profile_key" in evaluation_run_columns
+        assert "event_top1_hit_rate" in evaluation_run_columns
+        assert "factor_top1_accuracy" in evaluation_run_columns
+        assert "citation_metadata_completeness_rate" in evaluation_run_columns
+        assert "avg_latency_ms" in evaluation_run_columns
+
+        assert "event_top1_hit" in evaluation_result_columns
+        assert "factor_top1_hit" in evaluation_result_columns
+        assert "citation_metadata_completeness_rate" in evaluation_result_columns
+        assert "latency_ms" in evaluation_result_columns
+        assert "top_event_title" in evaluation_result_columns
+        assert "top_factor_key" in evaluation_result_columns
+        assert "web_source_count" in evaluation_result_columns
+        assert "result_snapshot" in evaluation_result_columns
 
         await engine.dispose()
 

@@ -217,13 +217,24 @@ Last update: 2026-03-24
   - `GET /api/analysis/stocks/{ts_code}/summary` and `GET /api/analysis/stocks/{ts_code}/reports` now perform read-time best-effort citation metadata backfill for legacy `web_sources`
   - Historical report reads now write enriched `source/published_at/domain/metadata_status` back to `analysis_reports.web_sources`
   - Added backend/frontend regression tests for candidate evidence caching, impact-map enhancement output, summary/reports read-time citation backfill, and history-report citation rendering
+- Completed admin evaluation center for thesis/demo experiments:
+  - Added `analysis_evaluation_datasets / cases / runs / case_results` four-table persistence for labeled experiment data
+  - Added dataset import script `backend/scripts/import_analysis_evaluation_dataset.py` and batch run script `backend/scripts/run_analysis_evaluation.py`
+  - Added fixed Prompt Profile comparison flow: `production_current` vs `evidence_first_v2`
+  - Added admin-only APIs `/api/admin/evaluations/catalog|overview|cases/{case_key}` for read-only experiment browsing
+  - Added frontend admin evaluation page `/admin/evaluations` with four metric cards, ECharts comparison, improved/regressed cases, empty-state CLI guidance, and case detail drawer
+  - Added default labeled dataset file `backend/data/evaluations/analysis_eval_dataset_v1.json`
+  - Added backend/frontend regression coverage for schema bootstrap, repository aggregation, admin routes, scripts, API client, admin console entry, and evaluation page rendering
 
 ## In Progress
 
-- None.
+- Feature branch `codex/evaluation-experiment-page`:
+  - Admin evaluation center V1 has been implemented on the feature branch and pushed for review, but it is **not finished and not merged**.
+  - Current branch status is archived in `docs/plans/2026-03-25-evaluation-experiment-page-branch-status.md`.
+  - Recommended next steps: refine labeled cases after the first evaluation run, add announcement-heavy cases, and polish thesis/demo export presentation.
 
 ## Next Suggested Items
 
-- Evaluate whether the next phase should prioritize THS concept-member enrichment or export/delivery tooling.
-- Phase 5 follow-up: enrich candidate evidence with hot-search / research-report source counts when third-party source quality is stable.
-- Phase 5 follow-up: parse and expose structured web-search citations in analysis reports.
+- 为实验页补“运行批次筛选排序 / 更多历史 run 对比”与“截图导出模板”，提升答辩材料复用效率。
+- 视数据质量决定是否引入 THS 概念成分股增强，继续提升热点候选股的结构化证据覆盖。
+- 评估是否补充报告导出与实验结果导出（Markdown / PDF / PPT）作为交付阶段功能。

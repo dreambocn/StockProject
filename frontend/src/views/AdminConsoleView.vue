@@ -18,6 +18,13 @@ const adminEntries = [
     titleKey: 'adminConsole.entries.stocks.title',
     noteKey: 'adminConsole.entries.stocks.note',
   },
+  {
+    key: 'evaluations',
+    to: '/admin/evaluations',
+    icon: '🧪',
+    titleKey: 'adminConsole.entries.evaluations.title',
+    noteKey: 'adminConsole.entries.evaluations.note',
+  },
 ]
 </script>
 
@@ -86,7 +93,7 @@ h1 {
 
 .entry-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
 }
 

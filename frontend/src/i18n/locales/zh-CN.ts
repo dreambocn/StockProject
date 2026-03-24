@@ -323,7 +323,7 @@ export default {
   adminConsole: {
     kicker: 'CONTROL HUB',
     title: '后台管理中心',
-    note: '统一进入后台管理功能，按职责分流到用户管理与股票管理。',
+    note: '统一进入后台管理功能，按职责分流到用户管理、股票管理与实验评估。',
     enter: '进入模块',
     entries: {
       users: {
@@ -334,7 +334,73 @@ export default {
         title: '股票管理中心',
         note: '按参数获取股票主数据全量信息并执行状态巡检。',
       },
+      evaluations: {
+        title: '实验评估中心',
+        note: '查看基线 Prompt 与优化 Prompt 的离线评估结果与典型样本。',
+      },
     },
+  },
+  adminEvaluations: {
+    kicker: 'EXPERIMENT CENTER',
+    title: '实验结果中心',
+    note: '只读展示人工标注样本上的 Prompt 对比结果，用于答辩截图与论文实验说明。',
+    filters: {
+      dataset: '数据集',
+      experimentGroup: '实验组',
+      baselineRun: '基线 Run',
+      candidateRun: '优化 Run',
+    },
+    summary: {
+      sampleCount: '样本数',
+      dateRange: '评估时间范围',
+      baseline: '基线方案',
+      candidate: '优化方案',
+    },
+    charts: {
+      metricCompare: '四维指标对比',
+      distribution: '样本结果分布',
+    },
+    sections: {
+      improved: '显著提升样本',
+      regressed: '明显退化样本',
+      recent: '最近样本',
+      detail: '样本详情',
+      baseline: '基线方案',
+      candidate: '优化方案',
+    },
+    empty: {
+      title: '暂无实验运行结果',
+      note: '请先导入人工标注样本集并执行批量评估脚本。',
+      importCommand: '导入样本集命令',
+      runCommand: '执行实验命令',
+    },
+    table: {
+      caseKey: '样本键',
+      tsCode: 'TS Code',
+      event: '标注锚点事件',
+      classification: '结果',
+      scoreDelta: '得分变化',
+      action: '查看详情',
+    },
+    classification: {
+      improved: '提升',
+      regressed: '退化',
+      unchanged: '持平',
+    },
+    detail: {
+      anchorEvent: '标注锚点事件',
+      expectedFactor: '期望 Top1 因子',
+      topic: '主题',
+      note: '人工备注',
+      topEvent: 'Top1 事件',
+      topFactor: 'Top1 因子',
+      citationRate: '引用完整率',
+      citationCount: '引用条数',
+      latency: '耗时',
+      score: '样本得分',
+      summary: '报告摘要摘录',
+    },
+    loading: '实验结果加载中...',
   },
   adminStocks: {
     kicker: 'MARKET CONTROL',

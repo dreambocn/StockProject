@@ -130,6 +130,7 @@ async def generate_stock_analysis_report(
     client: object | None = None,
     use_web_search: bool = False,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
+    prompt_profile_key: str = "production_current",
 ) -> AnalysisReportResult:
     factor_weight_list = list(factor_weights)
     event_list = list(events)
@@ -138,8 +139,11 @@ async def generate_stock_analysis_report(
         instrument_name=instrument_name,
         events=event_list,
         factor_weights=factor_weight_list,
+        prompt_profile_key=prompt_profile_key,
     )
-    system_instruction = build_analysis_system_instruction()
+    system_instruction = build_analysis_system_instruction(
+        prompt_profile_key=prompt_profile_key
+    )
     used_web_search = False
     web_search_status = "disabled"
     web_sources: list[dict[str, object]] = []

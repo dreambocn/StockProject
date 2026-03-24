@@ -1,4 +1,8 @@
 from app.models.analysis_generation_session import AnalysisGenerationSession
+from app.models.analysis_evaluation_case import AnalysisEvaluationCase
+from app.models.analysis_evaluation_case_result import AnalysisEvaluationCaseResult
+from app.models.analysis_evaluation_dataset import AnalysisEvaluationDataset
+from app.models.analysis_evaluation_run import AnalysisEvaluationRun
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
@@ -19,6 +23,10 @@ __all__ = [
     "UserWatchlistItem",
     "AnalysisEventLink",
     "AnalysisGenerationSession",
+    "AnalysisEvaluationDataset",
+    "AnalysisEvaluationCase",
+    "AnalysisEvaluationRun",
+    "AnalysisEvaluationCaseResult",
     "AnalysisReport",
     "NewsEvent",
     "StockInstrument",

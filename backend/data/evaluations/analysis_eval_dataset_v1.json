@@ -1,0 +1,249 @@
+{
+  "dataset_key": "analysis_eval_dataset_v1",
+  "label": "人工标注样本集 v1",
+  "description": "用于比较 production_current 与 evidence_first_v2 的多源事件驱动分析评估样本集（30 条人工标注样本）。",
+  "date_from": "2026-01-01",
+  "date_to": "2026-03-24",
+  "cases": [
+    {
+      "case_key": "liquor-policy-maotai-001",
+      "ts_code": "600519.SH",
+      "topic": "monetary_policy",
+      "anchor_event_title": "消费支持政策持续加码",
+      "expected_top_factor_key": "policy",
+      "notes": "观察高端白酒在政策催化下的事件跟随能力。"
+    },
+    {
+      "case_key": "liquor-policy-wuliangye-002",
+      "ts_code": "000858.SZ",
+      "topic": "monetary_policy",
+      "anchor_event_title": "白酒渠道去库存改善预期升温",
+      "expected_top_factor_key": "policy",
+      "notes": "验证消费链修复主题下的政策与新闻识别。"
+    },
+    {
+      "case_key": "bank-regulation-pingan-003",
+      "ts_code": "000001.SZ",
+      "topic": "regulation_policy",
+      "anchor_event_title": "银行监管边际收紧",
+      "expected_top_factor_key": "policy",
+      "notes": "关注银行板块在监管事件下的负向提示。"
+    },
+    {
+      "case_key": "insurance-regulation-pingan-004",
+      "ts_code": "601318.SH",
+      "topic": "regulation_policy",
+      "anchor_event_title": "保险资金权益配置规则优化",
+      "expected_top_factor_key": "policy",
+      "notes": "观察规则优化对保险龙头的主题映射。"
+    },
+    {
+      "case_key": "lithium-supply-catl-005",
+      "ts_code": "300750.SZ",
+      "topic": "commodity_supply",
+      "anchor_event_title": "碳酸锂供给波动再起",
+      "expected_top_factor_key": "news",
+      "notes": "用于检测新能源链在原材料波动下的新闻主导型事件。"
+    },
+    {
+      "case_key": "lithium-supply-byd-006",
+      "ts_code": "002594.SZ",
+      "topic": "commodity_supply",
+      "anchor_event_title": "锂价阶段反弹带动产业链预期修复",
+      "expected_top_factor_key": "news",
+      "notes": "验证整车链对上游原料事件的跟踪表现。"
+    },
+    {
+      "case_key": "copper-supply-zijin-007",
+      "ts_code": "601899.SH",
+      "topic": "commodity_supply",
+      "anchor_event_title": "铜矿供给扰动升温",
+      "expected_top_factor_key": "news",
+      "notes": "关注有色龙头在供给扰动主题中的 top event 命中。"
+    },
+    {
+      "case_key": "rareearth-policy-northern-008",
+      "ts_code": "600111.SH",
+      "topic": "regulation_policy",
+      "anchor_event_title": "稀土出口管理持续发酵",
+      "expected_top_factor_key": "policy",
+      "notes": "适合比较政策与公告证据排序。"
+    },
+    {
+      "case_key": "oil-geopolitical-petrochina-009",
+      "ts_code": "601857.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "国际油价上行与中东局势扰动",
+      "expected_top_factor_key": "news",
+      "notes": "验证地缘冲突主题下的原油事件绑定。"
+    },
+    {
+      "case_key": "offshore-oil-cnooc-010",
+      "ts_code": "600938.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "海上原油供给预期趋紧",
+      "expected_top_factor_key": "news",
+      "notes": "观察油气股对供给扰动的事件响应。"
+    },
+    {
+      "case_key": "shipping-geopolitical-cosco-011",
+      "ts_code": "601919.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "红海航线扰动推升运价预期",
+      "expected_top_factor_key": "news",
+      "notes": "适合展示外部事件对运价链的影响。"
+    },
+    {
+      "case_key": "coal-supply-shenhua-012",
+      "ts_code": "601088.SH",
+      "topic": "commodity_supply",
+      "anchor_event_title": "煤炭供给偏紧与价格中枢抬升",
+      "expected_top_factor_key": "news",
+      "notes": "用于对比资源品在供需事件中的识别准确率。"
+    },
+    {
+      "case_key": "gold-geopolitical-zhaojin-013",
+      "ts_code": "600489.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "避险情绪升温带动黄金配置需求",
+      "expected_top_factor_key": "sentiment",
+      "notes": "观察情绪因子是否能成为 top1。"
+    },
+    {
+      "case_key": "broker-policy-citic-014",
+      "ts_code": "600030.SH",
+      "topic": "monetary_policy",
+      "anchor_event_title": "资本市场活跃度提升政策再加码",
+      "expected_top_factor_key": "policy",
+      "notes": "用于金融权重股的政策映射验证。"
+    },
+    {
+      "case_key": "semiconductor-policy-smic-015",
+      "ts_code": "688981.SH",
+      "topic": "regulation_policy",
+      "anchor_event_title": "半导体自主可控支持政策强化",
+      "expected_top_factor_key": "policy",
+      "notes": "适合展示科技成长方向的政策因子权重。"
+    },
+    {
+      "case_key": "power-grid-xd-016",
+      "ts_code": "601179.SH",
+      "topic": "regulation_policy",
+      "anchor_event_title": "特高压投资节奏加快",
+      "expected_top_factor_key": "policy",
+      "notes": "验证电网设备受政策投资驱动的链路。"
+    },
+    {
+      "case_key": "pv-supply-longi-017",
+      "ts_code": "601012.SH",
+      "topic": "commodity_supply",
+      "anchor_event_title": "硅料价格波动扰动光伏盈利预期",
+      "expected_top_factor_key": "news",
+      "notes": "检查新能源制造链对原料波动的识别。"
+    },
+    {
+      "case_key": "aviation-oil-southern-018",
+      "ts_code": "600029.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "原油上行抬升航空成本压力",
+      "expected_top_factor_key": "news",
+      "notes": "用于负向成本冲击样本。"
+    },
+    {
+      "case_key": "food-policy-yili-019",
+      "ts_code": "600887.SH",
+      "topic": "monetary_policy",
+      "anchor_event_title": "内需刺激政策预期强化乳业消费修复",
+      "expected_top_factor_key": "policy",
+      "notes": "观察消费防御板块的政策敏感度。"
+    },
+    {
+      "case_key": "steel-supply-baosteel-020",
+      "ts_code": "600019.SH",
+      "topic": "commodity_supply",
+      "anchor_event_title": "铁矿石价格波动加剧钢铁盈利分化",
+      "expected_top_factor_key": "news",
+      "notes": "用于周期股供给扰动案例展示。"
+    },
+    {
+      "case_key": "robot-policy-inovance-021",
+      "ts_code": "300124.SZ",
+      "topic": "regulation_policy",
+      "anchor_event_title": "智能制造支持政策持续加码",
+      "expected_top_factor_key": "policy",
+      "notes": "观察高端装备在制造升级政策下的事件映射稳定性。"
+    },
+    {
+      "case_key": "machinery-policy-sany-022",
+      "ts_code": "600031.SH",
+      "topic": "monetary_policy",
+      "anchor_event_title": "专项债投放提速带动工程机械需求修复",
+      "expected_top_factor_key": "policy",
+      "notes": "适合展示稳增长主题向工程机械板块的传导。"
+    },
+    {
+      "case_key": "appliance-policy-midea-023",
+      "ts_code": "000333.SZ",
+      "topic": "monetary_policy",
+      "anchor_event_title": "以旧换新政策扩围带动家电消费预期升温",
+      "expected_top_factor_key": "policy",
+      "notes": "用于验证内需刺激政策对家电龙头的映射表现。"
+    },
+    {
+      "case_key": "gold-sentiment-shandong-024",
+      "ts_code": "600547.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "地缘扰动推升贵金属避险需求",
+      "expected_top_factor_key": "sentiment",
+      "notes": "补充第二个避险情绪主导样本，便于观察情绪因子是否能稳定上升到 top1。"
+    },
+    {
+      "case_key": "fertilizer-supply-yuntianhua-025",
+      "ts_code": "600096.SH",
+      "topic": "commodity_supply",
+      "anchor_event_title": "尿素供给收缩抬升化肥价格弹性",
+      "expected_top_factor_key": "news",
+      "notes": "用于农业上游原材料供给扰动样本。"
+    },
+    {
+      "case_key": "gas-geopolitical-sinopec-026",
+      "ts_code": "600028.SH",
+      "topic": "geopolitical_conflict",
+      "anchor_event_title": "国际能源价格走强推升油气链景气预期",
+      "expected_top_factor_key": "news",
+      "notes": "用于对比油气链与航运链在地缘冲突主题中的表现。"
+    },
+    {
+      "case_key": "storage-policy-sungrow-027",
+      "ts_code": "300274.SZ",
+      "topic": "regulation_policy",
+      "anchor_event_title": "新能源消纳政策优化强化储能配套需求",
+      "expected_top_factor_key": "policy",
+      "notes": "观察新能源电力设备在政策优化下的受益逻辑是否被准确识别。"
+    },
+    {
+      "case_key": "broker-sentiment-orient-028",
+      "ts_code": "601211.SH",
+      "topic": "monetary_policy",
+      "anchor_event_title": "风险偏好修复带动券商板块情绪升温",
+      "expected_top_factor_key": "sentiment",
+      "notes": "补充金融链的情绪主导样本，避免情绪因子只集中在黄金板块。"
+    },
+    {
+      "case_key": "rail-policy-crrc-029",
+      "ts_code": "601766.SH",
+      "topic": "regulation_policy",
+      "anchor_event_title": "轨道交通投资节奏回升提振装备需求",
+      "expected_top_factor_key": "policy",
+      "notes": "用于基建投资链在政策发力场景下的样本对比。"
+    },
+    {
+      "case_key": "agriculture-supply-beidahuang-030",
+      "ts_code": "600598.SH",
+      "topic": "commodity_supply",
+      "anchor_event_title": "粮食供应扰动提升种植链景气预期",
+      "expected_top_factor_key": "news",
+      "notes": "补充农业方向的供给冲击样本，增强行业覆盖完整度。"
+    }
+  ]
+}

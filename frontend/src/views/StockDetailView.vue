@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
@@ -686,9 +686,23 @@ const toggleWatchlist = async () => {
   }
 }
 
-onMounted(async () => {
-  await loadData()
-})
+watch(
+  () => tsCode.value,
+  () => {
+    // 关键状态流转：切换股票时先清空旧关注态，避免上一只股票的按钮状态短暂残留。
+    watchlistItem.value = null
+    void loadData()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => authStore.accessToken,
+  () => {
+    // 登录态通常由 App 在子页面挂载后异步恢复，因此详情页要在 token 就绪后补拉一次关注状态。
+    void loadWatchlistState()
+  },
+)
 </script>
 
 <template>

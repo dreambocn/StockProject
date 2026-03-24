@@ -74,6 +74,10 @@
 - 完成 Pinia 认证状态管理（含 token 持久化与会话恢复）。
 - 新增后台管理页（统一终端风格）：用户列表 + 管理员创建用户表单。
 - 新增后台管理中枢页：点击“后台管理”后统一进入功能分发页，再跳转到用户管理/股票管理。
+- 新增管理员实验评估页 `/admin/evaluations`：
+  - 只读展示人工标注样本集上的离线评估结果
+  - 默认对比 `production_current` 与 `evidence_first_v2`
+  - 展示四维指标卡片、ECharts 对比图、改善/退化样本与案例详情抽屉
 - 新增后台股票管理页（统一终端风格）：
   - 管理员可按关键词与状态进行数据库分页查询
   - 新增“按参数获取全量”按钮与参数快捷键（ALL/L/D/P/G），触发服务端全量入库
@@ -119,8 +123,10 @@
 - `backend/app/core/settings.py`：环境配置解析
 - `backend/app/integrations/tushare_gateway.py`：Tushare 数据网关
 - `backend/app/services/watchlist_worker_service.py`：关注列表 Worker 去重、归档与日任务编排
-- `backend/scripts/run_watchlist_worker.py`：关注列表定时 Worker 启动脚本
-- `backend/scripts/run_analysis_worker.py`：分析会话队列 Worker 启动脚本
+- `backend/scripts/run_watchlist_worker.py`：关注列表定时 Worker 启动脚本       
+- `backend/scripts/run_analysis_worker.py`：分析会话队列 Worker 启动脚本        
+- `backend/scripts/import_analysis_evaluation_dataset.py`：导入人工标注评估样本集
+- `backend/scripts/run_analysis_evaluation.py`：批量执行 baseline/optimized Prompt 对比实验
 
 ## 快速启动
 
@@ -247,9 +253,33 @@ uv run python scripts/run_analysis_worker.py
 
 说明：
 
-- Worker 启动时会先执行 `ensure_database_schema()`，保证数据库结构就绪。
+- Worker 启动时会先执行 `ensure_database_schema()`，保证数据库结构就绪。        
 - Worker 每轮按 `ANALYSIS_WORKER_POLL_INTERVAL_SECONDS` 轮询领取任务。
 - Worker 优先领取 `queued`，随后自动回收超过 `ANALYSIS_RUNNING_STALE_SECONDS` 的 `running` 会话并重跑。
+
+### 导入评估样本集
+
+```powershell
+Set-Location .\backend
+uv run python scripts\import_analysis_evaluation_dataset.py
+```
+
+说明：
+
+- 默认导入 `backend\data\evaluations\analysis_eval_dataset_v1.json`
+- 会按 `dataset_key + case_key` 幂等更新样本集与标注样本
+
+### 执行评估实验
+
+```powershell
+Set-Location .\backend
+uv run python scripts\run_analysis_evaluation.py --dataset-key analysis_eval_dataset_v1 --experiment-group-key prompt_profile_compare_v1
+```
+
+说明：
+
+- 默认执行 `production_current`（baseline）与 `evidence_first_v2`（optimized）两套 Prompt Profile
+- 结果会写入 `analysis_evaluation_*` 四张评估表，供 `/api/admin/evaluations` 与前端实验页直接读取
 
 ## Auth API 列表
 
@@ -271,6 +301,9 @@ uv run python scripts/run_analysis_worker.py
 - `POST /api/admin/users`（需 admin）
 - `POST /api/admin/stocks/full`（需 admin；支持 `list_status`，默认 `ALL`；执行全量同步并入库）
 - `GET /api/admin/stocks`（需 admin；支持 `keyword/list_status/page/page_size`，默认分页 `page=1&page_size=20`）
+- `GET /api/admin/evaluations/catalog`（需 admin；返回数据集、实验组与可选 run 列表）
+- `GET /api/admin/evaluations/overview`（需 admin；返回默认或指定 run 对比总览）
+- `GET /api/admin/evaluations/cases/{case_key}`（需 admin；返回单样本 baseline/optimized 详情）
 
 ## Health API 列表
 
