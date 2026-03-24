@@ -279,9 +279,9 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.beneficiarySectors') }}:</strong> {{ profile.beneficiary_sectors.join(' / ') }}</p>
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.pressureSectors') }}:</strong> {{ profile.pressure_sectors.join(' / ') }}</p>
           <p class="impact-row"><strong>{{ t('hotNews.impactPanel.targets') }}:</strong> {{ profile.a_share_targets.join(' / ') }}</p>
-          <p class="impact-row">
-            <strong>{{ t('hotNews.impactPanel.candidates') }}:</strong>
-            <span v-if="profile.a_share_candidates.length > 0" class="impact-candidate-list">
+          <div class="impact-row impact-candidate-row">
+            <strong class="impact-candidate-label">{{ t('hotNews.impactPanel.candidates') }}:</strong>
+            <div v-if="profile.a_share_candidates.length > 0" class="impact-candidate-list">
               <article
                 v-for="candidate in profile.a_share_candidates"
                 :key="candidate.ts_code"
@@ -343,9 +343,9 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
                   </article>
                 </div>
               </article>
-            </span>
+            </div>
             <span v-else>--</span>
-          </p>
+          </div>
         </article>
       </div>
     </section>
@@ -454,9 +454,14 @@ h1 {
 }
 
 .impact-candidate-list {
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
   gap: 0.32rem;
+  margin-top: 0.35rem;
+}
+
+.impact-candidate-label {
+  display: inline-block;
 }
 
 .impact-candidate-item {
