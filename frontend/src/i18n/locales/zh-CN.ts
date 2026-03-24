@@ -182,6 +182,12 @@ export default {
       disabled: '未启用联网增强',
       unsupported: '网关不支持已回退',
     },
+    webSourceMissingTime: '时间待补全',
+    webSourceStatusText: {
+      enriched: '已补全',
+      domain_inferred: '域名推断',
+      unavailable: '信息缺失',
+    },
     error: '分析数据拉取失败，请稍后重试',
   },
   watchlist: {

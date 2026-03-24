@@ -49,7 +49,15 @@ export type AnalysisReportResponse = {
   started_at?: string | null
   completed_at?: string | null
   content_format?: 'markdown'
-  web_sources?: Array<{ title?: string; url?: string; source?: string; published_at?: string | null; snippet?: string | null }>
+  web_sources?: Array<{
+    title?: string
+    url?: string
+    source?: string
+    published_at?: string | null
+    snippet?: string | null
+    domain?: string | null
+    metadata_status?: 'enriched' | 'domain_inferred' | 'unavailable'
+  }>
 }
 
 export type StockAnalysisSummaryResponse = {

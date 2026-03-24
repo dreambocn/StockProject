@@ -148,6 +148,11 @@ const translateWebSearchStatus = (value: string | null | undefined) => {
   return t(`analysisWorkbench.webSearchStatusText.${normalizedValue}`, normalizedValue)
 }
 
+const translateWebSourceMetadataStatus = (value: string | null | undefined) => {
+  const normalizedValue = value || 'unavailable'
+  return t(`analysisWorkbench.webSourceStatusText.${normalizedValue}`, normalizedValue)
+}
+
 const confidenceRank = (value: string | null | undefined) => {
   if (value === 'high') {
     return 3
@@ -771,7 +776,15 @@ watch(
                     rel="noreferrer noopener"
                   >
                     <strong>{{ webSource.title ?? webSource.url }}</strong>
-                    <span v-if="webSource.source">{{ webSource.source }}</span>
+                    <span>
+                      {{ webSource.source || webSource.domain || t('analysisWorkbench.dataMissing') }}
+                      ·
+                      {{ webSource.published_at ? formatDateTime(webSource.published_at) : t('analysisWorkbench.webSourceMissingTime') }}
+                    </span>
+                    <span v-if="webSource.domain">{{ webSource.domain }}</span>
+                    <span class="analysis-token">
+                      {{ translateWebSourceMetadataStatus(webSource.metadata_status) }}
+                    </span>
                     <span v-if="webSource.snippet">{{ webSource.snippet }}</span>
                   </a>
                 </div>

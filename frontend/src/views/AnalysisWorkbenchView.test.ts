@@ -634,6 +634,17 @@ describe('AnalysisWorkbenchView', () => {
             source: 'Reuters',
             published_at: '2026-03-23T08:05:00Z',
             snippet: '市场继续关注供给端扰动。',
+            domain: 'finance.example.com',
+            metadata_status: 'enriched',
+          },
+          {
+            title: '补充链接',
+            url: 'https://unknown.example.com/report',
+            source: 'unknown.example.com',
+            published_at: null,
+            snippet: null,
+            domain: 'unknown.example.com',
+            metadata_status: 'domain_inferred',
           },
         ],
       },
@@ -649,6 +660,10 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).toContain('国际油价收涨')
     expect(wrapper.text()).toContain('Reuters')
     expect(wrapper.text()).toContain('市场继续关注供给端扰动')
+    expect(wrapper.text()).toContain('finance.example.com')
+    expect(wrapper.text()).toContain('补充链接')
+    expect(wrapper.text()).toContain('unknown.example.com')
+    expect(wrapper.text()).toContain('时间待补全')
     expect(wrapper.get('[data-testid="analysis-markdown"]').html()).toContain('核心判断')
     const citationLink = wrapper.find('a[href="https://finance.example.com/oil"]')
     expect(citationLink.exists()).toBe(true)

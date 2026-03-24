@@ -183,6 +183,12 @@ export default {
       disabled: 'Web search disabled',
       unsupported: 'Gateway fallback without web search',
     },
+    webSourceMissingTime: 'Time unavailable',
+    webSourceStatusText: {
+      enriched: 'Enriched',
+      domain_inferred: 'Domain inferred',
+      unavailable: 'Unavailable',
+    },
     error: 'Failed to load analysis data. Please try again later.',
   },
   watchlist: {
