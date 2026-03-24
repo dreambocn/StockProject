@@ -12,6 +12,8 @@ import AdminConsoleView from './views/AdminConsoleView.vue'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  localStorage.clear()
 })
 
 describe('App', () => {
@@ -186,5 +188,115 @@ describe('App', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(wrapper.text()).toContain('后台管理')
     expect(wrapper.text()).not.toContain('股票管理')
+  })
+
+  it('keeps current stock context when opening analysis from the top nav', async () => {
+    setAppLocale('zh-CN')
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [],
+      }),
+    )
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: HomeView },
+        { path: '/analysis', component: HomeView },
+        { path: '/watchlist', component: HomeView },
+        { path: '/profile', component: HomeView },
+        { path: '/login', component: HomeView },
+        { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/news/hot', component: HomeView },
+      ],
+    })
+    await router.push({
+      path: '/stocks/600000.SH',
+      query: {
+        source: 'hot_news',
+        topic: 'commodity_supply',
+        event_id: 'evt-hot-1',
+        event_title: '国际油价高位震荡',
+      },
+    })
+    await router.isReady()
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    const analysisLink = wrapper
+      .findAll('a')
+      .find((item) => item.text().includes('分析'))
+    expect(analysisLink).toBeDefined()
+
+    await analysisLink!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(router.currentRoute.value.path).toBe('/analysis')
+    expect(router.currentRoute.value.query.ts_code).toBe('600000.SH')
+    expect(router.currentRoute.value.query.source).toBe('hot_news')
+    expect(router.currentRoute.value.query.topic).toBe('commodity_supply')
+    expect(router.currentRoute.value.query.event_id).toBe('evt-hot-1')
+    expect(router.currentRoute.value.query.event_title).toBe('国际油价高位震荡')
+  })
+
+  it('reuses the last focused analysis context from the top nav', async () => {
+    setAppLocale('zh-CN')
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [],
+      }),
+    )
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: HomeView },
+        { path: '/analysis', component: HomeView },
+        { path: '/watchlist', component: HomeView },
+        { path: '/profile', component: HomeView },
+        { path: '/login', component: HomeView },
+        { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/news/hot', component: HomeView },
+      ],
+    })
+    await router.push({
+      path: '/analysis',
+      query: {
+        ts_code: '600519.SH',
+        source: 'watchlist',
+      },
+    })
+    await router.isReady()
+
+    const wrapper = mount(App, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await router.push('/')
+    await router.isReady()
+
+    const analysisLink = wrapper
+      .findAll('a')
+      .find((item) => item.text().includes('分析'))
+    expect(analysisLink).toBeDefined()
+
+    await analysisLink!.trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(router.currentRoute.value.path).toBe('/analysis')
+    expect(router.currentRoute.value.query.ts_code).toBe('600519.SH')
+    expect(router.currentRoute.value.query.source).toBe('watchlist')
   })
 })

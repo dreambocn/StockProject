@@ -1,14 +1,86 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { RouterView, useRouter } from 'vue-router'
+import { computed, onMounted, watch } from 'vue'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { i18n, setAppLocale, type AppLocale } from './i18n'
 import { useAuthStore } from './stores/auth'
 
 const authStore = useAuthStore()
+const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+const LAST_ANALYSIS_CONTEXT_KEY = 'app.last-analysis-context'
+
+type AnalysisNavContext = {
+  ts_code: string
+  source?: string
+  topic?: string
+  event_id?: string
+  event_title?: string
+}
+
+const readQueryText = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return String(value[0] ?? '').trim()
+  }
+  return String(value ?? '').trim()
+}
+
+const buildAnalysisContext = (payload: {
+  tsCode?: string
+  source?: string
+  topic?: string
+  eventId?: string
+  eventTitle?: string
+}): AnalysisNavContext | null => {
+  const normalizedTsCode = String(payload.tsCode ?? '').trim().toUpperCase()
+  if (!normalizedTsCode) {
+    return null
+  }
+
+  return {
+    ts_code: normalizedTsCode,
+    source: payload.source || undefined,
+    topic: payload.topic || undefined,
+    event_id: payload.eventId || undefined,
+    event_title: payload.eventTitle || undefined,
+  }
+}
+
+const persistAnalysisContext = (context: AnalysisNavContext | null) => {
+  if (!context || typeof window === 'undefined' || !window.localStorage) {
+    return
+  }
+  try {
+    // 顶栏“分析”需要能回到最近一次有上下文的分析工作台，避免用户被空白工作台打断。
+    window.localStorage.setItem(LAST_ANALYSIS_CONTEXT_KEY, JSON.stringify(context))
+  } catch {
+    return
+  }
+}
+
+const readPersistedAnalysisContext = () => {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null
+  }
+  try {
+    const rawValue = window.localStorage.getItem(LAST_ANALYSIS_CONTEXT_KEY)
+    if (!rawValue) {
+      return null
+    }
+    const parsedValue = JSON.parse(rawValue) as Partial<AnalysisNavContext>
+    return buildAnalysisContext({
+      tsCode: parsedValue.ts_code,
+      source: parsedValue.source,
+      topic: parsedValue.topic,
+      eventId: parsedValue.event_id,
+      eventTitle: parsedValue.event_title,
+    })
+  } catch {
+    return null
+  }
+}
 
 const localeOptions: Array<{ label: string; value: AppLocale }> = [
   { label: '中文', value: 'zh-CN' },
@@ -35,11 +107,56 @@ const authActionLabel = computed(() =>
 )
 
 const showAdminNav = computed(() => authStore.isAdmin)
+const stockDetailAnalysisContext = computed(() => {
+  if (!route.path.startsWith('/stocks/')) {
+    return null
+  }
+  return buildAnalysisContext({
+    tsCode: String(route.params.tsCode ?? ''),
+    source: readQueryText(route.query.source) === 'hot_news' ? 'hot_news' : 'stock_detail',
+    topic: readQueryText(route.query.topic),
+    eventId: readQueryText(route.query.event_id),
+    eventTitle: readQueryText(route.query.event_title),
+  })
+})
+const currentAnalysisContext = computed(() => {
+  if (route.path !== '/analysis') {
+    return null
+  }
+  return buildAnalysisContext({
+    tsCode: readQueryText(route.query.ts_code),
+    source: readQueryText(route.query.source),
+    topic: readQueryText(route.query.topic),
+    eventId: readQueryText(route.query.event_id),
+    eventTitle: readQueryText(route.query.event_title),
+  })
+})
+const analysisNavTarget = computed(() => {
+  const resolvedContext =
+    stockDetailAnalysisContext.value
+    ?? currentAnalysisContext.value
+    ?? readPersistedAnalysisContext()
+  if (!resolvedContext) {
+    return '/analysis'
+  }
+  return {
+    path: '/analysis',
+    query: resolvedContext,
+  }
+})
 
 onMounted(async () => {
   // 应用启动时先恢复会话，避免首屏出现登录态闪烁。
   await authStore.initialize()
 })
+
+watch(
+  () => currentAnalysisContext.value,
+  (context) => {
+    persistAnalysisContext(context)
+  },
+  { immediate: true },
+)
 
 const handleAuthAction = async () => {
   // 顶部按钮根据当前登录态执行“登出”或“去登录”两种分支。
@@ -70,7 +187,7 @@ const handleAuthAction = async () => {
       <nav class="terminal-nav">
         <router-link to="/">{{ t('nav.dashboard') }}</router-link>
         <router-link to="/news/hot">{{ t('nav.hotNews') }}</router-link>
-        <router-link to="/analysis">{{ t('nav.analysis') }}</router-link>
+        <router-link :to="analysisNavTarget">{{ t('nav.analysis') }}</router-link>
         <router-link to="/watchlist">{{ t('nav.watchlist') }}</router-link>
         <router-link v-if="showAdminNav" to="/admin">{{ t('nav.admin') }}</router-link>
         <router-link to="/profile">{{ t('nav.profile') }}</router-link>
