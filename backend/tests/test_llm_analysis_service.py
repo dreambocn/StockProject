@@ -105,6 +105,7 @@ def test_llm_analysis_service_sanitizes_agentic_output(monkeypatch) -> None:
             instrument_name="贵州茅台",
             events=[{"title": "政策鼓励消费"}],
             factor_weights=[FactorWeight("policy", "政策", 0.5, "positive", [], "基于政策")],
+            session=object(),
             use_web_search=True,
         )
         assert "准备先查看仓库根目录" not in result.summary
@@ -209,5 +210,75 @@ def test_llm_analysis_service_keeps_streaming_web_sources(monkeypatch) -> None:
         assert deltas
         assert result.web_sources[0]["title"] == "国际油价收涨"
         assert result.web_sources[0]["source"] == "Reuters"
+
+    asyncio.run(run_test())
+
+
+def test_llm_analysis_service_enriches_web_source_metadata(monkeypatch) -> None:
+    async def fake_generator(
+        prompt: str,
+        client=None,
+        system_instruction=None,
+        max_output_tokens=512,
+        use_web_search=False,
+    ):
+        _ = prompt, client, system_instruction, max_output_tokens, use_web_search
+        class FakeResult:
+            text = "模拟中文分析摘要"
+            used_web_search = True
+            web_search_status = "used"
+            web_sources = [
+                {
+                    "title": "国际油价收涨",
+                    "url": "https://finance.example.com/oil",
+                    "source": None,
+                    "published_at": None,
+                    "snippet": "市场继续关注供给端扰动。",
+                }
+            ]
+
+        return FakeResult()
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = session, http_client, timeout_seconds, success_ttl_seconds, failure_ttl_seconds, max_bytes
+        return [
+            {
+                **raw_sources[0],
+                "source": "Reuters",
+                "published_at": "2026-03-24T09:30:00+00:00",
+                "domain": "finance.example.com",
+                "metadata_status": "enriched",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.services.llm_analysis_service.generate_llm_result", fake_generator
+    )
+    monkeypatch.setattr(
+        "app.services.llm_analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    async def run_test():
+        result = await generate_stock_analysis_report(
+            ts_code="600519.SH",
+            instrument_name="贵州茅台",
+            events=[{"title": "政策鼓励消费"}],
+            factor_weights=[FactorWeight("policy", "政策", 0.5, "positive", [], "基于政策")],
+            session=object(),
+            use_web_search=True,
+        )
+        assert result.web_sources[0]["source"] == "Reuters"
+        assert result.web_sources[0]["published_at"] == "2026-03-24T09:30:00+00:00"
+        assert result.web_sources[0]["metadata_status"] == "enriched"
 
     asyncio.run(run_test())

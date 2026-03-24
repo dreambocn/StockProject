@@ -45,6 +45,7 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
         assert "analysis_event_links" in after_tables
         assert "analysis_reports" in after_tables
         assert "analysis_generation_sessions" in after_tables
+        assert "web_source_metadata_cache" in after_tables
         assert "user_watchlist_items" in after_tables
         assert "stock_watch_snapshots" in after_tables
         assert "event_type" in news_columns

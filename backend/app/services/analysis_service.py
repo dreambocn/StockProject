@@ -480,6 +480,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 instrument_name=instrument.name,
                 events=event_payloads,
                 factor_weights=factor_weights,
+                session=session,
                 use_web_search=session_row.use_web_search,
                 on_delta=on_delta,
             )

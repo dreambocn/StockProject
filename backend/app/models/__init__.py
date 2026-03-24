@@ -11,6 +11,7 @@ from app.models.stock_trade_calendar import StockTradeCalendar
 from app.models.stock_watch_snapshot import StockWatchSnapshot
 from app.models.user import User
 from app.models.user_watchlist_item import UserWatchlistItem
+from app.models.web_source_metadata_cache import WebSourceMetadataCache
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "StockKlineBar",
     "StockSyncCursor",
     "StockWatchSnapshot",
+    "WebSourceMetadataCache",
 ]

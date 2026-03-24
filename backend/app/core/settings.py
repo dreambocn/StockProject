@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     llm_reasoning_effort: str = "high"
     llm_stream_enabled: bool = True
     llm_web_search_enabled: bool = False
+    web_source_metadata_timeout_seconds: int = 3
+    web_source_metadata_cache_ttl_seconds: int = 86400
+    web_source_metadata_failure_ttl_seconds: int = 7200
+    web_source_metadata_max_bytes: int = 524288
     analysis_active_session_ttl_seconds: int = 300
     analysis_report_freshness_minutes: int = 60
     init_admin_username: str = ""

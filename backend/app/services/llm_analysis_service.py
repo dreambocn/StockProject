@@ -3,12 +3,15 @@ from datetime import datetime, UTC
 import re
 from typing import Awaitable, Callable, Iterable
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.services.analysis_prompt_service import (
     build_analysis_prompt,
     build_analysis_system_instruction,
 )
 from app.services.factor_weight_service import FactorWeight
 from app.services.llm_client_service import generate_llm_result, generate_streamed_llm_result
+from app.services.web_source_metadata_service import enrich_web_sources
 
 
 @dataclass
@@ -123,6 +126,7 @@ async def generate_stock_analysis_report(
     events: Iterable[dict[str, object]],
     factor_weights: Iterable[FactorWeight],
     *,
+    session: AsyncSession | None = None,
     client: object | None = None,
     use_web_search: bool = False,
     on_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -184,6 +188,12 @@ async def generate_stock_analysis_report(
         if use_web_search and web_search_status == "disabled":
             web_search_status = "unsupported"
             used_web_search = False
+
+    if web_sources and session is not None:
+        web_sources = await enrich_web_sources(
+            session=session,
+            raw_sources=web_sources,
+        )
 
     factor_breakdown = [
         {
