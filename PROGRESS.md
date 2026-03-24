@@ -1,6 +1,6 @@
 # Project Progress
 
-Last update: 2026-03-24
+Last update: 2026-03-25
 
 ## Completed
 
@@ -217,6 +217,12 @@ Last update: 2026-03-24
   - `GET /api/analysis/stocks/{ts_code}/summary` and `GET /api/analysis/stocks/{ts_code}/reports` now perform read-time best-effort citation metadata backfill for legacy `web_sources`
   - Historical report reads now write enriched `source/published_at/domain/metadata_status` back to `analysis_reports.web_sources`
   - Added backend/frontend regression tests for candidate evidence caching, impact-map enhancement output, summary/reports read-time citation backfill, and history-report citation rendering
+- Completed `news_events` archive-view split refactor:
+  - `hot` / `policy` / `stock` news writes now append archived batches instead of deleting older rows
+  - `GET /api/news/hot`、`GET /api/news/policy`、`GET /api/stocks/{ts_code}/news` now read only the latest `fetched_at` batch to preserve existing page semantics
+  - `GET /api/news/events` now defaults to `batch_mode=latest` logical-event dedupe and supports explicit `batch_mode=all` for archived history playback
+  - Analysis event reads now dedupe archived versions to avoid historical batches duplicating evidence in AI workflows
+  - Added composite `news_events` indexes plus repository/API/analysis regression coverage for archive reads and latest/all behavior
 
 ## In Progress
 

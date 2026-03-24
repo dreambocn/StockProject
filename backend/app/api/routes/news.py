@@ -53,6 +53,7 @@ SUPPORTED_MACRO_TOPICS = {
     "other",
 }
 SUPPORTED_NEWS_SCOPES = {"hot", "stock", "policy"}
+SUPPORTED_BATCH_MODES = {"latest", "all"}
 
 
 @router.get("/news/hot", response_model=list[HotNewsItemResponse])
@@ -175,6 +176,7 @@ async def get_news_events(
     scope: str | None = Query(default=None),
     ts_code: str | None = Query(default=None),
     topic: str | None = Query(default=None),
+    batch_mode: str = Query(default="latest"),
     published_from: datetime | None = Query(default=None),
     published_to: datetime | None = Query(default=None),
     page: int = Query(default=1, ge=1),
@@ -190,10 +192,16 @@ async def get_news_events(
 
     normalized_ts_code = ts_code.strip().upper() if ts_code else None
     normalized_topic = topic.strip().lower() if topic else None
+    normalized_batch_mode = batch_mode.strip().lower() or "latest"
     if normalized_topic and normalized_topic not in SUPPORTED_MACRO_TOPICS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="invalid topic filter",
+        )
+    if normalized_batch_mode not in SUPPORTED_BATCH_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="invalid batch_mode filter",
         )
 
     if (
@@ -209,7 +217,7 @@ async def get_news_events(
     offset = (page - 1) * page_size
 
     # 关键流程：该接口直接读取持久化新闻事件，给 AI 分析与离线回放提供稳定数据源，
-    # 不触发任何三方回源，避免分析场景受到实时接口波动影响。
+    # 不触发任何三方回源；默认返回去重后的最新视图，需要全量历史时显式使用 batch_mode=all。
     return await query_news_events(
         session=session,
         scope=normalized_scope,
@@ -219,6 +227,7 @@ async def get_news_events(
         published_to=published_to,
         limit=page_size,
         offset=offset,
+        batch_mode=normalized_batch_mode,
     )
 
 

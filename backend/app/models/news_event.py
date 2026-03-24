@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Float, String, Text
+from sqlalchemy import DateTime, Float, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -9,6 +9,27 @@ from app.db.base import Base
 
 class NewsEvent(Base):
     __tablename__ = "news_events"
+    __table_args__ = (
+        Index(
+            "ix_news_events_scope_cache_variant_fetched_at",
+            "scope",
+            "cache_variant",
+            "fetched_at",
+        ),
+        Index(
+            "ix_news_events_scope_ts_code_cache_variant_fetched_at",
+            "scope",
+            "ts_code",
+            "cache_variant",
+            "fetched_at",
+        ),
+        Index(
+            "ix_news_events_scope_cluster_key_fetched_at",
+            "scope",
+            "cluster_key",
+            "fetched_at",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())

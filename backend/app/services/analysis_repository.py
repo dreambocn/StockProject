@@ -10,6 +10,10 @@ from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
+from app.services.news_repository import (
+    build_news_event_logical_key,
+    dedupe_news_events_to_latest,
+)
 
 
 def _normalize_event_tags(raw: str | None) -> list[str]:
@@ -86,37 +90,47 @@ async def load_recent_news_events(
         statement = statement.where(NewsEvent.published_at <= published_to)
 
     statement = statement.order_by(
-        NewsEvent.published_at.desc(), NewsEvent.created_at.desc()
-    ).limit(limit)
+        NewsEvent.fetched_at.desc(),
+        NewsEvent.created_at.desc(),
+        NewsEvent.published_at.desc(),
+    )
     rows = (await session.execute(statement)).scalars().all()
+    rows = dedupe_news_events_to_latest(rows)
 
     if not anchor_event_id:
-        return rows
+        return rows[:limit]
 
     anchor_row = await session.get(NewsEvent, anchor_event_id)
     if anchor_row is None:
-        return rows
+        return rows[:limit]
 
     ordered_rows: list[NewsEvent] = [anchor_row]
-    seen_ids = {anchor_row.id}
+    seen_keys = {build_news_event_logical_key(anchor_row)}
     if anchor_row.cluster_key:
         sibling_statement = (
             select(NewsEvent)
             .where(NewsEvent.cluster_key == anchor_row.cluster_key)
-            .order_by(NewsEvent.source_priority.desc(), NewsEvent.published_at.desc())
+            .order_by(
+                NewsEvent.fetched_at.desc(),
+                NewsEvent.source_priority.desc(),
+                NewsEvent.published_at.desc(),
+            )
         )
         sibling_rows = (await session.execute(sibling_statement)).scalars().all()
+        sibling_rows = dedupe_news_events_to_latest(sibling_rows)
         for sibling in sibling_rows:
-            if sibling.id in seen_ids:
+            logical_key = build_news_event_logical_key(sibling)
+            if logical_key in seen_keys:
                 continue
             ordered_rows.append(sibling)
-            seen_ids.add(sibling.id)
+            seen_keys.add(logical_key)
 
     for row in rows:
-        if row.id in seen_ids:
+        logical_key = build_news_event_logical_key(row)
+        if logical_key in seen_keys:
             continue
         ordered_rows.append(row)
-        seen_ids.add(row.id)
+        seen_keys.add(logical_key)
 
     return ordered_rows[:limit]
 

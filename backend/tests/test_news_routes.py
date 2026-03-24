@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
 import app.api.routes.news as news_routes
+import app.api.routes.stocks as stocks_routes
 from app.models.news_event import NewsEvent
 from app.models.stock_instrument import StockInstrument
 from app.schemas.news import (
@@ -95,8 +97,6 @@ def news_client(tmp_path: Path) -> TestClient:
                         delist_date=None,
                         is_hs="N",
                     ),
-                    NewsEvent(
-                        scope="stock",
                     StockInstrument(
                         ts_code="600900.SH",
                         symbol="600900",
@@ -139,6 +139,8 @@ def news_client(tmp_path: Path) -> TestClient:
                         delist_date=None,
                         is_hs="N",
                     ),
+                    NewsEvent(
+                        scope="stock",
                         cache_variant="with_announcements",
                         ts_code="600029.SH",
                         symbol="600029",
@@ -187,6 +189,7 @@ def news_client(tmp_path: Path) -> TestClient:
 
     fake_redis = FakeRedisClient()
     original_get_redis_client = news_routes.get_redis_client
+    original_stock_get_redis_client = stocks_routes.get_redis_client
     original_fetch_major_news = news_routes.TushareGateway.fetch_major_news
     original_get_candidate_evidence_snapshots = (
         news_routes.attach_dynamic_a_share_candidates.__globals__.get(
@@ -203,6 +206,7 @@ def news_client(tmp_path: Path) -> TestClient:
 
     app.dependency_overrides[get_db_session] = _override_session
     news_routes.get_redis_client = lambda: fake_redis
+    stocks_routes.get_redis_client = lambda: fake_redis
 
     async def _fake_fetch_major_news(self) -> list[dict[str, object]]:
         return []
@@ -218,16 +222,27 @@ def news_client(tmp_path: Path) -> TestClient:
     ] = _fake_candidate_evidence_snapshots
 
     with TestClient(app) as client:
+        client.session_maker = session_maker
         yield client
 
     app.dependency_overrides.pop(get_db_session, None)
     news_routes.get_redis_client = original_get_redis_client
+    stocks_routes.get_redis_client = original_stock_get_redis_client
     news_routes.TushareGateway.fetch_major_news = original_fetch_major_news
     if original_get_candidate_evidence_snapshots is not None:
         news_routes.attach_dynamic_a_share_candidates.__globals__[
             "get_candidate_evidence_snapshots"
         ] = original_get_candidate_evidence_snapshots
     asyncio.run(engine.dispose())
+
+
+def _append_news_events(news_client: TestClient, rows: list[NewsEvent]) -> None:
+    async def _run() -> None:
+        async with news_client.session_maker() as session:
+            session.add_all(rows)
+            await session.commit()
+
+    asyncio.run(_run())
 
 
 def test_hot_news_route_calls_gateway_once_and_returns_remote_rows(
@@ -582,21 +597,6 @@ def test_impact_map_returns_candidate_enhancement_fields(
     assert len(first_candidate["evidence_items"]) == 2
 
 
-def test_impact_map_enhanced_evidence_promotes_candidate_order(
-    news_client: TestClient,
-    monkeypatch,
-) -> None:
-    async def fake_candidate_snapshots(*args, **kwargs) -> dict[str, CandidateEvidenceSummaryResponse]:
-        _ = args
-        _ = kwargs
-        return {
-            "600547.SH": CandidateEvidenceSummaryResponse(
-                ts_code="600547.SH",
-                hot_search_count=1,
-                research_report_count=1,
-                latest_published_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
-                source_breakdown=[
-                    CandidateEvidenceSourceBreakdownResponse(
 def test_impact_map_only_requests_evidence_for_candidate_pool(
     news_client: TestClient,
     monkeypatch,
@@ -622,6 +622,21 @@ def test_impact_map_only_requests_evidence_for_candidate_pool(
     assert sorted(captured_ts_codes) == ["600547.SH", "600938.SH"]
 
 
+def test_impact_map_enhanced_evidence_promotes_candidate_order(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    async def fake_candidate_snapshots(*args, **kwargs) -> dict[str, CandidateEvidenceSummaryResponse]:
+        _ = args
+        _ = kwargs
+        return {
+            "600547.SH": CandidateEvidenceSummaryResponse(
+                ts_code="600547.SH",
+                hot_search_count=1,
+                research_report_count=1,
+                latest_published_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
+                source_breakdown=[
+                    CandidateEvidenceSourceBreakdownResponse(
                         source="hot_search",
                         count=1,
                     ),
@@ -800,6 +815,77 @@ def test_news_events_endpoint_supports_pagination(news_client: TestClient) -> No
     assert payload[0]["title"] == "南方航空发布运力恢复公告"
 
 
+def test_news_events_endpoint_defaults_to_latest_batch_versions(
+    news_client: TestClient,
+) -> None:
+    _append_news_events(
+        news_client,
+        [
+            NewsEvent(
+                id="hot-archive-v2",
+                scope="hot",
+                cache_variant="global",
+                ts_code=None,
+                symbol=None,
+                title="国际油价高位震荡",
+                summary="新版归档批次",
+                published_at=datetime(2026, 3, 3, 10, 0, tzinfo=UTC),
+                url="https://finance.example.com/h/1",
+                publisher=None,
+                source="eastmoney_global",
+                macro_topic="commodity_supply",
+                fetched_at=datetime(2026, 3, 4, 10, 5, tzinfo=UTC),
+            )
+        ],
+    )
+
+    response = news_client.get("/api/news/events", params={"scope": "hot"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    duplicate_titles = [item for item in payload if item["title"] == "国际油价高位震荡"]
+    assert len(duplicate_titles) == 1
+    assert duplicate_titles[0]["summary"] == "新版归档批次"
+    assert duplicate_titles[0]["fetched_at"] == "2026-03-04T10:05:00"
+
+
+def test_news_events_endpoint_supports_batch_mode_all_for_archived_versions(
+    news_client: TestClient,
+) -> None:
+    _append_news_events(
+        news_client,
+        [
+            NewsEvent(
+                id="hot-archive-v2-all",
+                scope="hot",
+                cache_variant="global",
+                ts_code=None,
+                symbol=None,
+                title="国际油价高位震荡",
+                summary="新版归档批次",
+                published_at=datetime(2026, 3, 3, 10, 0, tzinfo=UTC),
+                url="https://finance.example.com/h/1",
+                publisher=None,
+                source="eastmoney_global",
+                macro_topic="commodity_supply",
+                fetched_at=datetime(2026, 3, 4, 10, 5, tzinfo=UTC),
+            )
+        ],
+    )
+
+    response = news_client.get(
+        "/api/news/events",
+        params={"scope": "hot", "batch_mode": "all"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    duplicate_titles = [item for item in payload if item["title"] == "国际油价高位震荡"]
+    assert len(duplicate_titles) == 2
+    assert duplicate_titles[0]["summary"] == "新版归档批次"
+    assert duplicate_titles[1]["summary"] == "原油供需偏紧"
+
+
 def test_news_events_endpoint_rejects_invalid_scope(news_client: TestClient) -> None:
     response = news_client.get(
         "/api/news/events",
@@ -808,6 +894,18 @@ def test_news_events_endpoint_rejects_invalid_scope(news_client: TestClient) -> 
 
     assert response.status_code == 422
     assert response.json()["detail"] == "invalid scope filter"
+
+
+def test_news_events_endpoint_rejects_invalid_batch_mode(
+    news_client: TestClient,
+) -> None:
+    response = news_client.get(
+        "/api/news/events",
+        params={"batch_mode": "snapshot"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid batch_mode filter"
 
 
 def test_news_events_endpoint_rejects_reversed_time_range(
@@ -895,6 +993,137 @@ def test_policy_news_route_returns_policy_scope(news_client: TestClient, monkeyp
     payload = response.json()
     assert payload[0]["scope"] == "policy"
     assert payload[0]["source"] == "policy_gateway"
+
+
+def test_hot_news_route_reads_only_latest_archived_batch(news_client: TestClient) -> None:
+    _append_news_events(
+        news_client,
+        [
+            NewsEvent(
+                id="hot-latest-only",
+                scope="hot",
+                cache_variant="global",
+                ts_code=None,
+                symbol=None,
+                title="归档后的最新热点",
+                summary="仅最新批次可见",
+                published_at=datetime(2026, 3, 25, 10, 0, tzinfo=UTC),
+                url="https://finance.example.com/h/latest",
+                publisher=None,
+                source="eastmoney_global",
+                macro_topic="commodity_supply",
+                fetched_at=datetime(2026, 3, 25, 10, 5, tzinfo=UTC),
+            )
+        ],
+    )
+
+    response = news_client.get("/api/news/hot", params={"limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["title"] for item in payload] == ["归档后的最新热点"]
+
+
+def test_policy_news_route_falls_back_to_latest_archived_batch(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    _append_news_events(
+        news_client,
+        [
+            NewsEvent(
+                id="policy-archive-v1",
+                scope="policy",
+                cache_variant="policy_source",
+                ts_code=None,
+                symbol=None,
+                title="旧政策批次",
+                summary="旧政策摘要",
+                published_at=datetime(2026, 3, 2, 10, 0, tzinfo=UTC),
+                url="https://policy.example.com/old",
+                publisher="政策源",
+                source="policy_gateway",
+                macro_topic="regulation_policy",
+                fetched_at=datetime(2026, 3, 2, 10, 5, tzinfo=UTC),
+            ),
+            NewsEvent(
+                id="policy-archive-v2",
+                scope="policy",
+                cache_variant="policy_source",
+                ts_code=None,
+                symbol=None,
+                title="最新政策批次",
+                summary="最新政策摘要",
+                published_at=datetime(2026, 3, 5, 10, 0, tzinfo=UTC),
+                url="https://policy.example.com/new",
+                publisher="政策源",
+                source="policy_gateway",
+                macro_topic="regulation_policy",
+                fetched_at=datetime(2026, 3, 5, 10, 5, tzinfo=UTC),
+            ),
+        ],
+    )
+
+    async def fake_fetch_policy_events() -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(
+        "app.api.routes.news.fetch_policy_events", fake_fetch_policy_events
+    )
+
+    response = news_client.get("/api/news/policy")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["title"] for item in payload] == ["最新政策批次"]
+
+
+def test_stock_news_route_falls_back_to_latest_archived_batch_when_upstream_fails(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    _append_news_events(
+        news_client,
+        [
+            NewsEvent(
+                id="stock-archive-v2",
+                scope="stock",
+                cache_variant="with_announcements",
+                ts_code="600029.SH",
+                symbol="600029",
+                title="南方航空最新归档批次",
+                summary="只返回最新批次",
+                published_at=datetime(2026, 3, 25, 9, 0, tzinfo=UTC),
+                url="https://finance.example.com/s/latest",
+                publisher="证券时报",
+                source="eastmoney_stock",
+                macro_topic=None,
+                fetched_at=datetime(2026, 3, 25, 9, 5, tzinfo=UTC),
+            )
+        ],
+    )
+
+    async def fake_fetch_stock_news(_symbol: str) -> list[dict[str, object]]:
+        raise RuntimeError("个股新闻上游不可用")
+
+    async def fake_fetch_stock_announcements(*, symbol: str) -> list[dict[str, object]]:
+        _ = symbol
+        return []
+
+    monkeypatch.setattr(
+        "app.api.routes.stocks.fetch_stock_news",
+        fake_fetch_stock_news,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.stocks.fetch_stock_announcements",
+        fake_fetch_stock_announcements,
+    )
+
+    response = news_client.get("/api/stocks/600029.SH/news", params={"limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["title"] for item in payload] == ["南方航空最新归档批次"]
 
 
 def test_news_events_endpoint_supports_policy_scope(news_client: TestClient, monkeypatch) -> None:

@@ -1,7 +1,7 @@
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news_event import NewsEvent
@@ -42,6 +42,77 @@ def _normalize_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def _sortable_datetime(value: datetime | None) -> datetime:
+    normalized = _normalize_datetime(value)
+    if normalized is not None:
+        return normalized
+    return datetime.min.replace(tzinfo=UTC)
+
+
+def build_news_event_logical_key(row: NewsEvent) -> str:
+    cluster_key = (row.cluster_key or "").strip()
+    if cluster_key:
+        return cluster_key
+
+    published_at = _sortable_datetime(row.published_at).isoformat()
+    return "|".join(
+        [
+            row.scope.strip(),
+            (row.ts_code or "").strip(),
+            row.title.strip(),
+            published_at,
+            (row.url or "").strip(),
+        ]
+    )
+
+
+def dedupe_news_events_to_latest(rows: list[NewsEvent]) -> list[NewsEvent]:
+    latest_rows: dict[str, NewsEvent] = {}
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (
+            _sortable_datetime(row.fetched_at),
+            _sortable_datetime(row.created_at),
+            row.source_priority,
+            _sortable_datetime(row.published_at),
+        ),
+        reverse=True,
+    )
+    for row in ordered_rows:
+        logical_key = build_news_event_logical_key(row)
+        if logical_key in latest_rows:
+            continue
+        latest_rows[logical_key] = row
+
+    deduped_rows = list(latest_rows.values())
+    deduped_rows.sort(
+        key=lambda row: (
+            _sortable_datetime(row.published_at),
+            _sortable_datetime(row.fetched_at),
+            _sortable_datetime(row.created_at),
+        ),
+        reverse=True,
+    )
+    return deduped_rows
+
+
+def _to_news_event_response(row: NewsEvent) -> NewsEventResponse:
+    return NewsEventResponse(
+        scope=row.scope,
+        cache_variant=row.cache_variant,
+        ts_code=row.ts_code,
+        symbol=row.symbol,
+        title=row.title,
+        summary=row.summary,
+        published_at=row.published_at,
+        url=row.url,
+        publisher=row.publisher,
+        source=row.source,
+        macro_topic=row.macro_topic,
+        fetched_at=row.fetched_at,
+    )
+
+
 def _to_stock_news_response(row: NewsEvent) -> StockRelatedNewsItemResponse:
     return StockRelatedNewsItemResponse(
         ts_code=row.ts_code or "",
@@ -74,11 +145,8 @@ async def replace_hot_news_rows(
     fetched_at: datetime,
     rows: list[HotNewsItemResponse],
 ) -> None:
-    await session.execute(
-        delete(NewsEvent)
-        .where(NewsEvent.scope == "hot")
-        .where(NewsEvent.cache_variant == cache_variant)
-    )
+    # 关键归档边界：热点新闻改为按抓取批次追加保存，数据库保留历史批次，
+    # 页面和分析默认只读取最新视图，不再通过覆盖写入抹掉历史。
     for row in rows:
         provider = normalize_provider(
             row.providers[0] if row.providers else None,
@@ -120,10 +188,18 @@ async def load_hot_news_rows_from_db(
     topic: str,
     limit: int,
 ) -> list[HotNewsItemResponse]:
+    latest_fetched_at = await load_latest_hot_news_fetch_at(
+        session=session,
+        cache_variant=cache_variant,
+    )
+    if latest_fetched_at is None:
+        return []
+
     statement = (
         select(NewsEvent)
         .where(NewsEvent.scope == "hot")
         .where(NewsEvent.cache_variant == cache_variant)
+        .where(NewsEvent.fetched_at == latest_fetched_at)
         .order_by(
             NewsEvent.source_priority.desc(),
             NewsEvent.published_at.desc(),
@@ -172,11 +248,8 @@ async def replace_policy_news_rows(
     fetched_at: datetime,
     rows: list[NewsEventResponse],
 ) -> None:
-    await session.execute(
-        delete(NewsEvent)
-        .where(NewsEvent.scope == "policy")
-        .where(NewsEvent.cache_variant == "policy_source")
-    )
+    # 关键归档边界：政策事件保留历史批次，默认读取最新抓取批次，
+    # 便于页面展示与大模型分析共享一份可回放的归档数据。
     for row in rows:
         provider = _derive_news_provider(row.source)
         session.add(
@@ -211,31 +284,25 @@ async def load_policy_news_rows(
     session: AsyncSession,
     limit: int,
 ) -> list[NewsEventResponse]:
+    latest_fetched_at_statement = (
+        select(func.max(NewsEvent.fetched_at))
+        .where(NewsEvent.scope == "policy")
+        .where(NewsEvent.cache_variant == "policy_source")
+    )
+    latest_fetched_at = (await session.execute(latest_fetched_at_statement)).scalar_one_or_none()
+    if latest_fetched_at is None:
+        return []
+
     statement = (
         select(NewsEvent)
         .where(NewsEvent.scope == "policy")
         .where(NewsEvent.cache_variant == "policy_source")
+        .where(NewsEvent.fetched_at == latest_fetched_at)
         .order_by(NewsEvent.published_at.desc(), NewsEvent.created_at.desc())
         .limit(limit)
     )
     rows = (await session.execute(statement)).scalars().all()
-    return [
-        NewsEventResponse(
-            scope=row.scope,
-            cache_variant=row.cache_variant,
-            ts_code=row.ts_code,
-            symbol=row.symbol,
-            title=row.title,
-            summary=row.summary,
-            published_at=row.published_at,
-            url=row.url,
-            publisher=row.publisher,
-            source=row.source,
-            macro_topic=row.macro_topic,
-            fetched_at=row.fetched_at,
-        )
-        for row in rows
-    ]
+    return [_to_news_event_response(row) for row in rows]
 
 
 async def replace_stock_news_rows(
@@ -247,12 +314,8 @@ async def replace_stock_news_rows(
     fetched_at: datetime,
     rows: list[StockRelatedNewsItemResponse],
 ) -> None:
-    await session.execute(
-        delete(NewsEvent)
-        .where(NewsEvent.scope == "stock")
-        .where(NewsEvent.ts_code == ts_code)
-        .where(NewsEvent.cache_variant == cache_variant)
-    )
+    # 关键归档边界：个股新闻/公告按股票和抓取批次追加保存，
+    # 既保留历史版本，又让详情页继续只消费最新一批数据。
     for row in rows:
         provider = _derive_news_provider(row.source)
         session.add(
@@ -289,11 +352,20 @@ async def load_stock_news_rows_from_db(
     cache_variant: str,
     limit: int,
 ) -> list[StockRelatedNewsItemResponse]:
+    latest_fetched_at = await load_latest_stock_news_fetch_at(
+        session=session,
+        ts_code=ts_code,
+        cache_variant=cache_variant,
+    )
+    if latest_fetched_at is None:
+        return []
+
     statement = (
         select(NewsEvent)
         .where(NewsEvent.scope == "stock")
         .where(NewsEvent.ts_code == ts_code)
         .where(NewsEvent.cache_variant == cache_variant)
+        .where(NewsEvent.fetched_at == latest_fetched_at)
         .order_by(NewsEvent.published_at.desc(), NewsEvent.created_at.desc())
         .limit(limit)
     )
@@ -326,6 +398,7 @@ async def query_news_events(
     published_to: datetime | None,
     limit: int,
     offset: int = 0,
+    batch_mode: str = "latest",
 ) -> list[NewsEventResponse]:
     statement = select(NewsEvent)
     if scope:
@@ -339,29 +412,29 @@ async def query_news_events(
     if published_to is not None:
         statement = statement.where(NewsEvent.published_at <= published_to)
 
-    statement = (
-        statement.order_by(NewsEvent.published_at.desc(), NewsEvent.created_at.desc())
-        .offset(offset)
-        .limit(limit)
+    if batch_mode == "all":
+        statement = (
+            statement.order_by(
+                NewsEvent.published_at.desc(),
+                NewsEvent.fetched_at.desc(),
+                NewsEvent.created_at.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = (await session.execute(statement)).scalars().all()
+        return [_to_news_event_response(row) for row in rows]
+
+    statement = statement.order_by(
+        NewsEvent.fetched_at.desc(),
+        NewsEvent.created_at.desc(),
+        NewsEvent.source_priority.desc(),
+        NewsEvent.published_at.desc(),
     )
     rows = (await session.execute(statement)).scalars().all()
-    return [
-        NewsEventResponse(
-            scope=row.scope,
-            cache_variant=row.cache_variant,
-            ts_code=row.ts_code,
-            symbol=row.symbol,
-            title=row.title,
-            summary=row.summary,
-            published_at=row.published_at,
-            url=row.url,
-            publisher=row.publisher,
-            source=row.source,
-            macro_topic=row.macro_topic,
-            fetched_at=row.fetched_at,
-        )
-        for row in rows
-    ]
+    latest_rows = dedupe_news_events_to_latest(rows)
+    paged_rows = latest_rows[offset : offset + limit]
+    return [_to_news_event_response(row) for row in paged_rows]
 
 
 async def replace_stock_candidate_evidence_rows(
@@ -395,9 +468,17 @@ async def load_stock_candidate_evidence_rows_from_db(
     session: AsyncSession,
     evidence_kind: str,
 ) -> list[CandidateEvidenceItemResponse]:
+    latest_fetched_at = await load_latest_candidate_evidence_fetch_at(
+        session=session,
+        evidence_kind=evidence_kind,
+    )
+    if latest_fetched_at is None:
+        return []
+
     statement = (
         select(StockCandidateEvidenceCache)
         .where(StockCandidateEvidenceCache.evidence_kind == evidence_kind)
+        .where(StockCandidateEvidenceCache.fetched_at == latest_fetched_at)
         .order_by(
             StockCandidateEvidenceCache.published_at.desc(),
             StockCandidateEvidenceCache.created_at.desc(),
@@ -430,11 +511,3 @@ async def load_latest_candidate_evidence_fetch_at(
         .where(StockCandidateEvidenceCache.evidence_kind == evidence_kind)
     )
     return (await session.execute(statement)).scalar_one_or_none()
-    latest_fetched_at = await load_latest_candidate_evidence_fetch_at(
-        session=session,
-        evidence_kind=evidence_kind,
-    )
-    if latest_fetched_at is None:
-        return []
-
-        .where(StockCandidateEvidenceCache.fetched_at == latest_fetched_at)

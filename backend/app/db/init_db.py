@@ -91,6 +91,7 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
         # 关键流程：对历史库执行最小列补齐，避免 create_all 不会自动 ALTER 导致运行期写入失败。
         await connection.run_sync(_ensure_stock_instrument_columns)
         await connection.run_sync(_ensure_news_event_columns)
+        await connection.run_sync(_ensure_news_event_indexes)
         await connection.run_sync(_ensure_analysis_report_columns)
         await connection.run_sync(_ensure_stock_candidate_evidence_cache_columns)
 
@@ -149,6 +150,23 @@ def _ensure_news_event_columns(sync_connection: Connection) -> None:
                 f"ALTER TABLE news_events ADD COLUMN {column_name} {column_type}"
             )
         )
+
+
+def _ensure_news_event_indexes(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "news_events" not in set(inspector.get_table_names()):
+        return
+
+    index_sql = (
+        "CREATE INDEX IF NOT EXISTS ix_news_events_scope_cache_variant_fetched_at "
+        "ON news_events (scope, cache_variant, fetched_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_events_scope_ts_code_cache_variant_fetched_at "
+        "ON news_events (scope, ts_code, cache_variant, fetched_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_events_scope_cluster_key_fetched_at "
+        "ON news_events (scope, cluster_key, fetched_at)",
+    )
+    for statement in index_sql:
+        sync_connection.execute(text(statement))
 
 
 def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
