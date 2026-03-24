@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     stock_adj_factor_cache_ttl_seconds: int = 3600
     stock_related_news_cache_ttl_seconds: int = 3600
     hot_news_cache_ttl_seconds: int = 3600
+    candidate_hot_search_cache_ttl_seconds: int = 3600
+    candidate_research_report_cache_ttl_seconds: int = 43200
     llm_base_url: str = "https://aixj.vip"
     llm_wire_api: str = "responses"
     llm_api_key: str = ""

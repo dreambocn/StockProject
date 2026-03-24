@@ -1,16 +1,18 @@
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news_event import NewsEvent
+from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
 from app.schemas.news import (
+    CandidateEvidenceItemResponse,
     HotNewsItemResponse,
     NewsEventResponse,
     StockRelatedNewsItemResponse,
 )
-from app.services.news_mapper_service import (
+from app.services.news_normalization_service import (
     build_cluster_key,
     normalize_provider,
     providers_to_source_coverage,
@@ -32,13 +34,21 @@ def _to_hot_news_response(row: NewsEvent, providers: list[str]) -> HotNewsItemRe
     )
 
 
+def _normalize_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _to_stock_news_response(row: NewsEvent) -> StockRelatedNewsItemResponse:
     return StockRelatedNewsItemResponse(
         ts_code=row.ts_code or "",
         symbol=row.symbol or "",
         title=row.title,
         summary=row.summary,
-        published_at=row.published_at,
+        published_at=_normalize_datetime(row.published_at),
         url=row.url,
         publisher=row.publisher,
         source=row.source,
@@ -352,3 +362,74 @@ async def query_news_events(
         )
         for row in rows
     ]
+
+
+async def replace_stock_candidate_evidence_rows(
+    *,
+    session: AsyncSession,
+    evidence_kind: str,
+    fetched_at: datetime,
+    rows: list[CandidateEvidenceItemResponse],
+) -> None:
+    await session.execute(
+        delete(StockCandidateEvidenceCache).where(
+            StockCandidateEvidenceCache.evidence_kind == evidence_kind
+        )
+    )
+    for row in rows:
+        session.add(
+            StockCandidateEvidenceCache(
+                evidence_kind=evidence_kind,
+                ts_code=row.ts_code,
+                symbol=row.symbol,
+                name=row.name,
+                title=row.title,
+                summary=row.summary,
+                published_at=row.published_at,
+                url=row.url,
+                source=row.source,
+                fetched_at=fetched_at,
+            )
+        )
+
+
+async def load_stock_candidate_evidence_rows_from_db(
+    *,
+    session: AsyncSession,
+    evidence_kind: str,
+) -> list[CandidateEvidenceItemResponse]:
+    statement = (
+        select(StockCandidateEvidenceCache)
+        .where(StockCandidateEvidenceCache.evidence_kind == evidence_kind)
+        .order_by(
+            StockCandidateEvidenceCache.published_at.desc(),
+            StockCandidateEvidenceCache.created_at.desc(),
+        )
+    )
+    rows = (await session.execute(statement)).scalars().all()
+    return [
+        CandidateEvidenceItemResponse(
+            ts_code=row.ts_code,
+            symbol=row.symbol,
+            name=row.name,
+            evidence_kind=row.evidence_kind,
+            title=row.title,
+            summary=row.summary,
+            published_at=_normalize_datetime(row.published_at),
+            url=row.url,
+            source=row.source,
+        )
+        for row in rows
+    ]
+
+
+async def load_latest_candidate_evidence_fetch_at(
+    *,
+    session: AsyncSession,
+    evidence_kind: str,
+) -> datetime | None:
+    statement = (
+        select(func.max(StockCandidateEvidenceCache.fetched_at))
+        .where(StockCandidateEvidenceCache.evidence_kind == evidence_kind)
+    )
+    return (await session.execute(statement)).scalar_one_or_none()

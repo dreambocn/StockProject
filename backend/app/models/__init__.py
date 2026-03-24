@@ -3,6 +3,7 @@ from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_adj_factor import StockAdjFactor
+from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
 from app.models.stock_kline_bar import StockKlineBar
@@ -21,6 +22,7 @@ __all__ = [
     "AnalysisReport",
     "NewsEvent",
     "StockInstrument",
+    "StockCandidateEvidenceCache",
     "StockDailySnapshot",
     "StockTradeCalendar",
     "StockAdjFactor",

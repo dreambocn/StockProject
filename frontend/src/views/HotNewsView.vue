@@ -3,7 +3,12 @@ import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import { newsApi, type HotNewsItem, type MacroImpactProfile } from '../api/news'
+import {
+  newsApi,
+  type CandidateSourceBreakdownItem,
+  type HotNewsItem,
+  type MacroImpactProfile,
+} from '../api/news'
 import { ApiError } from '../api/http'
 
 const { t } = useI18n()
@@ -41,6 +46,25 @@ const formatTime = (value: string | null) => {
   }
   return parsed.toLocaleString()
 }
+
+const formatCandidateSourceBreakdown = (items?: CandidateSourceBreakdownItem[]) => {
+  if (!items || items.length === 0) {
+    return t('analysisWorkbench.dataMissing')
+  }
+  return items
+    .map((item) => `${t(`hotNews.candidateSources.${item.source}`)} ${item.count}`)
+    .join(' / ')
+}
+
+const formatCandidateEvidenceTime = (value: string | null) => {
+  if (!value) {
+    return '--'
+  }
+  return formatTime(value)
+}
+
+const formatCandidateEvidenceKind = (value: string) =>
+  t(`hotNews.candidateEvidenceKinds.${value}`)
 
 const loadHotNews = async () => {
   loading.value = true
@@ -258,25 +282,67 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
           <p class="impact-row">
             <strong>{{ t('hotNews.impactPanel.candidates') }}:</strong>
             <span v-if="profile.a_share_candidates.length > 0" class="impact-candidate-list">
-              <span
+              <article
                 v-for="candidate in profile.a_share_candidates"
                 :key="candidate.ts_code"
                 class="impact-candidate-item"
               >
-                <span class="impact-candidate-main">
-                  <strong>{{ `${candidate.name}(${candidate.ts_code})` }}</strong>
-                  <span class="analysis-token">{{ candidate.relevance_score }}</span>
-                  <span class="impact-candidate-reason">{{ candidate.evidence_summary }}</span>
-                </span>
-                <el-button
-                  plain
-                  size="small"
-                  class="impact-candidate-action"
-                  @click="goToStockDetail(candidate.ts_code, profile)"
+                <div class="impact-candidate-head">
+                  <div class="impact-candidate-main">
+                    <strong>{{ `${candidate.name}(${candidate.ts_code})` }}</strong>
+                    <span v-if="candidate.industry" class="impact-candidate-industry">
+                      {{ candidate.industry }}
+                    </span>
+                    <span class="analysis-token">{{ candidate.relevance_score }}</span>
+                    <span v-if="candidate.candidate_confidence" class="analysis-token">
+                      {{ `${t('hotNews.candidateConfidence')} ${candidate.candidate_confidence}` }}
+                    </span>
+                    <span
+                      v-if="typeof candidate.freshness_score === 'number' && candidate.freshness_score > 0"
+                      class="analysis-token"
+                    >
+                      {{ `${t('hotNews.candidateFreshness')} ${candidate.freshness_score}` }}
+                    </span>
+                  </div>
+                  <el-button
+                    plain
+                    size="small"
+                    class="impact-candidate-action"
+                    @click="goToStockDetail(candidate.ts_code, profile)"
+                  >
+                    {{ t('hotNews.viewDetail') }}
+                  </el-button>
+                </div>
+                <p class="impact-candidate-reason">{{ candidate.evidence_summary }}</p>
+                <p
+                  v-if="(candidate.source_breakdown?.length ?? 0) > 0"
+                  class="impact-candidate-breakdown"
                 >
-                  {{ t('hotNews.viewDetail') }}
-                </el-button>
-              </span>
+                  <strong>{{ t('hotNews.candidateSourceBreakdown') }}:</strong>
+                  {{ formatCandidateSourceBreakdown(candidate.source_breakdown) }}
+                </p>
+                <div
+                  v-if="(candidate.evidence_items?.length ?? 0) > 0"
+                  class="impact-candidate-evidence-list"
+                >
+                  <article
+                    v-for="item in candidate.evidence_items ?? []"
+                    :key="`${candidate.ts_code}-${item.evidence_kind}-${item.title}`"
+                    class="impact-candidate-evidence-card"
+                  >
+                    <div class="impact-candidate-evidence-head">
+                      <span class="analysis-token">
+                        {{ formatCandidateEvidenceKind(item.evidence_kind) }}
+                      </span>
+                      <span class="impact-candidate-evidence-time">
+                        {{ formatCandidateEvidenceTime(item.published_at) }}
+                      </span>
+                    </div>
+                    <p class="impact-candidate-evidence-title">{{ item.title }}</p>
+                    <p v-if="item.summary" class="impact-candidate-evidence-summary">{{ item.summary }}</p>
+                  </article>
+                </div>
+              </article>
             </span>
             <span v-else>--</span>
           </p>
@@ -394,11 +460,19 @@ h1 {
 }
 
 .impact-candidate-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid rgba(123, 197, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.55rem;
+  background: rgba(12, 20, 34, 0.72);
+}
+
+.impact-candidate-head {
+  display: flex;
+  gap: 0.6rem;
   justify-content: space-between;
+  align-items: flex-start;
 }
 
 .impact-candidate-main {
@@ -408,7 +482,53 @@ h1 {
   align-items: center;
 }
 
+.impact-candidate-industry,
+.impact-candidate-breakdown,
+.impact-candidate-evidence-time {
+  color: var(--terminal-muted);
+  font-size: 0.78rem;
+}
+
 .impact-candidate-reason {
+  margin: 0;
+  color: var(--terminal-muted);
+  font-size: 0.78rem;
+}
+
+.impact-candidate-breakdown {
+  margin: 0;
+}
+
+.impact-candidate-evidence-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.impact-candidate-evidence-card {
+  border-radius: 8px;
+  border: 1px solid rgba(123, 197, 255, 0.08);
+  background: rgba(7, 12, 22, 0.78);
+  padding: 0.48rem 0.55rem;
+}
+
+.impact-candidate-evidence-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.impact-candidate-evidence-title,
+.impact-candidate-evidence-summary {
+  margin: 0.25rem 0 0;
+}
+
+.impact-candidate-evidence-title {
+  color: var(--terminal-text);
+  font-size: 0.84rem;
+}
+
+.impact-candidate-evidence-summary {
   color: var(--terminal-muted);
   font-size: 0.78rem;
 }

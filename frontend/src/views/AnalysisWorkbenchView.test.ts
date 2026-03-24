@@ -872,4 +872,64 @@ describe('AnalysisWorkbenchView', () => {
       }),
     )
   })
+
+  it('renders enriched web sources from history reports when summary report is missing', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', source: 'stock_detail' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'partial',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 0,
+      events: [],
+      report: null,
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [
+        {
+          id: 'report-history-1',
+          status: 'ready',
+          summary: '## 历史报告\n\n补全后的引用已可直接展示。',
+          risk_points: [],
+          factor_breakdown: [],
+          generated_at: '2026-03-23T08:10:00Z',
+          trigger_source: 'manual',
+          used_web_search: true,
+          web_search_status: 'used',
+          content_format: 'markdown',
+          web_sources: [
+            {
+              title: '国际油价收涨',
+              url: 'https://finance.example.com/oil',
+              source: 'Reuters',
+              published_at: '2026-03-23T08:05:00Z',
+              snippet: '市场继续关注供给端扰动。',
+              domain: 'finance.example.com',
+              metadata_status: 'enriched',
+            },
+          ],
+        },
+      ],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).toContain('国际油价收涨')
+    expect(wrapper.text()).toContain('Reuters')
+    expect(wrapper.text()).toContain('finance.example.com')
+    expect(wrapper.text()).toContain('市场继续关注供给端扰动。')
+  })
 })

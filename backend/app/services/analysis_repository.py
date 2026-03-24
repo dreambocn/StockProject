@@ -339,6 +339,17 @@ async def list_analysis_reports(
     return (await session.execute(statement)).scalars().all()
 
 
+async def update_analysis_report_web_sources(
+    session: AsyncSession,
+    *,
+    report: AnalysisReport,
+    web_sources: list[dict[str, object]] | None,
+) -> AnalysisReport:
+    report.web_sources = web_sources
+    await session.flush()
+    return report
+
+
 async def create_analysis_session_record(
     session: AsyncSession,
     *,

@@ -128,3 +128,165 @@ def test_analysis_summary_route_supports_event_id_and_returns_anchor_fields(
     assert payload["report"]["anchor_event_id"] == "evt-hot-1"
     assert payload["report"]["anchor_event_title"] == "国际油价高位震荡"
     assert payload["report"]["structured_sources"] == [{"provider": "akshare", "count": 1}]
+
+
+def test_analysis_reports_route_backfills_web_source_metadata_on_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = session, http_client, timeout_seconds, success_ttl_seconds, failure_ttl_seconds, max_bytes
+        return [
+            {
+                **raw_sources[0],
+                "source": "Reuters",
+                "published_at": "2026-03-24T09:30:00+00:00",
+                "domain": "finance.example.com",
+                "metadata_status": "enriched",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        name="贵州茅台",
+                        fullname="贵州茅台酒股份有限公司",
+                        list_status="L",
+                    )
+                )
+                session.add(
+                    AnalysisReport(
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="历史报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        web_sources=[
+                            {
+                                "title": "国际油价收涨",
+                                "url": "https://finance.example.com/oil",
+                                "source": None,
+                                "published_at": None,
+                                "snippet": "市场继续关注供给端扰动。",
+                            }
+                        ],
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get("/api/analysis/stocks/600519.SH/reports")
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["web_sources"][0]["source"] == "Reuters"
+    assert payload["items"][0]["web_sources"][0]["published_at"] == "2026-03-24T09:30:00+00:00"
+    assert payload["items"][0]["web_sources"][0]["domain"] == "finance.example.com"
+    assert payload["items"][0]["web_sources"][0]["metadata_status"] == "enriched"
+
+
+def test_analysis_reports_route_forces_domain_source_when_backfill_unavailable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = session, http_client, timeout_seconds, success_ttl_seconds, failure_ttl_seconds, max_bytes
+        return [
+            {
+                **raw_sources[0],
+                "source": "LegacyWire",
+                "published_at": "2026-03-01T09:30:00+00:00",
+                "domain": "finance.example.com",
+                "metadata_status": "unavailable",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        name="贵州茅台",
+                        fullname="贵州茅台酒股份有限公司",
+                        list_status="L",
+                    )
+                )
+                session.add(
+                    AnalysisReport(
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="历史报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        web_sources=[
+                            {
+                                "title": "国际油价收涨",
+                                "url": "https://finance.example.com/oil",
+                                "source": "LegacyWire",
+                                "domain": "finance.example.com",
+                                "published_at": "2026-03-01T09:30:00+00:00",
+                                "metadata_status": "unavailable",
+                                "snippet": "市场继续关注供给端扰动。",
+                            }
+                        ],
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get("/api/analysis/stocks/600519.SH/reports")
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    web_source = payload["items"][0]["web_sources"][0]
+    assert web_source["metadata_status"] == "unavailable"
+    assert web_source["source"] == "finance.example.com"
+    assert web_source["published_at"] is None

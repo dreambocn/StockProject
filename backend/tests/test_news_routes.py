@@ -11,6 +11,11 @@ from app.main import app
 import app.api.routes.news as news_routes
 from app.models.news_event import NewsEvent
 from app.models.stock_instrument import StockInstrument
+from app.schemas.news import (
+    CandidateEvidenceItemResponse,
+    CandidateEvidenceSourceBreakdownResponse,
+    CandidateEvidenceSummaryResponse,
+)
 
 
 class FakeRedisClient:
@@ -140,6 +145,11 @@ def news_client(tmp_path: Path) -> TestClient:
     fake_redis = FakeRedisClient()
     original_get_redis_client = news_routes.get_redis_client
     original_fetch_major_news = news_routes.TushareGateway.fetch_major_news
+    original_get_candidate_evidence_snapshots = (
+        news_routes.attach_dynamic_a_share_candidates.__globals__.get(
+            "get_candidate_evidence_snapshots"
+        )
+    )
 
     asyncio.run(_create_tables())
     asyncio.run(_seed_data())
@@ -154,7 +164,15 @@ def news_client(tmp_path: Path) -> TestClient:
     async def _fake_fetch_major_news(self) -> list[dict[str, object]]:
         return []
 
+    async def _fake_candidate_evidence_snapshots(*args, **kwargs) -> dict[str, object]:
+        _ = args
+        _ = kwargs
+        return {}
+
     news_routes.TushareGateway.fetch_major_news = _fake_fetch_major_news
+    news_routes.attach_dynamic_a_share_candidates.__globals__[
+        "get_candidate_evidence_snapshots"
+    ] = _fake_candidate_evidence_snapshots
 
     with TestClient(app) as client:
         yield client
@@ -162,6 +180,10 @@ def news_client(tmp_path: Path) -> TestClient:
     app.dependency_overrides.pop(get_db_session, None)
     news_routes.get_redis_client = original_get_redis_client
     news_routes.TushareGateway.fetch_major_news = original_fetch_major_news
+    if original_get_candidate_evidence_snapshots is not None:
+        news_routes.attach_dynamic_a_share_candidates.__globals__[
+            "get_candidate_evidence_snapshots"
+        ] = original_get_candidate_evidence_snapshots
     asyncio.run(engine.dispose())
 
 
@@ -370,6 +392,176 @@ def test_impact_map_returns_anchor_event_and_scored_candidates(
     assert first_candidate["source_hit_count"] >= 1
     assert first_candidate["match_reasons"]
     assert isinstance(first_candidate["evidence_summary"], str)
+
+
+def test_impact_map_returns_candidate_enhancement_fields(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    async def fake_candidate_snapshots(*args, **kwargs) -> dict[str, CandidateEvidenceSummaryResponse]:
+        _ = args
+        _ = kwargs
+        return {
+            "600938.SH": CandidateEvidenceSummaryResponse(
+                ts_code="600938.SH",
+                hot_search_count=1,
+                research_report_count=1,
+                latest_published_at=datetime(2026, 3, 23, 8, 0, tzinfo=UTC),
+                source_breakdown=[
+                    CandidateEvidenceSourceBreakdownResponse(
+                        source="hot_search",
+                        count=1,
+                    ),
+                    CandidateEvidenceSourceBreakdownResponse(
+                        source="research_report",
+                        count=1,
+                    ),
+                ],
+                evidence_items=[
+                    CandidateEvidenceItemResponse(
+                        ts_code="600938.SH",
+                        symbol="600938",
+                        name="中国海油",
+                        evidence_kind="hot_search",
+                        title="中国海油进入百度热搜",
+                        summary="百度热搜排名第 1 位",
+                        published_at=datetime(2026, 3, 23, 8, 0, tzinfo=UTC),
+                        url=None,
+                        source="baidu_hot_search",
+                    ),
+                    CandidateEvidenceItemResponse(
+                        ts_code="600938.SH",
+                        symbol="600938",
+                        name="中国海油",
+                        evidence_kind="research_report",
+                        title="油价上行驱动盈利改善",
+                        summary="机构发布研报",
+                        published_at=datetime(2026, 3, 22, 8, 0, tzinfo=UTC),
+                        url=None,
+                        source="eastmoney_research_report",
+                    ),
+                    CandidateEvidenceItemResponse(
+                        ts_code="600938.SH",
+                        symbol="600938",
+                        name="中国海油",
+                        evidence_kind="research_report",
+                        title="现金流表现稳健",
+                        summary="机构维持买入",
+                        published_at=datetime(2026, 3, 21, 8, 0, tzinfo=UTC),
+                        url=None,
+                        source="eastmoney_research_report",
+                    ),
+                ],
+            )
+        }
+
+    monkeypatch.setattr(
+        "app.services.news_mapper_service.get_candidate_evidence_snapshots",
+        fake_candidate_snapshots,
+    )
+
+    response = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply", "candidate_evidence_limit": 2},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    first_candidate = payload[0]["a_share_candidates"][0]
+    assert first_candidate["source_breakdown"] == [
+        {"source": "hot_search", "count": 1},
+        {"source": "research_report", "count": 1},
+    ]
+    assert first_candidate["freshness_score"] > 0
+    assert first_candidate["candidate_confidence"] in {"高", "中", "低"}
+    assert len(first_candidate["evidence_items"]) == 2
+
+
+def test_impact_map_enhanced_evidence_promotes_candidate_order(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    async def fake_candidate_snapshots(*args, **kwargs) -> dict[str, CandidateEvidenceSummaryResponse]:
+        _ = args
+        _ = kwargs
+        return {
+            "600547.SH": CandidateEvidenceSummaryResponse(
+                ts_code="600547.SH",
+                hot_search_count=1,
+                research_report_count=1,
+                latest_published_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
+                source_breakdown=[
+                    CandidateEvidenceSourceBreakdownResponse(
+                        source="hot_search",
+                        count=1,
+                    ),
+                    CandidateEvidenceSourceBreakdownResponse(
+                        source="research_report",
+                        count=1,
+                    ),
+                ],
+                evidence_items=[
+                    CandidateEvidenceItemResponse(
+                        ts_code="600547.SH",
+                        symbol="600547",
+                        name="山东黄金",
+                        evidence_kind="hot_search",
+                        title="山东黄金进入百度热搜",
+                        summary="百度热搜排名第 3 位",
+                        published_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
+                        url=None,
+                        source="baidu_hot_search",
+                    )
+                ],
+            )
+        }
+
+    monkeypatch.setattr(
+        "app.services.news_mapper_service.get_candidate_evidence_snapshots",
+        fake_candidate_snapshots,
+    )
+
+    response = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    candidates = payload[0]["a_share_candidates"]
+    assert candidates[0]["name"] == "山东黄金"
+    assert candidates[0]["relevance_score"] > candidates[1]["relevance_score"]
+
+
+def test_impact_map_keeps_base_candidates_when_enhancement_snapshot_fails(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    async def fake_candidate_snapshots_failed(*args, **kwargs) -> dict[str, CandidateEvidenceSummaryResponse]:
+        _ = args
+        _ = kwargs
+        raise RuntimeError("候选增强快照服务异常")
+
+    monkeypatch.setattr(
+        "app.services.news_mapper_service.get_candidate_evidence_snapshots",
+        fake_candidate_snapshots_failed,
+    )
+
+    response = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    candidates = payload[0]["a_share_candidates"]
+    # 增强失败时仍需保留基础候选链路，不能被路由层整体清空。
+    assert len(candidates) > 0
+    assert any(item["name"] == "中国海油" for item in candidates)
+    assert any(item["name"] == "山东黄金" for item in candidates)
+    # 降级后增强字段应保持默认空态，接口结构不变。
+    assert candidates[0]["source_breakdown"] == []
+    assert candidates[0]["evidence_items"] == []
 
 
 def test_news_events_endpoint_supports_ts_code_filter(news_client: TestClient) -> None:

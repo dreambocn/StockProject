@@ -184,6 +184,8 @@ uv run fastapi dev main.py
 - `STOCK_ADJ_FACTOR_CACHE_TTL_SECONDS`（复权因子缓存秒数，默认 `3600`）
 - `STOCK_RELATED_NEWS_CACHE_TTL_SECONDS`（个股新闻缓存秒数，默认 `3600`）
 - `HOT_NEWS_CACHE_TTL_SECONDS`（热点新闻缓存秒数，默认 `3600`）
+- `CANDIDATE_HOT_SEARCH_CACHE_TTL_SECONDS`（候选股热搜增强缓存秒数，默认 `3600`）
+- `CANDIDATE_RESEARCH_REPORT_CACHE_TTL_SECONDS`（候选股研报增强缓存秒数，默认 `43200`）
 
 邮件服务参数（`backend/.env`）：
 
@@ -272,7 +274,7 @@ uv run python scripts/run_watchlist_worker.py
 
 - `GET /api/news/hot`（支持 `limit/topic`；默认 1 小时窗口内优先走缓存/数据库）
 - `GET /api/news/hot` 现返回 `event_id/cluster_key/providers/source_coverage`
-- `GET /api/news/impact-map`（支持 `topic/candidate_limit`；返回 `anchor_event` 与候选股相关度信息）
+- `GET /api/news/impact-map`（支持 `topic/candidate_limit/candidate_evidence_limit`；返回 `anchor_event`、候选股相关度、`source_breakdown/freshness_score/candidate_confidence/evidence_items`）
 - `GET /api/news/events`（支持 `scope/ts_code/topic/published_from/published_to/page/page_size`；直接查询持久化新闻事件）
 
 ## Analysis API 列表
@@ -285,6 +287,7 @@ uv run python scripts/run_watchlist_worker.py
 - 分析报告中的 `web_sources` 现会解析并返回结构化引用（`title/url/source/published_at/snippet`）
 - 热点页会在本地持久化每个 topic 的锚点事件选择，刷新后继续沿用
 - 服务端会对 `web_sources.url` 做最佳努力元数据补全，额外返回 `domain/metadata_status`，并在分析页分开展示“结构化来源”和“联网引用”
+- 历史报告在读取 `summary/reports` 时也会对旧 `web_sources` 做读时补全，并把补全后的引用元数据回写到归档记录
 
 ## Watchlist API 列表
 

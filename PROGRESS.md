@@ -1,6 +1,6 @@
 # Project Progress
 
-Last update: 2026-03-23
+Last update: 2026-03-24
 
 ## Completed
 
@@ -210,6 +210,13 @@ Last update: 2026-03-23
   - New analysis reports persist enriched citation metadata instead of only raw `url_citation` output
   - Analysis workbench citation cards now show source, formatted publish time, domain, snippet, and enrichment status
   - Added backend/frontend regression tests for metadata extraction, cache reuse, non-HTML fallback, and richer citation rendering
+- Completed candidate-quality enhancement and historical report citation backfill:
+  - Added `stock_candidate_evidence_cache` table plus hot-search / research-report aggregation service for candidate enhancement evidence
+  - `GET /api/news/impact-map` now adds candidate `source_breakdown/freshness_score/candidate_confidence/evidence_items` and supports `candidate_evidence_limit`
+  - Hot-news candidate cards now render industry, confidence, freshness, source breakdown, and short evidence cards while keeping existing anchor-event routing intact
+  - `GET /api/analysis/stocks/{ts_code}/summary` and `GET /api/analysis/stocks/{ts_code}/reports` now perform read-time best-effort citation metadata backfill for legacy `web_sources`
+  - Historical report reads now write enriched `source/published_at/domain/metadata_status` back to `analysis_reports.web_sources`
+  - Added backend/frontend regression tests for candidate evidence caching, impact-map enhancement output, summary/reports read-time citation backfill, and history-report citation rendering
 
 ## In Progress
 
@@ -217,6 +224,6 @@ Last update: 2026-03-23
 
 ## Next Suggested Items
 
-- Phase 5 follow-up: add per-topic manual anchor-event selector persistence across refreshes.
+- Evaluate whether the next phase should prioritize THS concept-member enrichment or export/delivery tooling.
 - Phase 5 follow-up: enrich candidate evidence with hot-search / research-report source counts when third-party source quality is stable.
 - Phase 5 follow-up: parse and expose structured web-search citations in analysis reports.

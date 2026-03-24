@@ -27,6 +27,32 @@ class StockRelatedNewsItemResponse(BaseModel):
     source: str
 
 
+class CandidateEvidenceItemResponse(BaseModel):
+    ts_code: str
+    symbol: str
+    name: str
+    evidence_kind: str
+    title: str
+    summary: str | None
+    published_at: datetime | None
+    url: str | None
+    source: str
+
+
+class CandidateEvidenceSourceBreakdownResponse(BaseModel):
+    source: str
+    count: int
+
+
+class CandidateEvidenceSummaryResponse(BaseModel):
+    ts_code: str
+    hot_search_count: int = 0
+    research_report_count: int = 0
+    latest_published_at: datetime | None = None
+    source_breakdown: list[CandidateEvidenceSourceBreakdownResponse] = []
+    evidence_items: list[CandidateEvidenceItemResponse] = []
+
+
 class MacroImpactCandidateResponse(BaseModel):
     ts_code: str
     symbol: str
@@ -36,6 +62,10 @@ class MacroImpactCandidateResponse(BaseModel):
     match_reasons: list[str] = []
     evidence_summary: str = ""
     source_hit_count: int = 0
+    source_breakdown: list[CandidateEvidenceSourceBreakdownResponse] = []
+    freshness_score: int = 0
+    candidate_confidence: str = "低"
+    evidence_items: list[CandidateEvidenceItemResponse] = []
 
 
 class AnchorEventResponse(BaseModel):

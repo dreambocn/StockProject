@@ -397,4 +397,110 @@ describe('HotNewsView', () => {
     expect(router.currentRoute.value.query.source).toBe('hot_news')
     expect(router.currentRoute.value.query.topic).toBe('commodity_supply')
   })
+
+  it('renders candidate enhancement badges and evidence cards', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([
+        {
+          event_id: 'evt-hot-1',
+          cluster_key: 'cluster-1',
+          providers: ['akshare'],
+          source_coverage: 'AK',
+          title: '国际油价高位震荡',
+          summary: '原油供需偏紧',
+          published_at: '2026-03-03T09:00:00',
+          url: 'https://finance.example.com/a/1',
+          source: 'eastmoney_global',
+          macro_topic: 'commodity_supply',
+        },
+      ]))
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            topic: 'commodity_supply',
+            affected_assets: ['原油'],
+            beneficiary_sectors: ['油气开采'],
+            pressure_sectors: ['航空运输'],
+            a_share_targets: ['中国海油'],
+            anchor_event: {
+              event_id: 'evt-hot-1',
+              title: '国际油价高位震荡',
+              published_at: '2026-03-03T09:00:00',
+              providers: ['akshare'],
+              source_coverage: 'AK',
+            },
+            a_share_candidates: [
+              {
+                ts_code: '600938.SH',
+                symbol: '600938',
+                name: '中国海油',
+                industry: '石油开采',
+                relevance_score: 55,
+                match_reasons: ['命中主题目标股', '百度热搜命中 1 次', '近30日研报 2 篇'],
+                evidence_summary: '命中主题目标股；百度热搜命中 1 次；近30日研报 2 篇',
+                source_hit_count: 3,
+                source_breakdown: [
+                  { source: 'hot_search', count: 1 },
+                  { source: 'research_report', count: 2 },
+                ],
+                freshness_score: 85,
+                candidate_confidence: '高',
+                evidence_items: [
+                  {
+                    ts_code: '600938.SH',
+                    symbol: '600938',
+                    name: '中国海油',
+                    evidence_kind: 'hot_search',
+                    title: '中国海油进入百度热搜',
+                    summary: '百度热搜排名第 1 位',
+                    published_at: '2026-03-23T08:00:00',
+                    url: null,
+                    source: 'baidu_hot_search',
+                  },
+                  {
+                    ts_code: '600938.SH',
+                    symbol: '600938',
+                    name: '中国海油',
+                    evidence_kind: 'research_report',
+                    title: '油价上行驱动盈利改善',
+                    summary: '机构发布研报',
+                    published_at: '2026-03-22T08:00:00',
+                    url: null,
+                    source: 'eastmoney_research_report',
+                  },
+                ],
+              },
+            ],
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/news/hot', component: HotNewsView },
+        { path: '/stocks/:tsCode', component: { template: '<div>stock</div>' } },
+      ],
+    })
+    await router.push('/news/hot')
+    await router.isReady()
+
+    const wrapper = mount(HotNewsView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('石油开采')
+    expect(wrapper.text()).toContain('高')
+    expect(wrapper.text()).toContain('85')
+    expect(wrapper.text()).toContain('热搜 1 / 研报 2')
+    expect(wrapper.text()).toContain('中国海油进入百度热搜')
+    expect(wrapper.text()).toContain('油价上行驱动盈利改善')
+  })
 })

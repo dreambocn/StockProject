@@ -32,6 +32,17 @@ export default {
     enterAnalysis: '研判此股',
     viewDetail: '查看详情',
     anchorEvent: '联动事件',
+    candidateConfidence: '可信度',
+    candidateFreshness: '新鲜度',
+    candidateSourceBreakdown: '来源分解',
+    candidateSources: {
+      hot_search: '热搜',
+      research_report: '研报',
+    },
+    candidateEvidenceKinds: {
+      hot_search: '热搜',
+      research_report: '研报',
+    },
     empty: '暂无热点新闻',
     openLink: '查看原文',
     filterLabel: '主题筛选',

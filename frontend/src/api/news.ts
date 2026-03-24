@@ -23,6 +23,38 @@ export type AnchorEvent = {
   source_coverage: string
 }
 
+export type CandidateSourceBreakdownItem = {
+  source: string
+  count: number
+}
+
+export type CandidateEvidenceItem = {
+  ts_code: string
+  symbol: string
+  name: string
+  evidence_kind: string
+  title: string
+  summary: string | null
+  published_at: string | null
+  url: string | null
+  source: string
+}
+
+export type MacroImpactCandidate = {
+  ts_code: string
+  symbol: string
+  name: string
+  industry: string | null
+  relevance_score: number
+  match_reasons: string[]
+  evidence_summary: string
+  source_hit_count: number
+  source_breakdown: CandidateSourceBreakdownItem[]
+  freshness_score: number
+  candidate_confidence: string
+  evidence_items: CandidateEvidenceItem[]
+}
+
 export type MacroImpactProfile = {
   topic: string
   affected_assets: string[]
@@ -30,16 +62,7 @@ export type MacroImpactProfile = {
   pressure_sectors: string[]
   a_share_targets: string[]
   anchor_event: AnchorEvent | null
-  a_share_candidates: {
-    ts_code: string
-    symbol: string
-    name: string
-    industry: string | null
-    relevance_score: number
-    match_reasons: string[]
-    evidence_summary: string
-    source_hit_count: number
-  }[]
+  a_share_candidates: MacroImpactCandidate[]
 }
 
 
@@ -48,8 +71,8 @@ export const newsApi = {
     const query = buildQueryString({ limit, topic })
     return requestJson<HotNewsItem[]>(`/api/news/hot${query}`)
   },
-  async getImpactMap(topic?: string) {
-    const query = buildQueryString({ topic })
+  async getImpactMap(topic?: string, candidateEvidenceLimit?: number) {
+    const query = buildQueryString({ topic, candidate_evidence_limit: candidateEvidenceLimit })
     return requestJson<MacroImpactProfile[]>(`/api/news/impact-map${query}`)
   },
 }

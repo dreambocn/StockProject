@@ -214,6 +214,7 @@ async def get_news_events(
 async def get_macro_impact_map(
     topic: str = Query(default="all"),
     candidate_limit: int = Query(default=6, ge=1, le=20),
+    candidate_evidence_limit: int = Query(default=3, ge=1, le=5),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MacroImpactProfileResponse]:
     normalized_topic = topic.strip().lower() or "all"
@@ -232,6 +233,7 @@ async def get_macro_impact_map(
                 session=session,
                 profiles=profiles,
                 per_topic_limit=candidate_limit,
+                evidence_item_limit=candidate_evidence_limit,
             )
     except Exception:
         for profile in profiles:

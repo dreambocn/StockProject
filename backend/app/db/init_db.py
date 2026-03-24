@@ -92,6 +92,7 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
         await connection.run_sync(_ensure_stock_instrument_columns)
         await connection.run_sync(_ensure_news_event_columns)
         await connection.run_sync(_ensure_analysis_report_columns)
+        await connection.run_sync(_ensure_stock_candidate_evidence_cache_columns)
 
 
 def _ensure_stock_instrument_columns(sync_connection: Connection) -> None:
@@ -190,6 +191,37 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         sync_connection.execute(
             text(
                 "ALTER TABLE analysis_generation_sessions ADD COLUMN anchor_event_id VARCHAR(36)"
+            )
+        )
+
+
+def _ensure_stock_candidate_evidence_cache_columns(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "stock_candidate_evidence_cache" not in set(inspector.get_table_names()):
+        return
+
+    existing_columns = {
+        item["name"] for item in inspector.get_columns("stock_candidate_evidence_cache")
+    }
+    required_column_sql: dict[str, str] = {
+        "evidence_kind": "VARCHAR(32)",
+        "ts_code": "VARCHAR(12)",
+        "symbol": "VARCHAR(16)",
+        "name": "VARCHAR(128)",
+        "title": "VARCHAR(255)",
+        "summary": "TEXT",
+        "published_at": "TIMESTAMP",
+        "url": "VARCHAR(1024)",
+        "source": "VARCHAR(64) DEFAULT 'akshare'",
+        "fetched_at": "TIMESTAMP",
+    }
+    for column_name, column_type in required_column_sql.items():
+        if column_name in existing_columns:
+            continue
+        sync_connection.execute(
+            text(
+                "ALTER TABLE stock_candidate_evidence_cache "
+                f"ADD COLUMN {column_name} {column_type}"
             )
         )
 

@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +32,7 @@ from app.services.analysis_repository import (
     load_stock_instrument,
     list_analysis_reports,
     upsert_analysis_event_link,
+    update_analysis_report_web_sources,
 )
 from app.services.analysis_runtime_service import (
     cache_active_session_id,
@@ -44,6 +46,7 @@ from app.services.factor_weight_service import calculate_factor_weights
 from app.services.key_event_extraction_service import extract_key_event_types
 from app.services.llm_analysis_service import generate_stock_analysis_report
 from app.services.news_sentiment_service import analyze_news_sentiment
+from app.services.web_source_metadata_service import enrich_web_sources
 
 
 class AnalysisNotFoundError(Exception):
@@ -80,6 +83,108 @@ def _build_structured_sources(events: list[dict[str, object | None]]) -> list[di
         {"provider": provider, "count": count}
         for provider, count in sorted(provider_counts.items(), key=lambda item: item[0])
     ]
+
+
+def _derive_domain_from_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        return urlparse(url).hostname
+    except ValueError:
+        return None
+
+
+def _apply_web_source_fallback(raw_source: dict[str, object]) -> dict[str, object]:
+    normalized = dict(raw_source)
+    domain = str(normalized.get("domain") or "").strip() or _derive_domain_from_url(
+        str(normalized.get("url") or "").strip() or None
+    )
+    if domain:
+        normalized["domain"] = domain
+    metadata_status = str(normalized.get("metadata_status") or "").strip().lower()
+    if not metadata_status:
+        metadata_status = "unavailable"
+        normalized["metadata_status"] = metadata_status
+
+    if metadata_status == "unavailable":
+        normalized["metadata_status"] = "unavailable"
+        # 关键流程：当元数据补全失败时，输出必须严格回落为 domain 来源，避免遗留旧 source 误导前端。
+        normalized["source"] = domain
+        normalized["published_at"] = None
+    elif not normalized.get("source") and domain:
+        normalized["source"] = domain
+    elif "published_at" not in normalized:
+        normalized["published_at"] = None
+
+    if "published_at" not in normalized:
+        normalized["published_at"] = None
+    return normalized
+
+
+def _needs_web_source_enrichment(raw_source: dict[str, object]) -> bool:
+    metadata_status = str(raw_source.get("metadata_status") or "").strip().lower()
+    return bool(raw_source.get("url")) and (
+        not raw_source.get("source")
+        or not raw_source.get("published_at")
+        or not raw_source.get("domain")
+        or metadata_status in {"", "unavailable", "domain_inferred"}
+    )
+
+
+async def _backfill_report_web_sources(
+    session: AsyncSession,
+    *,
+    report_obj: object | None,
+    per_report_limit: int,
+    remaining_budget: int,
+) -> tuple[list[dict[str, object]], int]:
+    raw_sources = [
+        _apply_web_source_fallback(dict(item))
+        for item in (getattr(report_obj, "web_sources", None) or [])
+        if isinstance(item, dict)
+    ]
+    if report_obj is None or not raw_sources or remaining_budget <= 0:
+        return raw_sources, remaining_budget
+
+    target_indexes = [
+        index
+        for index, item in enumerate(raw_sources)
+        if _needs_web_source_enrichment(item)
+    ][: min(per_report_limit, remaining_budget)]
+    if not target_indexes:
+        return raw_sources, remaining_budget
+
+    settings = get_settings()
+    target_sources = [raw_sources[index] for index in target_indexes]
+    try:
+        enriched_sources = await enrich_web_sources(
+            session=session,
+            raw_sources=target_sources,
+            timeout_seconds=settings.web_source_metadata_timeout_seconds,
+            success_ttl_seconds=settings.web_source_metadata_cache_ttl_seconds,
+            failure_ttl_seconds=settings.web_source_metadata_failure_ttl_seconds,
+            max_bytes=settings.web_source_metadata_max_bytes,
+        )
+    except Exception:
+        enriched_sources = target_sources
+
+    next_sources = list(raw_sources)
+    changed = False
+    for index, enriched in zip(target_indexes, enriched_sources, strict=False):
+        normalized = _apply_web_source_fallback(dict(enriched))
+        if normalized != next_sources[index]:
+            next_sources[index] = normalized
+            changed = True
+
+    if changed:
+        await update_analysis_report_web_sources(
+            session,
+            report=report_obj,
+            web_sources=next_sources,
+        )
+        await session.commit()
+
+    return next_sources, remaining_budget - len(target_indexes)
 
 
 def _serialize_report(
@@ -160,6 +265,15 @@ async def get_stock_analysis_summary(
     elif event_id:
         event_context_status = "direct"
 
+    if persisted_report is not None:
+        enriched_web_sources, _remaining_budget = await _backfill_report_web_sources(
+            session,
+            report_obj=persisted_report,
+            per_report_limit=5,
+            remaining_budget=5,
+        )
+        persisted_report.web_sources = enriched_web_sources
+
     instrument_obj = (
         StockInstrumentResponse.model_validate(instrument) if instrument else None
     )
@@ -221,6 +335,17 @@ async def list_stock_analysis_report_archives(
         anchor_event_id=event_id,
         limit=limit,
     )
+    remaining_budget = 10
+    for index, report in enumerate(reports):
+        if index >= 3 or remaining_budget <= 0:
+            break
+        enriched_web_sources, remaining_budget = await _backfill_report_web_sources(
+            session,
+            report_obj=report,
+            per_report_limit=3,
+            remaining_budget=remaining_budget,
+        )
+        report.web_sources = enriched_web_sources
     return {
         "ts_code": normalized_ts_code,
         "items": [serialize_report_archive_item(report) for report in reports],

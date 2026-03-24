@@ -8,7 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news_event import NewsEvent
 from app.models.stock_instrument import StockInstrument
-from app.schemas.news import HotNewsItemResponse, NewsEventResponse, StockRelatedNewsItemResponse
+from app.schemas.news import (
+    CandidateEvidenceItemResponse,
+    CandidateEvidenceSummaryResponse,
+    HotNewsItemResponse,
+    NewsEventResponse,
+    StockRelatedNewsItemResponse,
+)
+from app.services.candidate_evidence_service import get_candidate_evidence_snapshots
 
 
 MACRO_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -146,6 +153,49 @@ def _as_text(value: object) -> str | None:
     if not text:
         return None
     return text
+
+
+def _normalize_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _build_candidate_freshness_score(latest_published_at: datetime | None) -> int:
+    normalized_published_at = _normalize_datetime(latest_published_at)
+    if normalized_published_at is None:
+        return 0
+
+    age_seconds = (datetime.now(UTC) - normalized_published_at).total_seconds()
+    if age_seconds <= 86400:
+        return 100
+    if age_seconds <= 3 * 86400:
+        return 85
+    if age_seconds <= 7 * 86400:
+        return 70
+    if age_seconds <= 14 * 86400:
+        return 50
+    if age_seconds <= 30 * 86400:
+        return 30
+    return 10
+
+
+def _build_candidate_confidence(score: int, source_hit_count: int) -> str:
+    if score >= 60 and source_hit_count >= 4:
+        return "高"
+    if score >= 40 and source_hit_count >= 2:
+        return "中"
+    return "低"
+
+
+def _to_evidence_item_payload(
+    items: list[CandidateEvidenceItemResponse],
+    *,
+    limit: int,
+) -> list[dict[str, object | None]]:
+    return [item.model_dump(mode="json") for item in items[: max(1, min(limit, 5))]]
 
 
 def list_macro_impact_profiles(topic: str) -> list[dict[str, object]]:
@@ -346,9 +396,19 @@ async def attach_dynamic_a_share_candidates(
     session: AsyncSession,
     profiles: list[dict[str, object]],
     per_topic_limit: int = 6,
+    evidence_item_limit: int = 3,
 ) -> list[dict[str, object]]:
     statement = select(StockInstrument).where(StockInstrument.list_status == "L")
     instruments = (await session.execute(statement)).scalars().all()
+    try:
+        candidate_evidence_by_ts_code = await get_candidate_evidence_snapshots(
+            session=session,
+            ts_codes=[item.ts_code for item in instruments if item.ts_code],
+            evidence_item_limit=evidence_item_limit,
+        )
+    except Exception:
+        # 关键降级：候选增强快照异常时仅丢弃增强信息，基础候选链路继续执行。
+        candidate_evidence_by_ts_code = {}
 
     recent_since = datetime.now(UTC) - timedelta(days=7)
     recent_news_statement = select(NewsEvent).where(
@@ -394,6 +454,10 @@ async def attach_dynamic_a_share_candidates(
         for instrument in instruments:
             score = 0
             reasons: list[str] = []
+            evidence_snapshot = candidate_evidence_by_ts_code.get(
+                instrument.ts_code,
+                CandidateEvidenceSummaryResponse(ts_code=instrument.ts_code),
+            )
             haystack = f"{instrument.industry or ''} {instrument.name or ''} {instrument.fullname or ''}"
             if instrument.name in target_names:
                 score += 35
@@ -410,20 +474,49 @@ async def attach_dynamic_a_share_candidates(
             if announcement_count > 0:
                 score += 10
                 reasons.append(f"近7日公告 {announcement_count} 条")
+            if evidence_snapshot.hot_search_count > 0:
+                score += 5
+                reasons.append(f"百度热搜命中 {evidence_snapshot.hot_search_count} 次")
+            if evidence_snapshot.research_report_count > 0:
+                score += 5
+                reasons.append(f"近30日研报 {evidence_snapshot.research_report_count} 篇")
             if score <= 0:
                 continue
 
-            source_hit_count = int(instrument.name in target_names) + int(bool(matched_keywords)) + int(news_count > 0) + int(announcement_count > 0)
+            source_hit_count = (
+                int(instrument.name in target_names)
+                + int(bool(matched_keywords))
+                + int(news_count > 0)
+                + int(announcement_count > 0)
+                + int(evidence_snapshot.hot_search_count > 0)
+                + int(evidence_snapshot.research_report_count > 0)
+            )
+            normalized_score = min(score, 100)
             candidates.append(
                 {
                     "ts_code": instrument.ts_code,
                     "symbol": instrument.symbol,
                     "name": instrument.name,
                     "industry": instrument.industry,
-                    "relevance_score": min(score, 100),
+                    "relevance_score": normalized_score,
                     "match_reasons": reasons,
                     "evidence_summary": "；".join(reasons),
                     "source_hit_count": source_hit_count,
+                    "source_breakdown": [
+                        item.model_dump(mode="json")
+                        for item in evidence_snapshot.source_breakdown
+                    ],
+                    "freshness_score": _build_candidate_freshness_score(
+                        evidence_snapshot.latest_published_at
+                    ),
+                    "candidate_confidence": _build_candidate_confidence(
+                        normalized_score,
+                        source_hit_count,
+                    ),
+                    "evidence_items": _to_evidence_item_payload(
+                        evidence_snapshot.evidence_items,
+                        limit=evidence_item_limit,
+                    ),
                 }
             )
 

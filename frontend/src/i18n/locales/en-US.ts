@@ -32,6 +32,17 @@ export default {
     enterAnalysis: 'Analyze This Stock',
     viewDetail: 'View Detail',
     anchorEvent: 'Anchor Event',
+    candidateConfidence: 'Confidence',
+    candidateFreshness: 'Freshness',
+    candidateSourceBreakdown: 'Source Breakdown',
+    candidateSources: {
+      hot_search: 'Hot Search',
+      research_report: 'Research',
+    },
+    candidateEvidenceKinds: {
+      hot_search: 'Hot Search',
+      research_report: 'Research',
+    },
     empty: 'No hot news yet',
     openLink: 'Open source',
     filterLabel: 'Topic Filter',
