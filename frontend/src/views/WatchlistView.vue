@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
@@ -18,18 +18,31 @@ const isUpdating = computed(() => (tsCode: string, field: string) =>
   updatingKeys.value.includes(`${tsCode}:${field}`),
 )
 
+const resetWatchlistState = () => {
+  items.value = []
+  updatingKeys.value = []
+  loading.value = false
+}
+
 const loadWatchlist = async () => {
-  if (!authStore.accessToken) {
-    items.value = []
+  const currentToken = authStore.accessToken
+  if (!currentToken) {
+    resetWatchlistState()
     return
   }
 
   loading.value = true
   try {
-    const payload = await watchlistApi.getWatchlist(authStore.accessToken)
+    const payload = await watchlistApi.getWatchlist(currentToken)
+    // 关键流程：只接受当前 token 对应的请求结果，避免登录态切换时旧响应回写页面。
+    if (authStore.accessToken !== currentToken) {
+      return
+    }
     items.value = payload.items
   } finally {
-    loading.value = false
+    if (authStore.accessToken === currentToken) {
+      loading.value = false
+    }
   }
 }
 
@@ -74,9 +87,18 @@ const updateItemSwitch = async (
   }
 }
 
-onMounted(() => {
-  void loadWatchlist()
-})
+watch(
+  () => authStore.accessToken,
+  (token) => {
+    // 关键流程：登录态失效时立即清空列表与局部更新状态，阻断任何过期交互残留。
+    if (!token) {
+      resetWatchlistState()
+      return
+    }
+    void loadWatchlist()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>

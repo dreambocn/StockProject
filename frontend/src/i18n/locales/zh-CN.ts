@@ -112,6 +112,7 @@ export default {
     watchlistAdd: '加入关注',
     watchlistRemove: '移出关注',
     watchlistLogin: '登录后加入关注',
+    watchlistLoginCompact: '登录后关注',
     latestSnapshot: '最新快照',
     dataMissing: '暂无数据',
     statusLabel: '分析状态',

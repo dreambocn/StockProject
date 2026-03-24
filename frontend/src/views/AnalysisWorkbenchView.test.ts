@@ -2,8 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import ElementPlus from 'element-plus'
 import { MotionPlugin } from '@vueuse/motion'
+
+vi.mock('element-plus/theme-chalk/base.css', () => ({}))
+vi.mock('element-plus/theme-chalk/el-button.css', () => ({}))
+vi.mock('element-plus/theme-chalk/el-card.css', () => ({}))
+vi.mock('element-plus/theme-chalk/el-skeleton.css', () => ({}))
+vi.mock('element-plus/theme-chalk/el-switch.css', () => ({}))
 
 import AnalysisWorkbenchView from './AnalysisWorkbenchView.vue'
 import { i18n, setAppLocale } from '../i18n'
@@ -22,6 +27,73 @@ const createRouterWithQuery = () =>
     ],
   })
 
+const ElCardStub = {
+  name: 'ElCard',
+  template: '<div class="el-card"><slot /></div>',
+}
+
+const ElSkeletonStub = {
+  name: 'ElSkeleton',
+  template: '<div class="el-skeleton" />',
+}
+
+const ElButtonStub = {
+  name: 'ElButton',
+  props: {
+    loading: { type: Boolean, default: false },
+    disabled: { type: Boolean, default: false },
+    plain: { type: Boolean, default: false },
+  },
+  emits: ['click'],
+  template: `
+    <button
+      class="el-button"
+      :class="{
+        'is-plain': plain,
+        'is-disabled': disabled,
+        'is-loading': loading
+      }"
+      :disabled="disabled"
+      @click="$emit('click')"
+    >
+      <slot />
+    </button>
+  `,
+}
+
+const ElSwitchStub = {
+  name: 'ElSwitch',
+  props: {
+    modelValue: { type: Boolean, default: false },
+  },
+  emits: ['update:modelValue'],
+  methods: {
+    handleChange(
+      this: { $emit: (event: 'update:modelValue', value: boolean) => void },
+      event: Event,
+    ) {
+      const target = event.target as HTMLInputElement | null
+      this.$emit('update:modelValue', Boolean(target?.checked))
+    },
+  },
+  template: `
+    <label class="el-switch">
+      <input
+        type="checkbox"
+        :checked="modelValue"
+        @change="handleChange"
+      />
+    </label>
+  `,
+}
+
+const elementPlusStubs = {
+  ElCard: ElCardStub,
+  ElSkeleton: ElSkeletonStub,
+  ElButton: ElButtonStub,
+  ElSwitch: ElSwitchStub,
+}
+
 const mountWorkbench = async (router: ReturnType<typeof createRouter>) => {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -29,12 +101,66 @@ const mountWorkbench = async (router: ReturnType<typeof createRouter>) => {
   authStore.initialized = true
 
   const wrapper = mount(AnalysisWorkbenchView, {
-    global: { plugins: [pinia, router, i18n, ElementPlus, MotionPlugin] },
+    global: {
+      plugins: [pinia, router, i18n, MotionPlugin],
+      components: elementPlusStubs,
+    },
   })
 
   await flushPromises()
   return { wrapper }
 }
+
+const createDeferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve
+  })
+  return { promise, resolve }
+}
+
+const createMinimalSummary = (tsCode: string, reportSummary: string): StockAnalysisSummaryResponse => ({
+  ts_code: tsCode,
+  instrument: {
+    ts_code: tsCode,
+    symbol: tsCode.split('.')[0] ?? tsCode,
+    name: `${tsCode} 标的`,
+    area: '',
+    industry: '行业',
+    fullname: '',
+    enname: null,
+    cnspell: null,
+    market: '主板',
+    exchange: 'SSE',
+    curr_type: '',
+    list_status: 'L',
+    list_date: null,
+    delist_date: null,
+    is_hs: 'N',
+    act_name: null,
+    act_ent_type: null,
+  },
+  latest_snapshot: null,
+  status: 'ready',
+  generated_at: '2026-03-23T08:00:00Z',
+  topic: null,
+  published_from: null,
+  published_to: null,
+  event_count: 0,
+  events: [],
+  report: {
+    id: `report-${tsCode}`,
+    status: 'ready',
+    summary: reportSummary,
+    risk_points: [],
+    factor_breakdown: [],
+    generated_at: '2026-03-23T08:10:00Z',
+    trigger_source: 'manual',
+    used_web_search: false,
+    web_search_status: 'disabled',
+    content_format: 'markdown',
+  },
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -264,6 +390,8 @@ describe('AnalysisWorkbenchView', () => {
 
     expect(router.currentRoute.value.path).toBe('/news/hot')
     expect(router.currentRoute.value.query.topic).toBe('regulation_policy')
+    expect(router.currentRoute.value.query.event_id).toBe('evt-policy')
+    expect(router.currentRoute.value.query.event_title).toBe('监管政策优化白酒消费环境')
   })
 
   it('passes event context to api and pins anchor event to top', async () => {
@@ -386,7 +514,13 @@ describe('AnalysisWorkbenchView', () => {
     const router = createRouterWithQuery()
     await router.push({
       path: '/analysis',
-      query: { ts_code: '600519.SH', topic: 'regulation_policy', source: 'hot_news' },
+      query: {
+        ts_code: '600519.SH',
+        topic: 'regulation_policy',
+        source: 'hot_news',
+        event_id: 'evt-policy',
+        event_title: '监管政策优化白酒消费环境',
+      },
     })
     await router.isReady()
 
@@ -446,6 +580,19 @@ describe('AnalysisWorkbenchView', () => {
     expect(orderedButtons[1]).toBe('查看个股详情')
     expect(orderedButtons[2]).toContain('关注')
     expect(orderedButtons[3]).toBe('返回热点主题')
+
+    const stockDetailButton = toolbar
+      .findAll('button')
+      .find((item) => item.text().includes('查看个股详情'))
+    expect(stockDetailButton).toBeDefined()
+    await stockDetailButton!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/stocks/600519.SH')
+    expect(router.currentRoute.value.query.source).toBe('hot_news')
+    expect(router.currentRoute.value.query.topic).toBe('regulation_policy')
+    expect(router.currentRoute.value.query.event_id).toBe('evt-policy')
+    expect(router.currentRoute.value.query.event_title).toBe('监管政策优化白酒消费环境')
   })
 
   it('shows pending workspace with refresh action when report is missing', async () => {
@@ -776,6 +923,78 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).toContain('第一条')
   })
 
+  it('stops active stream and clears streaming markdown before loading next ts_code', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', topic: 'old-topic', event_id: 'evt-old' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockImplementation(async (nextTsCode) => {
+      if (nextTsCode === '600519.SH') {
+        return {
+          ts_code: '600519.SH',
+          instrument: null,
+          latest_snapshot: null,
+          status: 'pending',
+          generated_at: null,
+          topic: 'old-topic',
+          published_from: null,
+          published_to: null,
+          event_count: 0,
+          events: [],
+          report: null,
+        } as StockAnalysisSummaryResponse
+      }
+      return createMinimalSummary(nextTsCode, '## 新股票报告')
+    })
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+    vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
+      session_id: 'session-still-streaming',
+      report_id: null,
+      status: 'queued',
+      reused: false,
+      cached: false,
+    })
+
+    const stopStreamingSpy = vi.fn()
+    vi.spyOn(analysisApi, 'openAnalysisSessionEvents').mockImplementation((_sessionId, handlers) => {
+      handlers.onDelta?.({
+        session_id: 'session-still-streaming',
+        delta: '## 旧流式内容',
+        content: '## 旧流式内容',
+      })
+      return stopStreamingSpy
+    })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const refreshButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('刷新分析'))
+    expect(refreshButton).toBeDefined()
+    await refreshButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('旧流式内容')
+
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '000001.SZ', topic: 'new-topic', event_id: 'evt-new' },
+    })
+    await flushPromises()
+
+    expect(stopStreamingSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).not.toContain('旧流式内容')
+    expect(wrapper.text()).toContain('新股票报告')
+  })
+
   it('inherits watchlist web-search default but only applies it to the current manual session', async () => {
     setAppLocale('zh-CN')
     const router = createRouterWithQuery()
@@ -845,7 +1064,10 @@ describe('AnalysisWorkbenchView', () => {
     })
 
     const wrapper = mount(AnalysisWorkbenchView, {
-      global: { plugins: [pinia, router, i18n, ElementPlus, MotionPlugin] },
+      global: {
+        plugins: [pinia, router, i18n, MotionPlugin],
+        components: elementPlusStubs,
+      },
     })
     await flushPromises()
 
@@ -871,6 +1093,123 @@ describe('AnalysisWorkbenchView', () => {
         trigger_source: 'manual',
       }),
     )
+  })
+
+  it('reloads watchlist when token is restored and keeps manual switch state after token clears', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const authStore = useAuthStore()
+    authStore.initialized = true
+    authStore.accessToken = ''
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 初始报告'),
+    )
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    const watchlistSpy = vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({
+      items: [
+        {
+          id: 'watch-token-change',
+          ts_code: '600519.SH',
+          hourly_sync_enabled: true,
+          daily_analysis_enabled: true,
+          web_search_enabled: true,
+          last_hourly_sync_at: null,
+          last_daily_analysis_at: null,
+          created_at: '2026-03-23T08:00:00Z',
+          updated_at: '2026-03-23T08:00:00Z',
+          instrument: null,
+          latest_report: null,
+        },
+      ],
+    })
+
+    const wrapper = mount(AnalysisWorkbenchView, {
+      global: {
+        plugins: [pinia, router, i18n, MotionPlugin],
+        components: elementPlusStubs,
+      },
+    })
+    await flushPromises()
+
+    expect(watchlistSpy).not.toHaveBeenCalled()
+
+    authStore.accessToken = 'new-token'
+    await flushPromises()
+
+    expect(watchlistSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('已继承关注设置，可仅对本次分析临时调整。')
+    expect(wrapper.text()).toContain('已启用联网增强')
+
+    const webSearchSwitch = wrapper.findComponent({ name: 'ElSwitch' })
+    expect(webSearchSwitch.exists()).toBe(true)
+    expect((webSearchSwitch.props() as { modelValue?: boolean }).modelValue).toBe(true)
+
+    await webSearchSwitch.vm.$emit('update:modelValue', false)
+    await flushPromises()
+    expect((wrapper.findComponent({ name: 'ElSwitch' }).props() as { modelValue?: boolean }).modelValue).toBe(
+      false,
+    )
+
+    authStore.accessToken = ''
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('登录后关注')
+    expect(wrapper.text()).not.toContain('已继承关注设置，可仅对本次分析临时调整。')
+    expect((wrapper.findComponent({ name: 'ElSwitch' }).props() as { modelValue?: boolean }).modelValue).toBe(
+      false,
+    )
+  })
+
+  it('ignores stale workbench responses when ts_code changes rapidly', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', topic: 'old-topic' },
+    })
+    await router.isReady()
+
+    const oldSummaryDeferred = createDeferred<StockAnalysisSummaryResponse>()
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockImplementation((nextTsCode) => {
+      if (nextTsCode === '600519.SH') {
+        return oldSummaryDeferred.promise
+      }
+      return Promise.resolve(createMinimalSummary(nextTsCode, '## 新请求摘要'))
+    })
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '000001.SZ', topic: 'new-topic' },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.analysis-hero__code').text()).toContain('000001.SZ')
+
+    oldSummaryDeferred.resolve(createMinimalSummary('600519.SH', '## 旧请求摘要'))
+    await flushPromises()
+
+    expect(wrapper.get('.analysis-hero__code').text()).toContain('000001.SZ')
+    expect(wrapper.get('.analysis-hero__title').text()).toContain('000001.SZ 标的')
+    expect(wrapper.get('[data-testid="analysis-markdown"]').text()).toContain('新请求摘要')
   })
 
   it('renders enriched web sources from history reports when summary report is missing', async () => {

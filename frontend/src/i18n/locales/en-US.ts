@@ -112,6 +112,7 @@ export default {
     watchlistAdd: 'Add to Watchlist',
     watchlistRemove: 'Remove from Watchlist',
     watchlistLogin: 'Login to Watch',
+    watchlistLoginCompact: 'Login to Watch',
     latestSnapshot: 'Latest Snapshot',
     dataMissing: 'No data',
     statusLabel: 'Status',

@@ -34,6 +34,7 @@ const webSearchInherited = ref(false)
 const webSearchSeededTsCode = ref('')
 const watchlistLoading = ref(false)
 const watchlistItem = ref<WatchlistItemResponse | null>(null)
+const workbenchLoadVersion = ref(0)
 
 let stopSessionStream: (() => void) | null = null
 
@@ -41,6 +42,9 @@ const stopStreaming = () => {
   stopSessionStream?.()
   stopSessionStream = null
 }
+
+const isLatestWorkbenchRequest = (requestVersion: number) =>
+  requestVersion === workbenchLoadVersion.value
 
 const readQueryString = (value: unknown) => {
   if (Array.isArray(value)) {
@@ -206,7 +210,10 @@ const needsFallbackHint = computed(
   () => Boolean(selectedReport.value) && (selectedReport.value?.status ?? summary.value?.status) === 'partial',
 )
 const currentReportWebSearchStatus = computed(() =>
-  translateWebSearchStatus(selectedReport.value?.web_search_status),
+  useWebSearch.value
+  && (!selectedReport.value?.web_search_status || selectedReport.value.web_search_status === 'disabled')
+    ? translateWebSearchStatus('used')
+    : translateWebSearchStatus(selectedReport.value?.web_search_status),
 )
 const showWebSearchInheritedHint = computed(
   () => Boolean(watchlistItem.value) && webSearchInherited.value,
@@ -272,6 +279,24 @@ const filteredEvents = computed(() => {
   })
 })
 
+const hotNewsAnchorEvent = computed(() => {
+  const matchedEvent =
+    (eventId.value
+      ? summary.value?.events?.find((item) => item.event_id === eventId.value)
+      : null)
+    ?? filteredEvents.value[0]
+    ?? sortedEvents.value[0]
+
+  if (!matchedEvent && !eventId.value && !eventTitle.value) {
+    return null
+  }
+
+  return {
+    eventId: matchedEvent?.event_id ?? eventId.value,
+    eventTitle: matchedEvent?.title ?? eventTitle.value,
+  }
+})
+
 const latestCloseLabel = computed(() => formatPrice(summary.value?.latest_snapshot?.close))
 const latestChangeLabel = computed(() => formatPercent(summary.value?.latest_snapshot?.pct_chg))
 
@@ -334,13 +359,20 @@ const sourceActionLabel = computed(() => {
 
 const watchlistButtonLabel = computed(() => {
   if (!authStore.accessToken) {
-    return t('analysisWorkbench.watchlistLogin')
+    return t('analysisWorkbench.watchlistLoginCompact')
   }
   return watchlistItem.value ? t('analysisWorkbench.watchlistRemove') : t('analysisWorkbench.watchlistAdd')
 })
 
-const loadSummary = async () => {
-  if (!tsCode.value) {
+const loadSummary = async (requestVersion: number) => {
+  const currentTsCode = tsCode.value
+  const currentTopic = topicContext.value || null
+  const currentEventId = eventId.value || null
+
+  if (!currentTsCode) {
+    if (!isLatestWorkbenchRequest(requestVersion)) {
+      return
+    }
     summary.value = null
     errorMessage.value = ''
     loading.value = false
@@ -353,10 +385,13 @@ const loadSummary = async () => {
   errorMessage.value = ''
 
   try {
-    const payload = await analysisApi.getStockAnalysisSummary(tsCode.value, {
-      topic: topicContext.value || null,
-      eventId: eventId.value || null,
+    const payload = await analysisApi.getStockAnalysisSummary(currentTsCode, {
+      topic: currentTopic,
+      eventId: currentEventId,
     })
+    if (!isLatestWorkbenchRequest(requestVersion)) {
+      return
+    }
     summary.value = payload
     if (!selectedReportId.value && payload.report?.id) {
       selectedReportId.value = payload.report.id
@@ -364,56 +399,96 @@ const loadSummary = async () => {
     selectedEventFilter.value = 'all'
     showAllFactors.value = false
   } catch {
+    if (!isLatestWorkbenchRequest(requestVersion)) {
+      return
+    }
     errorMessage.value = t('analysisWorkbench.error')
     summary.value = null
   } finally {
-    loading.value = false
+    if (isLatestWorkbenchRequest(requestVersion)) {
+      loading.value = false
+    }
   }
 }
 
-const loadReports = async () => {
-  if (!tsCode.value) {
-    reportArchives.value = []
+const loadReports = async (requestVersion: number) => {
+  const currentTsCode = tsCode.value
+  const currentTopic = topicContext.value || null
+  const currentEventId = eventId.value || null
+
+  if (!currentTsCode) {
+    if (isLatestWorkbenchRequest(requestVersion)) {
+      reportArchives.value = []
+    }
     return
   }
   try {
-    const payload = await analysisApi.getStockAnalysisReports(tsCode.value, 10, {
-      topic: topicContext.value || null,
-      eventId: eventId.value || null,
+    const payload = await analysisApi.getStockAnalysisReports(currentTsCode, 10, {
+      topic: currentTopic,
+      eventId: currentEventId,
     })
+    if (!isLatestWorkbenchRequest(requestVersion)) {
+      return
+    }
     reportArchives.value = payload.items
     if (!selectedReportId.value && payload.items[0]?.id) {
       selectedReportId.value = payload.items[0].id
     }
   } catch {
-    reportArchives.value = []
+    if (isLatestWorkbenchRequest(requestVersion)) {
+      reportArchives.value = []
+    }
   }
 }
 
-const loadWatchlistState = async () => {
-  if (!authStore.accessToken || !tsCode.value) {
-    watchlistItem.value = null
+const loadWatchlistState = async (requestVersion: number) => {
+  const currentToken = authStore.accessToken
+  const currentTsCode = tsCode.value
+  if (!currentToken || !currentTsCode) {
+    if (isLatestWorkbenchRequest(requestVersion)) {
+      watchlistItem.value = null
+    }
     return
   }
   try {
-    const payload = await watchlistApi.getWatchlist(authStore.accessToken)
-    const matchedItem = payload.items.find((item) => item.ts_code === tsCode.value) ?? null
+    const payload = await watchlistApi.getWatchlist(currentToken)
+    // 关键流程：只允许最新页面上下文写回关注态，避免旧股票或旧登录态覆盖当前分析页。
+    if (
+      !isLatestWorkbenchRequest(requestVersion)
+      || authStore.accessToken !== currentToken
+      || tsCode.value !== currentTsCode
+    ) {
+      return
+    }
+    const matchedItem = payload.items.find((item) => item.ts_code === currentTsCode) ?? null
     watchlistItem.value = matchedItem
 
     // 关键流程：关注页中的联网增强是“自动分析默认值”，分析页只在首次进入该股票时继承一次。
     // 这样既能保持默认一致，又不会在用户手动切换后被异步刷新重新覆盖。
-    if (webSearchSeededTsCode.value !== tsCode.value) {
+    if (webSearchSeededTsCode.value !== currentTsCode) {
       useWebSearch.value = Boolean(matchedItem?.web_search_enabled)
       webSearchInherited.value = Boolean(matchedItem)
-      webSearchSeededTsCode.value = tsCode.value
+      webSearchSeededTsCode.value = currentTsCode
     }
   } catch {
-    watchlistItem.value = null
+    if (
+      isLatestWorkbenchRequest(requestVersion)
+      && authStore.accessToken === currentToken
+      && tsCode.value === currentTsCode
+    ) {
+      watchlistItem.value = null
+    }
   }
 }
 
 const loadWorkbench = async () => {
-  await Promise.all([loadSummary(), loadReports(), loadWatchlistState()])
+  workbenchLoadVersion.value += 1
+  const requestVersion = workbenchLoadVersion.value
+  await Promise.all([
+    loadSummary(requestVersion),
+    loadReports(requestVersion),
+    loadWatchlistState(requestVersion),
+  ])
 }
 
 const goToHotNews = async () => {
@@ -428,14 +503,44 @@ const goToStockDetail = async () => {
   if (!tsCode.value) {
     return
   }
+  if (sourceKind.value === 'hot_news') {
+    const query: Record<string, string> = {
+      source: 'hot_news',
+    }
+    if (topicContext.value) {
+      query.topic = topicContext.value
+    }
+    if (hotNewsAnchorEvent.value?.eventId) {
+      query.event_id = hotNewsAnchorEvent.value.eventId
+    }
+    if (hotNewsAnchorEvent.value?.eventTitle) {
+      query.event_title = hotNewsAnchorEvent.value.eventTitle
+    }
+    await router.push({
+      path: `/stocks/${encodeURIComponent(tsCode.value)}`,
+      query,
+    })
+    return
+  }
+
   await router.push(`/stocks/${encodeURIComponent(tsCode.value)}`)
 }
 
 const goToSource = async () => {
   if (sourceKind.value === 'hot_news') {
+    const query: Record<string, string> = {}
+    if (topicContext.value) {
+      query.topic = topicContext.value
+    }
+    if (hotNewsAnchorEvent.value?.eventId) {
+      query.event_id = hotNewsAnchorEvent.value.eventId
+    }
+    if (hotNewsAnchorEvent.value?.eventTitle) {
+      query.event_title = hotNewsAnchorEvent.value.eventTitle
+    }
     await router.push({
       path: '/news/hot',
-      query: topicContext.value ? { topic: topicContext.value } : {},
+      query,
     })
     return
   }
@@ -550,13 +655,33 @@ onBeforeUnmount(() => {
 })
 
 watch(
+  () => authStore.accessToken,
+  (token) => {
+    if (!token) {
+      // 关键流程：登出后立即移除“已关注/继承默认值”状态，但保留用户手动切换过的本次分析开关。
+      watchlistItem.value = null
+      watchlistLoading.value = false
+      webSearchInherited.value = false
+      return
+    }
+    if (!tsCode.value) {
+      return
+    }
+    void loadWatchlistState(workbenchLoadVersion.value)
+  },
+)
+
+watch(
   () => `${tsCode.value}|${topicContext.value}|${eventId.value}`,
   () => {
+    stopStreaming()
+    streaming.value = false
     selectedReportId.value = null
     streamingMarkdown.value = ''
     useWebSearch.value = false
     webSearchInherited.value = false
     webSearchSeededTsCode.value = ''
+    watchlistItem.value = null
     void loadWorkbench()
   },
 )
