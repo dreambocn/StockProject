@@ -9,6 +9,14 @@ from app.services.stock_cache_service import (
 )
 
 
+class WarningCollector:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, tuple[object, ...]]] = []
+
+    def warning(self, msg: str, *args: object) -> None:
+        self.records.append((msg, args))
+
+
 class FakeRedisClient:
     def __init__(self) -> None:
         self._store: dict[str, str] = {}
@@ -149,5 +157,84 @@ def test_write_cached_model_rows_serializes_payload(monkeypatch) -> None:
         decoded = json.loads(payload)
         assert decoded[0]["ts_code"] == "000001.SZ"
         assert decoded[0]["trade_date"] == "2026-03-03"
+
+    asyncio.run(_run())
+
+
+def test_read_cached_model_rows_logs_warning_when_redis_get_fails(monkeypatch) -> None:
+    class BrokenRedisClient(FakeRedisClient):
+        async def get(self, key: str) -> str | None:
+            _ = key
+            raise RuntimeError("redis 读取失败")
+
+    async def _run() -> None:
+        fake_redis = BrokenRedisClient()
+        logger = WarningCollector()
+        monkeypatch.setattr(
+            "app.services.stock_cache_service.get_redis_client",
+            lambda: fake_redis,
+        )
+        monkeypatch.setattr("app.services.stock_cache_service.LOGGER", logger)
+
+        rows = await read_cached_model_rows("daily:broken", StockDailySnapshotResponse)
+
+        assert rows is None
+        assert len(logger.records) == 1
+        message, args = logger.records[0]
+        assert "event=stock_cache_failed" in message
+        assert args[0] == "daily:broken"
+        assert args[1] == "read_cache"
+        assert args[2] == "RuntimeError"
+
+    asyncio.run(_run())
+
+
+def test_write_cached_model_rows_logs_warning_when_redis_set_fails(monkeypatch) -> None:
+    class BrokenRedisClient(FakeRedisClient):
+        async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+            _ = key, value, ex
+            raise RuntimeError("redis 写入失败")
+
+    async def _run() -> None:
+        fake_redis = BrokenRedisClient()
+        logger = WarningCollector()
+        monkeypatch.setattr(
+            "app.services.stock_cache_service.get_redis_client",
+            lambda: fake_redis,
+        )
+        monkeypatch.setattr("app.services.stock_cache_service.LOGGER", logger)
+
+        await write_cached_model_rows(
+            "daily:write-fail",
+            [
+                StockDailySnapshotResponse(
+                    ts_code="000001.SZ",
+                    trade_date="2026-03-03",
+                    open=11.0,
+                    high=11.2,
+                    low=10.8,
+                    close=11.1,
+                    pre_close=10.95,
+                    change=0.15,
+                    pct_chg=1.37,
+                    vol=123456,
+                    amount=789012,
+                    turnover_rate=None,
+                    volume_ratio=None,
+                    pe=None,
+                    pb=None,
+                    total_mv=None,
+                    circ_mv=None,
+                )
+            ],
+            ttl_seconds=600,
+        )
+
+        assert len(logger.records) == 1
+        message, args = logger.records[0]
+        assert "event=stock_cache_failed" in message
+        assert args[0] == "daily:write-fail"
+        assert args[1] == "write_cache"
+        assert args[2] == "RuntimeError"
 
     asyncio.run(_run())

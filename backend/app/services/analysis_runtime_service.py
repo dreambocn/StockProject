@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.cache.redis import get_redis_client
+from app.core.logging import get_logger
 
 
 class AnalysisSessionEventBus:
@@ -50,6 +51,7 @@ class AnalysisSessionLockRegistry:
 
 event_bus = AnalysisSessionEventBus()
 lock_registry = AnalysisSessionLockRegistry()
+LOGGER = get_logger(__name__)
 
 
 def _active_session_cache_key(analysis_key: str) -> str:
@@ -58,6 +60,22 @@ def _active_session_cache_key(analysis_key: str) -> str:
 
 def _fresh_report_cache_key(analysis_key: str) -> str:
     return f"analysis:fresh:{analysis_key}"
+
+
+def _log_cache_warning(
+    *,
+    event: str,
+    analysis_key: str,
+    operation: str,
+    error: Exception,
+) -> None:
+    LOGGER.warning(
+        "缓存降级：event=%s analysis_key=%s operation=%s error_type=%s",
+        event,
+        analysis_key,
+        operation,
+        type(error).__name__,
+    )
 
 
 async def get_analysis_lock(analysis_key: str) -> asyncio.Lock:
@@ -73,14 +91,26 @@ async def cache_active_session_id(
             session_id,
             ex=ttl_seconds,
         )
-    except Exception:
+    except Exception as exc:
+        _log_cache_warning(
+            event="analysis_runtime_cache_failed",
+            analysis_key=analysis_key,
+            operation="set_active_session_id",
+            error=exc,
+        )
         return
 
 
 async def get_cached_active_session_id(analysis_key: str) -> str | None:
     try:
         value = await get_redis_client().get(_active_session_cache_key(analysis_key))
-    except Exception:
+    except Exception as exc:
+        _log_cache_warning(
+            event="analysis_runtime_cache_failed",
+            analysis_key=analysis_key,
+            operation="get_active_session_id",
+            error=exc,
+        )
         return None
     return str(value) if value else None
 
@@ -95,7 +125,13 @@ async def clear_cached_active_session_id(
             if cached and str(cached) != session_id:
                 return
         await get_redis_client().delete(key)
-    except Exception:
+    except Exception as exc:
+        _log_cache_warning(
+            event="analysis_runtime_cache_failed",
+            analysis_key=analysis_key,
+            operation="clear_active_session_id",
+            error=exc,
+        )
         return
 
 
@@ -108,13 +144,25 @@ async def cache_fresh_report_id(
             report_id,
             ex=ttl_seconds,
         )
-    except Exception:
+    except Exception as exc:
+        _log_cache_warning(
+            event="analysis_runtime_cache_failed",
+            analysis_key=analysis_key,
+            operation="set_fresh_report_id",
+            error=exc,
+        )
         return
 
 
 async def get_cached_fresh_report_id(analysis_key: str) -> str | None:
     try:
         value = await get_redis_client().get(_fresh_report_cache_key(analysis_key))
-    except Exception:
+    except Exception as exc:
+        _log_cache_warning(
+            event="analysis_runtime_cache_failed",
+            analysis_key=analysis_key,
+            operation="get_fresh_report_id",
+            error=exc,
+        )
         return None
     return str(value) if value else None

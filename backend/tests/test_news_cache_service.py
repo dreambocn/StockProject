@@ -5,6 +5,14 @@ from app.schemas.news import HotNewsItemResponse
 from app.services.news_cache_service import get_news_rows
 
 
+class WarningCollector:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, tuple[object, ...]]] = []
+
+    def warning(self, msg: str, *args: object) -> None:
+        self.records.append((msg, args))
+
+
 class MemoryNewsCache:
     def __init__(self) -> None:
         self.data: dict[str, list[HotNewsItemResponse]] = {}
@@ -150,5 +158,54 @@ def test_news_service_falls_back_to_db_when_remote_fails() -> None:
         )
 
         assert result == db_rows
+
+    asyncio.run(_run())
+
+
+def test_news_service_logs_warning_when_db_cache_write_fails(monkeypatch) -> None:
+    async def _run() -> None:
+        cache = MemoryNewsCache()
+        db_rows = [_hot_row("cached")]
+        logger = WarningCollector()
+        monkeypatch.setattr("app.services.news_cache_service.LOGGER", logger)
+
+        async def load_from_db() -> list[HotNewsItemResponse]:
+            return db_rows
+
+        async def get_last_fetch_at() -> datetime | None:
+            return datetime(2026, 3, 3, 8, 30, tzinfo=UTC)
+
+        async def fetch_remote_and_persist() -> list[HotNewsItemResponse]:
+            return [_hot_row("remote")]
+
+        async def get_lock(_cache_key: str) -> asyncio.Lock:
+            return asyncio.Lock()
+
+        async def broken_write_cache(
+            key: str, rows: list[HotNewsItemResponse], ttl_seconds: int
+        ) -> None:
+            _ = key, rows, ttl_seconds
+            raise RuntimeError("redis 写入失败")
+
+        result = await get_news_rows(
+            cache_key="news:hot:all:50",
+            cache_ttl_seconds=3600,
+            refresh_window_seconds=3600,
+            now=datetime(2026, 3, 3, 9, 0, tzinfo=UTC),
+            read_cache=cache.read,
+            write_cache=broken_write_cache,
+            load_from_db=load_from_db,
+            get_last_fetch_at=get_last_fetch_at,
+            fetch_remote_and_persist=fetch_remote_and_persist,
+            get_singleflight_lock=get_lock,
+        )
+
+        assert result == db_rows
+        assert len(logger.records) == 1
+        message, args = logger.records[0]
+        assert "event=news_cache_failed" in message
+        assert args[0] == "news:hot:all:50"
+        assert args[1] == "write_cache_from_db"
+        assert args[2] == "RuntimeError"
 
     asyncio.run(_run())

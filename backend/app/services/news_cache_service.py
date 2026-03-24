@@ -5,6 +5,8 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
+from app.core.logging import get_logger
+
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ReadNewsCacheFn = Callable[[str], Awaitable[list[ModelT] | None]]
@@ -13,6 +15,16 @@ LoadNewsRowsFn = Callable[[], Awaitable[list[ModelT]]]
 ReadLatestFetchAtFn = Callable[[], Awaitable[datetime | None]]
 FetchNewsRowsFn = Callable[[], Awaitable[list[ModelT]]]
 GetLockFn = Callable[[str], Awaitable[asyncio.Lock]]
+LOGGER = get_logger(__name__)
+
+
+def _log_cache_warning(*, cache_key: str, operation: str, error: Exception) -> None:
+    LOGGER.warning(
+        "缓存降级：event=news_cache_failed cache_key=%s operation=%s error_type=%s",
+        cache_key,
+        operation,
+        type(error).__name__,
+    )
 
 
 def _normalize_datetime(value: datetime) -> datetime:
@@ -48,7 +60,12 @@ async def get_news_rows(
         if resolved_now - last_fetch_at <= timedelta(seconds=refresh_window_seconds):
             try:
                 await write_cache(cache_key, db_rows, cache_ttl_seconds)
-            except Exception:
+            except Exception as exc:
+                _log_cache_warning(
+                    cache_key=cache_key,
+                    operation="write_cache_from_db",
+                    error=exc,
+                )
                 pass
             return db_rows
 
@@ -67,7 +84,12 @@ async def get_news_rows(
             ):
                 try:
                     await write_cache(cache_key, db_rows_after_lock, cache_ttl_seconds)
-                except Exception:
+                except Exception as exc:
+                    _log_cache_warning(
+                        cache_key=cache_key,
+                        operation="write_cache_from_db_after_lock",
+                        error=exc,
+                    )
                     pass
                 return db_rows_after_lock
 
@@ -75,7 +97,12 @@ async def get_news_rows(
             remote_rows = await fetch_remote_and_persist()
             try:
                 await write_cache(cache_key, remote_rows, cache_ttl_seconds)
-            except Exception:
+            except Exception as exc:
+                _log_cache_warning(
+                    cache_key=cache_key,
+                    operation="write_cache_from_remote",
+                    error=exc,
+                )
                 pass
             return remote_rows
         except Exception:
