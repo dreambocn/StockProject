@@ -69,6 +69,8 @@ class Settings(BaseSettings):
     web_source_metadata_max_bytes: int = 524288
     analysis_active_session_ttl_seconds: int = 300
     analysis_report_freshness_minutes: int = 60
+    analysis_worker_poll_interval_seconds: int = 5
+    analysis_running_stale_seconds: int = 900
     init_admin_username: str = ""
     init_admin_email: str = ""
     init_admin_password: str = ""

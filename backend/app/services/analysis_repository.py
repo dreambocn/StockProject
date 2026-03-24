@@ -396,3 +396,53 @@ async def load_analysis_session(
 ) -> AnalysisGenerationSession | None:
     return await session.get(AnalysisGenerationSession, session_id)
 
+
+async def claim_next_analysis_session_for_worker(
+    session: AsyncSession,
+    *,
+    stale_before: datetime,
+) -> str | None:
+    now = datetime.now(UTC)
+
+    # 关键流程：Worker 先领取 queued，只有没有 queued 时才回收 stale running，避免饿死新任务。
+    queued_statement = (
+        select(AnalysisGenerationSession)
+        .where(AnalysisGenerationSession.status == "queued")
+        .order_by(
+            AnalysisGenerationSession.created_at.asc(),
+            AnalysisGenerationSession.id.asc(),
+        )
+        .limit(1)
+    )
+    queued_row = (await session.execute(queued_statement)).scalar_one_or_none()
+    if queued_row is not None:
+        queued_row.status = "running"
+        queued_row.started_at = now
+        queued_row.completed_at = None
+        queued_row.error_message = None
+        await session.flush()
+        return queued_row.id
+
+    stale_running_statement = (
+        select(AnalysisGenerationSession)
+        .where(AnalysisGenerationSession.status == "running")
+        .where(AnalysisGenerationSession.updated_at < stale_before)
+        .order_by(
+            AnalysisGenerationSession.updated_at.asc(),
+            AnalysisGenerationSession.id.asc(),
+        )
+        .limit(1)
+    )
+    stale_running_row = (
+        await session.execute(stale_running_statement)
+    ).scalar_one_or_none()
+    if stale_running_row is None:
+        return None
+
+    stale_running_row.status = "running"
+    stale_running_row.started_at = now
+    stale_running_row.completed_at = None
+    stale_running_row.error_message = None
+    await session.flush()
+    return stale_running_row.id
+

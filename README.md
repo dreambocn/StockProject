@@ -56,6 +56,8 @@
   - 新增 `analysis_generation_sessions`、`analysis_reports` 归档增强、`analysis_event_links` 结果落库
   - `GET /api/analysis/stocks/{ts_code}/summary` 已收敛为只读最新快照接口
   - 新增 `POST /api/analysis/stocks/{ts_code}/sessions`、`GET /api/analysis/sessions/{session_id}/events`、`GET /api/analysis/stocks/{ts_code}/reports`
+  - `POST /api/analysis/stocks/{ts_code}/sessions` 在非 inline 场景仅做入队，由独立 Analysis Worker 拉取执行
+  - Analysis Worker 支持按队列顺序处理 `queued`，并自动回收超过阈值的 `running` 会话
   - 支持活跃会话去重、新鲜报告缓存命中、Markdown 报告归档、流式增量输出
 - 完成关注列表与自动归档基础设施：
   - 新增 `user_watchlist_items`、`stock_watch_snapshots` 两张表
@@ -118,6 +120,7 @@
 - `backend/app/integrations/tushare_gateway.py`：Tushare 数据网关
 - `backend/app/services/watchlist_worker_service.py`：关注列表 Worker 去重、归档与日任务编排
 - `backend/scripts/run_watchlist_worker.py`：关注列表定时 Worker 启动脚本
+- `backend/scripts/run_analysis_worker.py`：分析会话队列 Worker 启动脚本
 
 ## 快速启动
 
@@ -130,7 +133,7 @@ start-dev.bat
 ```
 
 该脚本会自动拉起后端与前端开发服务。
-当前版本也会同时启动关注列表 Worker，便于本地直接验证小时资讯归档与每日报告任务。
+当前版本也会同时启动关注列表 Worker 与分析会话 Worker，便于本地直接验证小时资讯归档、每日报告任务与分析队列消费。
 若需要仅检查环境与路径而不实际拉起终端，可执行：`pwsh -File .\start-dev.ps1 -DryRun`
 
 ### 单独启动后端
@@ -174,6 +177,8 @@ uv run fastapi dev main.py
 - `LLM_WEB_SEARCH_ENABLED`（是否允许联网搜索增强，默认 `false`）
 - `ANALYSIS_ACTIVE_SESSION_TTL_SECONDS`（活跃分析会话去重 TTL，默认 `300`）
 - `ANALYSIS_REPORT_FRESHNESS_MINUTES`（分析报告冷却窗口，默认 `60`；1 小时内复用最近归档，不重复触发分析）
+- `ANALYSIS_WORKER_POLL_INTERVAL_SECONDS`（分析 Worker 轮询间隔秒数，默认 `5`）
+- `ANALYSIS_RUNNING_STALE_SECONDS`（分析 Worker 回收 stale running 阈值秒数，默认 `900`）
 - `WEB_SOURCE_METADATA_TIMEOUT_SECONDS`（联网引用元数据抓取超时秒数，默认 `3`）
 - `WEB_SOURCE_METADATA_CACHE_TTL_SECONDS`（联网引用元数据成功缓存秒数，默认 `86400`）
 - `WEB_SOURCE_METADATA_FAILURE_TTL_SECONDS`（联网引用元数据失败缓存秒数，默认 `7200`）
@@ -232,6 +237,19 @@ uv run python scripts/run_watchlist_worker.py
 - Worker 默认轮询当前时间，每小时 `05` 分执行关注股票资讯/快照归档。
 - Worker 默认在 `Asia/Hong_Kong` 时区的交易日 `18:10` 执行关注股票日报分析。
 - 同一股票在同一轮任务中只会执行一次，避免多人关注导致重复调用 AI。
+
+### 启动分析会话 Worker
+
+```powershell
+Set-Location .\backend
+uv run python scripts/run_analysis_worker.py
+```
+
+说明：
+
+- Worker 启动时会先执行 `ensure_database_schema()`，保证数据库结构就绪。
+- Worker 每轮按 `ANALYSIS_WORKER_POLL_INTERVAL_SECONDS` 轮询领取任务。
+- Worker 优先领取 `queued`，随后自动回收超过 `ANALYSIS_RUNNING_STALE_SECONDS` 的 `running` 会话并重跑。
 
 ## Auth API 列表
 

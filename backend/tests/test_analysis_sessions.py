@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,9 +10,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
+from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
+from app.services import analysis_repository
 
 
 def _prepare_client(tmp_path: Path):
@@ -255,3 +258,230 @@ def test_analysis_reports_route_returns_latest_first(tmp_path: Path) -> None:
     assert len(payload["items"]) == 2
     assert payload["items"][0]["generated_at"] >= payload["items"][1]["generated_at"]
     assert payload["items"][0]["content_format"] == "markdown"
+
+
+def test_create_analysis_session_does_not_schedule_process_local_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(_seed_instrument(session_maker, ts_code="600519.SH"))
+
+        created_flags = {"analysis_task_called": False}
+
+        async def fake_run_analysis_session_by_id(session_id: str) -> None:
+            _ = session_id
+            created_flags["analysis_task_called"] = True
+
+        monkeypatch.setattr(
+            "app.services.analysis_service.run_analysis_session_by_id",
+            fake_run_analysis_session_by_id,
+        )
+
+        response = client.post(
+            "/api/analysis/stocks/600519.SH/sessions",
+            json={
+                "force_refresh": True,
+                "use_web_search": False,
+                "trigger_source": "manual",
+            },
+        )
+    finally:
+        _cleanup_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert created_flags["analysis_task_called"] is False
+
+
+def test_analysis_worker_claim_prefers_queued_then_recovers_stale_running(
+    tmp_path: Path,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(_seed_instrument(session_maker, ts_code="600519.SH"))
+
+        async def run_test() -> None:
+            now = datetime.now(UTC)
+            async with session_maker() as session:
+                queued_row = AnalysisGenerationSession(
+                    analysis_key="600519.SH|||0|manual",
+                    ts_code="600519.SH",
+                    topic=None,
+                    anchor_event_id=None,
+                    use_web_search=False,
+                    trigger_source="manual",
+                    trigger_source_group="manual",
+                    status="queued",
+                    created_at=now - timedelta(minutes=10),
+                    updated_at=now - timedelta(minutes=10),
+                )
+                stale_running_row = AnalysisGenerationSession(
+                    analysis_key="600519.SH|commodity_supply||0|manual",
+                    ts_code="600519.SH",
+                    topic="commodity_supply",
+                    anchor_event_id=None,
+                    use_web_search=False,
+                    trigger_source="manual",
+                    trigger_source_group="manual",
+                    status="running",
+                    started_at=now - timedelta(minutes=40),
+                    created_at=now - timedelta(minutes=40),
+                    updated_at=now - timedelta(minutes=40),
+                    error_message="上次执行中断",
+                )
+                session.add_all([queued_row, stale_running_row])
+                await session.commit()
+                queued_id = queued_row.id
+                stale_running_id = stale_running_row.id
+
+            async with session_maker() as session:
+                claimed_queued = (
+                    await analysis_repository.claim_next_analysis_session_for_worker(
+                        session,
+                        stale_before=now - timedelta(seconds=900),
+                    )
+                )
+                await session.commit()
+            assert claimed_queued == queued_id
+
+            async with session_maker() as session:
+                queued_after_claim = await session.get(
+                    AnalysisGenerationSession,
+                    queued_id,
+                )
+                assert queued_after_claim is not None
+                queued_after_claim.status = "completed"
+                await session.commit()
+
+            async with session_maker() as session:
+                claimed_stale = (
+                    await analysis_repository.claim_next_analysis_session_for_worker(
+                        session,
+                        stale_before=datetime.now(UTC) - timedelta(seconds=900),
+                    )
+                )
+                await session.commit()
+            assert claimed_stale == stale_running_id
+
+            async with session_maker() as session:
+                stale_after_claim = await session.get(
+                    AnalysisGenerationSession,
+                    stale_running_id,
+                )
+                assert stale_after_claim is not None
+                assert stale_after_claim.status == "running"
+                assert stale_after_claim.error_message is None
+                assert stale_after_claim.started_at is not None
+
+        asyncio.run(run_test())
+    finally:
+        _cleanup_client(engine)
+
+
+def test_analysis_worker_iteration_claims_and_runs_session(monkeypatch) -> None:
+    called: dict[str, object] = {
+        "claimed": False,
+        "ran_session_id": None,
+    }
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            class _FakeSession:
+                async def commit(self) -> None:
+                    return None
+
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_claim_next_analysis_session_for_worker(
+        session,
+        *,
+        stale_before: datetime,
+    ) -> str | None:
+        assert session is not None
+        assert isinstance(stale_before, datetime)
+        called["claimed"] = True
+        return "session-queued-1"
+
+    async def fake_run_analysis_session_by_id(session_id: str) -> None:
+        called["ran_session_id"] = session_id
+
+    worker_module = importlib.import_module("scripts.run_analysis_worker")
+    monkeypatch.setattr(
+        worker_module,
+        "SessionLocal",
+        lambda: _FakeSessionContext(),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "claim_next_analysis_session_for_worker",
+        fake_claim_next_analysis_session_for_worker,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "run_analysis_session_by_id",
+        fake_run_analysis_session_by_id,
+    )
+
+    claimed_session_id = asyncio.run(worker_module.run_analysis_worker_iteration())
+
+    assert called["claimed"] is True
+    assert called["ran_session_id"] == "session-queued-1"
+    assert claimed_session_id == "session-queued-1"
+
+
+def test_analysis_worker_iteration_skips_when_no_queued_session(monkeypatch) -> None:
+    called: dict[str, bool] = {
+        "run_called": False,
+    }
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            class _FakeSession:
+                async def commit(self) -> None:
+                    return None
+
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_claim_next_analysis_session_for_worker(
+        session,
+        *,
+        stale_before: datetime,
+    ) -> str | None:
+        assert session is not None
+        assert isinstance(stale_before, datetime)
+        return None
+
+    async def fake_run_analysis_session_by_id(session_id: str) -> None:
+        _ = session_id
+        called["run_called"] = True
+
+    worker_module = importlib.import_module("scripts.run_analysis_worker")
+    monkeypatch.setattr(
+        worker_module,
+        "SessionLocal",
+        lambda: _FakeSessionContext(),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "claim_next_analysis_session_for_worker",
+        fake_claim_next_analysis_session_for_worker,
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "run_analysis_session_by_id",
+        fake_run_analysis_session_by_id,
+    )
+
+    claimed_session_id = asyncio.run(worker_module.run_analysis_worker_iteration())
+
+    assert claimed_session_id is None
+    assert called["run_called"] is False

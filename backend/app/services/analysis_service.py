@@ -1,4 +1,3 @@
-import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlparse
@@ -468,10 +467,9 @@ async def start_analysis_session(
             settings.analysis_active_session_ttl_seconds,
         )
 
+    # 关键流程：非 inline 模式只负责入队，真实执行统一由独立 Analysis Worker 领取。
     if execute_inline:
         await run_analysis_session_by_id(session_row.id)
-    else:
-        asyncio.create_task(run_analysis_session_by_id(session_row.id))
 
     return {
         "session_id": session_row.id,

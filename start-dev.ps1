@@ -11,6 +11,7 @@ $rootPath = Split-Path -Parent $PSCommandPath
 $backendPath = Join-Path $rootPath 'backend'
 $frontendPath = Join-Path $rootPath 'frontend'
 $workerScriptPath = Join-Path $backendPath 'scripts\\run_watchlist_worker.py'
+$analysisWorkerScriptPath = Join-Path $backendPath 'scripts\\run_analysis_worker.py'
 
 function Test-RequiredPath {
     param(
@@ -52,6 +53,7 @@ catch {
 Test-RequiredPath -Path $backendPath -Description '后端目录' -PathType 'Container'
 Test-RequiredPath -Path $frontendPath -Description '前端目录' -PathType 'Container'
 Test-RequiredPath -Path $workerScriptPath -Description '关注 Worker 脚本' -PathType 'Leaf'
+Test-RequiredPath -Path $analysisWorkerScriptPath -Description '分析 Worker 脚本' -PathType 'Leaf'
 
 $launchItems = @(
     @{
@@ -63,6 +65,11 @@ $launchItems = @(
         Title = 'Watchlist Worker'
         WorkingDirectory = $backendPath
         Command = 'uv run python scripts/run_watchlist_worker.py'
+    },
+    @{
+        Title = 'Analysis Worker'
+        WorkingDirectory = $backendPath
+        Command = 'uv run python scripts/run_analysis_worker.py'
     },
     @{
         Title = 'Frontend Web'
@@ -92,4 +99,5 @@ foreach ($item in $launchItems) {
 Write-Host '已在独立终端中启动开发服务。' -ForegroundColor Green
 Write-Host 'Backend API:      http://127.0.0.1:8000'
 Write-Host 'Watchlist Worker: 已启动后台轮询'
+Write-Host 'Analysis Worker:  已启动分析会话队列轮询'
 Write-Host 'Frontend Web:     http://127.0.0.1:5173'
