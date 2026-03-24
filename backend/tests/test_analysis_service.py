@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from decimal import Decimal
 
@@ -15,7 +15,10 @@ from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
-from app.services.analysis_service import get_stock_analysis_summary
+from app.services.analysis_service import (
+    get_stock_analysis_summary,
+    list_stock_analysis_report_archives,
+)
 
 
 def _setup_async_session(tmp_path: Path):
@@ -414,6 +417,256 @@ def test_analysis_service_forces_domain_source_when_summary_backfill_unavailable
             assert persisted_source["metadata_status"] == "unavailable"
             assert persisted_source["source"] == "finance.example.com"
             assert persisted_source["published_at"] is None
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_analysis_service_summary_backfill_respects_five_url_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    called_sizes: list[int] = []
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = session, http_client, timeout_seconds, success_ttl_seconds, failure_ttl_seconds, max_bytes
+        called_sizes.append(len(raw_sources))
+        return [
+            {
+                **item,
+                "source": "Reuters",
+                "domain": "finance.example.com",
+                "metadata_status": "enriched",
+                "published_at": "2026-03-24T09:30:00+00:00",
+            }
+            for item in raw_sources
+        ]
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisReport(
+                    ts_code="600519.SH",
+                    status="ready",
+                    summary="历史报告",
+                    risk_points=[],
+                    factor_breakdown=[],
+                    web_sources=[
+                        {
+                            "title": f"引用 {index}",
+                            "url": f"https://finance.example.com/oil-{index}",
+                            "source": None,
+                            "domain": None,
+                            "published_at": None,
+                            "snippet": "市场继续关注供给端扰动。",
+                        }
+                        for index in range(8)
+                    ],
+                    generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                )
+            )
+            await session.commit()
+
+            result = await get_stock_analysis_summary(session, "600519.SH")
+
+            assert result["report"] is not None
+            assert len(result["report"]["web_sources"]) == 8
+            assert called_sizes == [5]
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_analysis_service_reports_backfill_respects_three_three_ten_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    called_sizes: list[int] = []
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = session, http_client, timeout_seconds, success_ttl_seconds, failure_ttl_seconds, max_bytes
+        called_sizes.append(len(raw_sources))
+        return [
+            {
+                **item,
+                "source": "Reuters",
+                "domain": "finance.example.com",
+                "metadata_status": "enriched",
+                "published_at": "2026-03-24T09:30:00+00:00",
+            }
+            for item in raw_sources
+        ]
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            base_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
+            for report_index in range(4):
+                session.add(
+                    AnalysisReport(
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary=f"历史报告 {report_index}",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        web_sources=[
+                            {
+                                "title": f"引用 {report_index}-{item_index}",
+                                "url": f"https://finance.example.com/{report_index}-{item_index}",
+                                "source": None,
+                                "domain": None,
+                                "published_at": None,
+                                "snippet": "市场继续关注供给端扰动。",
+                            }
+                            for item_index in range(5)
+                        ],
+                        generated_at=base_time - timedelta(minutes=report_index),
+                    )
+                )
+            await session.commit()
+
+            result = await list_stock_analysis_report_archives(
+                session,
+                "600519.SH",
+                limit=10,
+            )
+
+            assert len(result["items"]) == 4
+            assert len(called_sizes) == 3
+            assert all(size <= 3 for size in called_sizes)
+            assert sum(called_sizes) <= 10
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_analysis_service_skips_reenrichment_for_unavailable_fallback_ready_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    called_times = {"count": 0}
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = (
+            session,
+            raw_sources,
+            http_client,
+            timeout_seconds,
+            success_ttl_seconds,
+            failure_ttl_seconds,
+            max_bytes,
+        )
+        called_times["count"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisReport(
+                    ts_code="600519.SH",
+                    status="ready",
+                    summary="历史报告",
+                    risk_points=[],
+                    factor_breakdown=[],
+                    web_sources=[
+                        {
+                            "title": "国际油价收涨",
+                            "url": "https://finance.example.com/oil",
+                            "source": "finance.example.com",
+                            "domain": "finance.example.com",
+                            "published_at": None,
+                            "metadata_status": "unavailable",
+                            "snippet": "市场继续关注供给端扰动。",
+                        }
+                    ],
+                    generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                )
+            )
+            await session.commit()
+
+            first = await get_stock_analysis_summary(session, "600519.SH")
+            second = await get_stock_analysis_summary(session, "600519.SH")
+
+            assert first["report"] is not None
+            assert second["report"] is not None
+            assert called_times["count"] == 0
 
     try:
         asyncio.run(run_test())

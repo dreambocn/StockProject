@@ -121,13 +121,37 @@ def _apply_web_source_fallback(raw_source: dict[str, object]) -> dict[str, objec
     return normalized
 
 
-def _needs_web_source_enrichment(raw_source: dict[str, object]) -> bool:
+def _needs_web_source_enrichment(
+    raw_source: dict[str, object],
+    *,
+    metadata_status_explicit: bool,
+) -> bool:
     metadata_status = str(raw_source.get("metadata_status") or "").strip().lower()
-    return bool(raw_source.get("url")) and (
+    if not raw_source.get("url"):
+        return False
+
+    source = str(raw_source.get("source") or "").strip().lower()
+    domain = str(raw_source.get("domain") or "").strip().lower()
+    published_at = raw_source.get("published_at")
+    published_missing = published_at is None or not str(published_at).strip()
+
+    # 关键降级：当引用已经回落为“域名来源 + 无发布时间”的失败/域名推断形态时，
+    # 读路径应直接复用已回写结果，避免每次读取都重复触发补全。
+    if (
+        metadata_status_explicit
+        and
+        metadata_status in {"unavailable", "domain_inferred"}
+        and domain
+        and source == domain
+        and published_missing
+    ):
+        return False
+
+    return (
         not raw_source.get("source")
         or not raw_source.get("published_at")
         or not raw_source.get("domain")
-        or metadata_status in {"", "unavailable", "domain_inferred"}
+        or metadata_status in {""}
     )
 
 
@@ -138,10 +162,14 @@ async def _backfill_report_web_sources(
     per_report_limit: int,
     remaining_budget: int,
 ) -> tuple[list[dict[str, object]], int]:
-    raw_sources = [
-        _apply_web_source_fallback(dict(item))
+    original_sources = [
+        dict(item)
         for item in (getattr(report_obj, "web_sources", None) or [])
         if isinstance(item, dict)
+    ]
+    raw_sources = [
+        _apply_web_source_fallback(dict(item))
+        for item in original_sources
     ]
     if report_obj is None or not raw_sources or remaining_budget <= 0:
         return raw_sources, remaining_budget
@@ -149,7 +177,12 @@ async def _backfill_report_web_sources(
     target_indexes = [
         index
         for index, item in enumerate(raw_sources)
-        if _needs_web_source_enrichment(item)
+        if _needs_web_source_enrichment(
+            item,
+            metadata_status_explicit=bool(
+                str(original_sources[index].get("metadata_status") or "").strip()
+            ),
+        )
     ][: min(per_report_limit, remaining_budget)]
     if not target_indexes:
         return raw_sources, remaining_budget

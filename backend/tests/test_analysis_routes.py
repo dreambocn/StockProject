@@ -1,6 +1,6 @@
 from pathlib import Path
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -290,3 +290,172 @@ def test_analysis_reports_route_forces_domain_source_when_backfill_unavailable(
     assert web_source["metadata_status"] == "unavailable"
     assert web_source["source"] == "finance.example.com"
     assert web_source["published_at"] is None
+
+
+def test_analysis_reports_route_respects_three_three_ten_backfill_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    called_sizes: list[int] = []
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = session, http_client, timeout_seconds, success_ttl_seconds, failure_ttl_seconds, max_bytes
+        called_sizes.append(len(raw_sources))
+        return [
+            {
+                **item,
+                "source": "Reuters",
+                "domain": "finance.example.com",
+                "metadata_status": "enriched",
+                "published_at": "2026-03-24T09:30:00+00:00",
+            }
+            for item in raw_sources
+        ]
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        name="贵州茅台",
+                        fullname="贵州茅台酒股份有限公司",
+                        list_status="L",
+                    )
+                )
+                base_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
+                for report_index in range(4):
+                    session.add(
+                        AnalysisReport(
+                            ts_code="600519.SH",
+                            status="ready",
+                            summary=f"历史报告 {report_index}",
+                            risk_points=[],
+                            factor_breakdown=[],
+                            web_sources=[
+                                {
+                                    "title": f"引用 {report_index}-{item_index}",
+                                    "url": f"https://finance.example.com/{report_index}-{item_index}",
+                                    "source": None,
+                                    "domain": None,
+                                    "published_at": None,
+                                    "snippet": "市场继续关注供给端扰动。",
+                                }
+                                for item_index in range(5)
+                            ],
+                            generated_at=base_time - timedelta(minutes=report_index),
+                        )
+                    )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get("/api/analysis/stocks/600519.SH/reports")
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["items"]) == 4
+    assert len(called_sizes) == 3
+    assert all(size <= 3 for size in called_sizes)
+    assert sum(called_sizes) <= 10
+
+
+def test_analysis_reports_route_skips_reenrichment_for_domain_inferred_fallback_ready_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    called_times = {"count": 0}
+
+    async def fake_enrich_web_sources(
+        *,
+        session,
+        raw_sources,
+        http_client=None,
+        timeout_seconds=3,
+        success_ttl_seconds=86400,
+        failure_ttl_seconds=7200,
+        max_bytes=1024 * 512,
+    ):
+        _ = (
+            session,
+            raw_sources,
+            http_client,
+            timeout_seconds,
+            success_ttl_seconds,
+            failure_ttl_seconds,
+            max_bytes,
+        )
+        called_times["count"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.enrich_web_sources",
+        fake_enrich_web_sources,
+    )
+
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        name="贵州茅台",
+                        fullname="贵州茅台酒股份有限公司",
+                        list_status="L",
+                    )
+                )
+                session.add(
+                    AnalysisReport(
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="历史报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        web_sources=[
+                            {
+                                "title": "国际油价收涨",
+                                "url": "https://finance.example.com/oil",
+                                "source": "finance.example.com",
+                                "domain": "finance.example.com",
+                                "published_at": None,
+                                "metadata_status": "domain_inferred",
+                                "snippet": "市场继续关注供给端扰动。",
+                            }
+                        ],
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        first = client.get("/api/analysis/stocks/600519.SH/reports")
+        second = client.get("/api/analysis/stocks/600519.SH/reports")
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert called_times["count"] == 0
