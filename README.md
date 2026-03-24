@@ -174,6 +174,10 @@ uv run fastapi dev main.py
 - `LLM_WEB_SEARCH_ENABLED`（是否允许联网搜索增强，默认 `false`）
 - `ANALYSIS_ACTIVE_SESSION_TTL_SECONDS`（活跃分析会话去重 TTL，默认 `300`）
 - `ANALYSIS_REPORT_FRESHNESS_MINUTES`（分析报告冷却窗口，默认 `60`；1 小时内复用最近归档，不重复触发分析）
+- `WEB_SOURCE_METADATA_TIMEOUT_SECONDS`（联网引用元数据抓取超时秒数，默认 `3`）
+- `WEB_SOURCE_METADATA_CACHE_TTL_SECONDS`（联网引用元数据成功缓存秒数，默认 `86400`）
+- `WEB_SOURCE_METADATA_FAILURE_TTL_SECONDS`（联网引用元数据失败缓存秒数，默认 `7200`）
+- `WEB_SOURCE_METADATA_MAX_BYTES`（联网引用元数据抓取最大读取字节数，默认 `524288`）
 - `STOCK_SYNC_TRADE_DAYS`（增量同步交易日窗口，默认 `120`）
 - `STOCK_DAILY_CACHE_TTL_SECONDS`（股票日线缓存秒数，默认 `600`）
 - `STOCK_TRADE_CAL_CACHE_TTL_SECONDS`（交易日历缓存秒数，默认 `86400`）
@@ -280,6 +284,7 @@ uv run python scripts/run_watchlist_worker.py
 - `GET /api/analysis/stocks/{ts_code}/reports`（支持 `topic/event_id`）
 - 分析报告中的 `web_sources` 现会解析并返回结构化引用（`title/url/source/published_at/snippet`）
 - 热点页会在本地持久化每个 topic 的锚点事件选择，刷新后继续沿用
+- 服务端会对 `web_sources.url` 做最佳努力元数据补全，额外返回 `domain/metadata_status`，并在分析页分开展示“结构化来源”和“联网引用”
 
 ## Watchlist API 列表
 

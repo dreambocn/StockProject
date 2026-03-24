@@ -204,6 +204,12 @@ Last update: 2026-03-23
   - Streamed analysis generation now keeps web citations by reading the final Responses payload after stream completion
   - Analysis workbench now renders web citations as a separate structured source list instead of mixing them into Markdown正文
   - Added regression tests for anchor persistence, citation extraction, streamed citation retention, and citation rendering
+- Completed citation metadata enrichment enhancement:
+  - Added `web_source_metadata_cache` table and service-side best-effort metadata enrichment for citation URLs
+  - Citation enrichment now resolves `source/published_at/domain/metadata_status` from `og:*`、JSON-LD、`time[datetime]` and domain fallback rules
+  - New analysis reports persist enriched citation metadata instead of only raw `url_citation` output
+  - Analysis workbench citation cards now show source, formatted publish time, domain, snippet, and enrichment status
+  - Added backend/frontend regression tests for metadata extraction, cache reuse, non-HTML fallback, and richer citation rendering
 
 ## In Progress
 
