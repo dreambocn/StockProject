@@ -29,6 +29,26 @@ class NewsEvent(Base):
             "cluster_key",
             "fetched_at",
         ),
+        Index(
+            "ix_news_events_batch_id",
+            "batch_id",
+        ),
+        Index(
+            "ix_news_events_scope_topic_published_fetched_created",
+            "scope",
+            "macro_topic",
+            "published_at",
+            "fetched_at",
+            "created_at",
+        ),
+        Index(
+            "ix_news_events_scope_ts_code_published_fetched_created",
+            "scope",
+            "ts_code",
+            "published_at",
+            "fetched_at",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -51,6 +71,7 @@ class NewsEvent(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
     external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     cluster_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     source_priority: Mapped[int] = mapped_column(nullable=False, default=0, index=True)
     evidence_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="hot", index=True)
     macro_topic: Mapped[str | None] = mapped_column(

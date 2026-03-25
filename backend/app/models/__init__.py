@@ -1,6 +1,7 @@
 from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_report import AnalysisReport
+from app.models.news_fetch_batch import NewsFetchBatch
 from app.models.news_event import NewsEvent
 from app.models.stock_adj_factor import StockAdjFactor
 from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
@@ -20,6 +21,7 @@ __all__ = [
     "AnalysisEventLink",
     "AnalysisGenerationSession",
     "AnalysisReport",
+    "NewsFetchBatch",
     "NewsEvent",
     "StockInstrument",
     "StockCandidateEvidenceCache",

@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     stock_related_news_cache_ttl_seconds: int = 3600
     hot_news_cache_ttl_seconds: int = 3600
     candidate_hot_search_cache_ttl_seconds: int = 3600
+    policy_news_cache_ttl_seconds: int = 1800
+    news_cache_version_legacy_fallback_enabled: bool = True
+    news_cache_version_legacy_fallback_seconds: int = 3600
     candidate_research_report_cache_ttl_seconds: int = 43200
     candidate_research_refresh_interval_hours: int = 12
     llm_base_url: str = "https://aixj.vip"

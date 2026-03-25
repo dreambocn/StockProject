@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,20 @@ from app.schemas.stocks import (
 )
 from app.schemas.news import StockRelatedNewsItemResponse
 from app.services.news_cache_service import get_news_rows
+from app.services.news_cache_version_service import (
+    build_news_cache_version_key,
+    format_news_cache_version,
+    read_news_cache_version,
+    resolve_news_cache_data_key,
+    write_news_cache_version,
+)
+from app.services.news_fetch_batch_service import (
+    NEWS_FETCH_STATUS_FAILED,
+    NEWS_FETCH_STATUS_PARTIAL,
+    NEWS_FETCH_STATUS_SUCCESS,
+    create_news_fetch_batch,
+    finalize_news_fetch_batch,
+)
 from app.services.stock_sync_service import (
     STOCK_BASIC_FULL_STATUSES,
     sync_stock_basic_full,
@@ -84,6 +99,85 @@ TUSHARE_TRADE_CAL_CACHE_PREFIX = "stocks:trade_cal:tushare"
 TUSHARE_ADJ_FACTOR_CACHE_PREFIX = "stocks:adj_factor:tushare"
 STOCK_NEWS_CACHE_PREFIX = "stocks:news"
 SUPPORTED_KLINE_PERIODS: tuple[str, ...] = ("daily", "weekly", "monthly")
+
+
+def _normalize_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+async def _read_versioned_stock_news_cache(
+    *,
+    base_cache_key: str,
+    version_key: str,
+    model_type: type[BaseModel],
+    last_fetch_at: datetime | None,
+    delete_on_decode_error: bool = False,
+) -> list[BaseModel] | None:
+    settings = get_settings()
+    legacy_fallback_enabled = bool(
+        getattr(settings, "news_cache_version_legacy_fallback_enabled", True)
+    )
+    legacy_fallback_seconds = int(
+        getattr(settings, "news_cache_version_legacy_fallback_seconds", 3600)
+    )
+    version = await read_news_cache_version(
+        version_key=version_key,
+        redis_client_getter=get_redis_client,
+    )
+    if version is not None:
+        return await read_cached_model_rows(
+            resolve_news_cache_data_key(
+                base_cache_key=base_cache_key,
+                version=version,
+            ),
+            model_type,
+            delete_on_decode_error=delete_on_decode_error,
+            redis_client_getter=get_redis_client,
+        )
+
+    if not legacy_fallback_enabled:
+        return None
+
+    normalized_last_fetch_at = _normalize_datetime(last_fetch_at)
+    if (
+        normalized_last_fetch_at is not None
+        and datetime.now(UTC) - normalized_last_fetch_at
+        > timedelta(seconds=legacy_fallback_seconds)
+    ):
+        return None
+
+    return await read_cached_model_rows(
+        base_cache_key,
+        model_type,
+        delete_on_decode_error=delete_on_decode_error,
+        redis_client_getter=get_redis_client,
+    )
+
+
+async def _write_versioned_stock_news_cache(
+    *,
+    base_cache_key: str,
+    version_key: str,
+    rows: list[BaseModel],
+    ttl_seconds: int,
+) -> None:
+    version = await read_news_cache_version(
+        version_key=version_key,
+        redis_client_getter=get_redis_client,
+    )
+    await write_cached_model_rows(
+        resolve_news_cache_data_key(
+            base_cache_key=base_cache_key,
+            version=version,
+        ),
+        rows,
+        ttl_seconds=ttl_seconds,
+        redis_client_getter=get_redis_client,
+    )
 
 
 async def _fetch_latest_snapshot(
@@ -426,13 +520,26 @@ async def get_stock_related_news(
     cache_key = (
         f"{STOCK_NEWS_CACHE_PREFIX}:{normalized_ts_code}:{cache_variant}:{limit}"
     )
+    version_key = build_news_cache_version_key(
+        scope="stock",
+        cache_variant=cache_variant,
+        ts_code=normalized_ts_code,
+    )
+
+    async def get_last_fetch_at() -> datetime | None:
+        return await load_latest_stock_news_fetch_at(
+            session=session,
+            ts_code=normalized_ts_code,
+            cache_variant=cache_variant,
+        )
 
     async def read_cache(key: str) -> list[StockRelatedNewsItemResponse] | None:
-        return await read_cached_model_rows(
-            key,
-            StockRelatedNewsItemResponse,
+        return await _read_versioned_stock_news_cache(
+            base_cache_key=key,
+            version_key=version_key,
+            model_type=StockRelatedNewsItemResponse,
+            last_fetch_at=await get_last_fetch_at(),
             delete_on_decode_error=True,
-            redis_client_getter=get_redis_client,
         )
 
     async def write_cache(
@@ -440,11 +547,11 @@ async def get_stock_related_news(
         rows: list[StockRelatedNewsItemResponse],
         ttl_seconds: int,
     ) -> None:
-        await write_cached_model_rows(
-            key,
-            rows,
+        await _write_versioned_stock_news_cache(
+            base_cache_key=key,
+            version_key=version_key,
+            rows=rows,
             ttl_seconds=ttl_seconds,
-            redis_client_getter=get_redis_client,
         )
 
     async def load_from_db() -> list[StockRelatedNewsItemResponse]:
@@ -455,14 +562,19 @@ async def get_stock_related_news(
             limit=limit,
         )
 
-    async def get_last_fetch_at() -> datetime | None:
-        return await load_latest_stock_news_fetch_at(
-            session=session,
-            ts_code=normalized_ts_code,
-            cache_variant=cache_variant,
-        )
-
     async def fetch_remote_and_persist() -> list[StockRelatedNewsItemResponse]:
+        fetched_at = datetime.now(UTC)
+        batch = await create_news_fetch_batch(
+            session,
+            scope="stock",
+            cache_variant=cache_variant,
+            ts_code=normalized_ts_code,
+            trigger_source="api.stocks.news",
+            fetched_at=fetched_at,
+            started_at=fetched_at,
+        )
+        provider_stats: list[dict[str, object]] = []
+        degrade_reasons: list[str] = []
         try:
             # 关键流程：个股详情页只拉取该股票自身新闻，并把结果统一落库，
             # 1 小时内优先走缓存和数据库，避免切换详情/复看页面时重复打资讯源。
@@ -472,41 +584,141 @@ async def get_stock_related_news(
                 symbol=symbol,
                 rows=stock_news_rows,
             )
+            provider_stats.append(
+                {
+                    "provider": "eastmoney_stock",
+                    "status": "success",
+                    "error_type": None,
+                    "raw_count": len(stock_news_rows),
+                    "mapped_count": len(mapped_stock_news),
+                    "persisted_count": len(mapped_stock_news),
+                }
+            )
             mapped_items = mapped_stock_news
 
             if include_announcements:
                 # 关键业务分支：公告作为强相关补充并入新闻流；若公告源失败，降级为仅新闻，不阻断主流程。
                 try:
                     announcement_rows = await fetch_stock_announcements(symbol=symbol)
-                except Exception:
+                    mapped_announcements = map_stock_announcement_rows(
+                        ts_code=normalized_ts_code,
+                        symbol=symbol,
+                        rows=announcement_rows,
+                    )
+                    provider_stats.append(
+                        {
+                            "provider": "cninfo_announcement",
+                            "status": "success",
+                            "error_type": None,
+                            "raw_count": len(announcement_rows),
+                            "mapped_count": len(mapped_announcements),
+                            "persisted_count": len(mapped_announcements),
+                        }
+                    )
+                except Exception as exc:
                     announcement_rows = []
-
-                mapped_announcements = map_stock_announcement_rows(
-                    ts_code=normalized_ts_code,
-                    symbol=symbol,
-                    rows=announcement_rows,
-                )
+                    mapped_announcements = []
+                    provider_stats.append(
+                        {
+                            "provider": "cninfo_announcement",
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                            "raw_count": 0,
+                            "mapped_count": 0,
+                            "persisted_count": 0,
+                        }
+                    )
+                    degrade_reasons.append("stock.announcement_failed")
                 mapped_items = [*mapped_stock_news, *mapped_announcements]
+            else:
+                provider_stats.append(
+                    {
+                        "provider": "cninfo_announcement",
+                        "status": "skipped",
+                        "error_type": None,
+                        "raw_count": 0,
+                        "mapped_count": 0,
+                        "persisted_count": 0,
+                    }
+                )
         except Exception as exc:
+            await finalize_news_fetch_batch(
+                session,
+                batch=batch,
+                status=NEWS_FETCH_STATUS_FAILED,
+                finished_at=datetime.now(UTC),
+                row_count_raw=0,
+                row_count_mapped=0,
+                row_count_persisted=0,
+                provider_stats=[
+                    {
+                        "provider": "eastmoney_stock",
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "raw_count": 0,
+                        "mapped_count": 0,
+                        "persisted_count": 0,
+                    }
+                ],
+                degrade_reasons=["stock.news_failed"],
+                error_type=type(exc).__name__,
+                error_message="个股新闻上游抓取失败",
+            )
+            await session.commit()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="stock news upstream unavailable",
             ) from exc
 
+        if not mapped_items:
+            await finalize_news_fetch_batch(
+                session,
+                batch=batch,
+                status=NEWS_FETCH_STATUS_FAILED,
+                finished_at=datetime.now(UTC),
+                row_count_raw=0,
+                row_count_mapped=0,
+                row_count_persisted=0,
+                provider_stats=provider_stats,
+                degrade_reasons=degrade_reasons or ["mapping.empty_after_filter"],
+                error_type=None,
+                error_message="个股新闻映射后为空，回退到最近批次",
+            )
+            await session.commit()
+            return await load_from_db()
+
         mapped_items.sort(
             key=lambda item: item.published_at or datetime.min, reverse=True
         )
-        fetched_at = datetime.now(UTC)
         await replace_stock_news_rows(
             session=session,
             ts_code=normalized_ts_code,
             symbol=symbol,
             cache_variant=cache_variant,
             fetched_at=fetched_at,
+            batch_id=batch.id,
             rows=mapped_items,
         )
+        await finalize_news_fetch_batch(
+            session,
+            batch=batch,
+            status=(
+                NEWS_FETCH_STATUS_PARTIAL if degrade_reasons else NEWS_FETCH_STATUS_SUCCESS
+            ),
+            finished_at=datetime.now(UTC),
+            row_count_raw=sum(int(item["raw_count"]) for item in provider_stats),
+            row_count_mapped=len(mapped_items),
+            row_count_persisted=len(mapped_items),
+            provider_stats=provider_stats,
+            degrade_reasons=degrade_reasons,
+        )
         await session.commit()
-        return mapped_items[:limit]
+        await write_news_cache_version(
+            version_key=version_key,
+            version=format_news_cache_version(fetched_at=fetched_at),
+            redis_client_getter=get_redis_client,
+        )
+        return await load_from_db()
 
     return await get_news_rows(
         cache_key=cache_key,

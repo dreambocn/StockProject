@@ -10,9 +10,9 @@ from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
-from app.services.news_repository import (
-    build_news_event_logical_key,
-    dedupe_news_events_to_latest,
+from app.services.news_latest_query_service import (
+    build_latest_news_events_statement,
+    build_news_event_identity_key,
 )
 
 
@@ -69,7 +69,9 @@ async def load_recent_news_events(
     published_from: datetime | None,
     published_to: datetime | None,
     limit: int,
+    candidate_limit: int | None = None,
 ) -> list[NewsEvent]:
+    resolved_limit = max(limit, candidate_limit or limit)
     scope_conditions = [
         and_(NewsEvent.scope == "stock", NewsEvent.ts_code == ts_code),
         NewsEvent.scope == "policy",
@@ -79,60 +81,58 @@ async def load_recent_news_events(
             and_(NewsEvent.scope == "hot", NewsEvent.macro_topic == topic)
         )
 
-    statement = select(NewsEvent).where(or_(*scope_conditions))
+    base_statement = select(NewsEvent).where(or_(*scope_conditions))
     if topic:
-        statement = statement.where(
+        base_statement = base_statement.where(
             or_(NewsEvent.scope.in_(("stock", "policy")), NewsEvent.macro_topic == topic)
         )
     if published_from is not None:
-        statement = statement.where(NewsEvent.published_at >= published_from)
+        base_statement = base_statement.where(NewsEvent.published_at >= published_from)
     if published_to is not None:
-        statement = statement.where(NewsEvent.published_at <= published_to)
+        base_statement = base_statement.where(NewsEvent.published_at <= published_to)
 
-    statement = statement.order_by(
-        NewsEvent.fetched_at.desc(),
-        NewsEvent.created_at.desc(),
-        NewsEvent.published_at.desc(),
+    latest_statement = build_latest_news_events_statement(
+        base_statement=base_statement,
+        apply_default_order=True,
     )
-    rows = (await session.execute(statement)).scalars().all()
-    rows = dedupe_news_events_to_latest(rows)
-
     if not anchor_event_id:
-        return rows[:limit]
+        latest_statement = latest_statement.limit(resolved_limit)
+        return (await session.execute(latest_statement)).scalars().all()
+
+    rows = (
+        await session.execute(latest_statement.limit(resolved_limit))
+    ).scalars().all()
 
     anchor_row = await session.get(NewsEvent, anchor_event_id)
     if anchor_row is None:
         return rows[:limit]
 
     ordered_rows: list[NewsEvent] = [anchor_row]
-    seen_keys = {build_news_event_logical_key(anchor_row)}
+    seen_keys = {build_news_event_identity_key(anchor_row)}
     if anchor_row.cluster_key:
-        sibling_statement = (
-            select(NewsEvent)
-            .where(NewsEvent.cluster_key == anchor_row.cluster_key)
-            .order_by(
-                NewsEvent.fetched_at.desc(),
-                NewsEvent.source_priority.desc(),
-                NewsEvent.published_at.desc(),
-            )
+        sibling_base_statement = select(NewsEvent).where(
+            NewsEvent.cluster_key == anchor_row.cluster_key
+        )
+        sibling_statement = build_latest_news_events_statement(
+            base_statement=sibling_base_statement,
+            apply_default_order=True,
         )
         sibling_rows = (await session.execute(sibling_statement)).scalars().all()
-        sibling_rows = dedupe_news_events_to_latest(sibling_rows)
         for sibling in sibling_rows:
-            logical_key = build_news_event_logical_key(sibling)
-            if logical_key in seen_keys:
+            sibling_key = build_news_event_identity_key(sibling)
+            if sibling_key in seen_keys:
                 continue
             ordered_rows.append(sibling)
-            seen_keys.add(logical_key)
+            seen_keys.add(sibling_key)
 
     for row in rows:
-        logical_key = build_news_event_logical_key(row)
-        if logical_key in seen_keys:
+        row_key = build_news_event_identity_key(row)
+        if row_key in seen_keys:
             continue
         ordered_rows.append(row)
-        seen_keys.add(logical_key)
+        seen_keys.add(row_key)
 
-    return ordered_rows[:limit]
+    return ordered_rows[:resolved_limit]
 
 
 async def load_price_window_rows(
@@ -242,15 +242,20 @@ async def create_analysis_report(
 
 
 async def load_analysis_events(
-    session: AsyncSession, ts_code: str, limit: int = 20, anchor_event_id: str | None = None
+    session: AsyncSession,
+    ts_code: str,
+    limit: int = 20,
+    anchor_event_id: str | None = None,
+    candidate_limit: int | None = None,
 ) -> list[dict[str, object | None]]:
+    resolved_limit = max(limit, candidate_limit or limit)
     news_alias = aliased(NewsEvent)
     statement = (
         select(AnalysisEventLink, news_alias)
         .join(news_alias, AnalysisEventLink.event_id == news_alias.id)
         .where(AnalysisEventLink.ts_code == ts_code)
         .order_by(AnalysisEventLink.created_at.desc())
-        .limit(limit)
+        .limit(resolved_limit)
     )
     rows = (await session.execute(statement)).all()
     events: list[dict[str, object | None]] = []
@@ -274,18 +279,18 @@ async def load_analysis_events(
                 "correlation_score": link.correlation_score,
                 "confidence": link.confidence,
                 "link_status": link.link_status,
+                "cluster_key": news.cluster_key,
+                "ts_code": news.ts_code,
+                "url": news.url,
+                "fetched_at": news.fetched_at,
+                "news_created_at": news.created_at,
+                "source_priority": news.source_priority,
+                "link_created_at": link.created_at,
             }
         )
 
     if anchor_event_id:
-        events.sort(
-            key=lambda item: (
-                0 if item["event_id"] == anchor_event_id else 1,
-                -(float(item["correlation_score"]) if item["correlation_score"] is not None else -1.0),
-                item["published_at"] or datetime.min,
-            ),
-            reverse=False,
-        )
+        events.sort(key=lambda item: 0 if item["event_id"] == anchor_event_id else 1)
 
     return events
 

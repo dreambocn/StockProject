@@ -90,6 +90,8 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
 
         # 关键流程：对历史库执行最小列补齐，避免 create_all 不会自动 ALTER 导致运行期写入失败。
         await connection.run_sync(_ensure_stock_instrument_columns)
+        await connection.run_sync(_ensure_news_fetch_batch_columns)
+        await connection.run_sync(_ensure_news_fetch_batch_indexes)
         await connection.run_sync(_ensure_news_event_columns)
         await connection.run_sync(_ensure_news_event_indexes)
         await connection.run_sync(_ensure_analysis_report_columns)
@@ -141,6 +143,7 @@ def _ensure_news_event_columns(sync_connection: Connection) -> None:
         "cluster_key": "VARCHAR(255)",
         "source_priority": "INTEGER DEFAULT 0",
         "evidence_kind": "VARCHAR(32) DEFAULT 'hot'",
+        "batch_id": "VARCHAR(36)",
     }
     for column_name, column_type in required_column_sql.items():
         if column_name in existing_columns:
@@ -164,6 +167,68 @@ def _ensure_news_event_indexes(sync_connection: Connection) -> None:
         "ON news_events (scope, ts_code, cache_variant, fetched_at)",
         "CREATE INDEX IF NOT EXISTS ix_news_events_scope_cluster_key_fetched_at "
         "ON news_events (scope, cluster_key, fetched_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_events_batch_id "
+        "ON news_events (batch_id)",
+        "CREATE INDEX IF NOT EXISTS ix_news_events_scope_topic_published_fetched_created "
+        "ON news_events (scope, macro_topic, published_at, fetched_at, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_events_scope_ts_code_published_fetched_created "
+        "ON news_events (scope, ts_code, published_at, fetched_at, created_at)",
+    )
+    for statement in index_sql:
+        sync_connection.execute(text(statement))
+
+
+def _ensure_news_fetch_batch_columns(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "news_fetch_batches" not in set(inspector.get_table_names()):
+        return
+
+    existing_columns = {
+        item["name"] for item in inspector.get_columns("news_fetch_batches")
+    }
+    required_column_sql: dict[str, str] = {
+        "scope": "VARCHAR(16)",
+        "cache_variant": "VARCHAR(32)",
+        "ts_code": "VARCHAR(12)",
+        "trigger_source": "VARCHAR(32)",
+        "status": "VARCHAR(16)",
+        "started_at": "TIMESTAMP",
+        "finished_at": "TIMESTAMP",
+        "fetched_at": "TIMESTAMP",
+        "duration_ms": "INTEGER",
+        "row_count_raw": "INTEGER DEFAULT 0",
+        "row_count_mapped": "INTEGER DEFAULT 0",
+        "row_count_persisted": "INTEGER DEFAULT 0",
+        "provider_stats_json": "JSON",
+        "degrade_reasons_json": "JSON",
+        "error_type": "VARCHAR(64)",
+        "error_message": "TEXT",
+    }
+    for column_name, column_type in required_column_sql.items():
+        if column_name in existing_columns:
+            continue
+        sync_connection.execute(
+            text(
+                "ALTER TABLE news_fetch_batches "
+                f"ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+
+def _ensure_news_fetch_batch_indexes(sync_connection: Connection) -> None:
+    inspector = inspect(sync_connection)
+    if "news_fetch_batches" not in set(inspector.get_table_names()):
+        return
+
+    index_sql = (
+        "CREATE INDEX IF NOT EXISTS ix_news_fetch_batches_scope_cache_variant_fetched_at "
+        "ON news_fetch_batches (scope, cache_variant, fetched_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_fetch_batches_scope_ts_code_cache_variant_fetched_at "
+        "ON news_fetch_batches (scope, ts_code, cache_variant, fetched_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_fetch_batches_status_finished_at "
+        "ON news_fetch_batches (status, finished_at)",
+        "CREATE INDEX IF NOT EXISTS ix_news_fetch_batches_trigger_source_finished_at "
+        "ON news_fetch_batches (trigger_source, finished_at)",
     )
     for statement in index_sql:
         sync_connection.execute(text(statement))

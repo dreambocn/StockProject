@@ -223,6 +223,11 @@ Last update: 2026-03-25
   - `GET /api/news/events` now defaults to `batch_mode=latest` logical-event dedupe and supports explicit `batch_mode=all` for archived history playback
   - Analysis event reads now dedupe archived versions to avoid historical batches duplicating evidence in AI workflows
   - Added composite `news_events` indexes plus repository/API/analysis regression coverage for archive reads and latest/all behavior
+- Completed news freshness/infrastructure follow-up:
+  - Added versioned Redis cache helpers for `hot` / `policy` / `stock news`, so new batches can switch cache keys immediately instead of waiting for pure TTL expiry
+  - Added `news_fetch_batches` batch metadata model plus batch lifecycle helpers, and wired `hot` / `policy` / stock API + watchlist hourly sync to persist fetch-batch status and row statistics
+  - Moved latest-event selection for analysis and `/api/news/events?batch_mode=latest` to SQL-based latest views, reducing Python-side full-row dedupe
+  - Added regression coverage for versioned cache helpers, batch lifecycle helpers, route-level batch persistence, and SQL latest-event selection
 
 ## In Progress
 

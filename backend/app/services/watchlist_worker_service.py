@@ -22,6 +22,13 @@ from app.models.stock_watch_snapshot import StockWatchSnapshot
 from app.models.user_watchlist_item import UserWatchlistItem
 from app.services.analysis_service import start_analysis_session
 from app.services.candidate_evidence_service import refresh_candidate_evidence_caches
+from app.services.news_fetch_batch_service import (
+    NEWS_FETCH_STATUS_FAILED,
+    NEWS_FETCH_STATUS_PARTIAL,
+    NEWS_FETCH_STATUS_SUCCESS,
+    create_news_fetch_batch,
+    finalize_news_fetch_batch,
+)
 from app.services.news_mapper_service import (
     map_stock_announcement_rows,
     map_stock_news_rows,
@@ -233,9 +240,31 @@ async def sync_stock_watch_context(
     if not symbol:
         raise ValueError(f"stock symbol not found: {ts_code}")
 
+    batch = await create_news_fetch_batch(
+        session,
+        scope="stock",
+        cache_variant="with_announcements",
+        ts_code=ts_code,
+        trigger_source="worker.watchlist.hourly",
+        fetched_at=now,
+        started_at=now,
+    )
+    provider_stats: list[dict[str, object]] = []
+    degrade_reasons: list[str] = []
+
     # 关键流程：小时同步统一把新闻和公告落入 news_events，后续分析接口直接复用同一事件池。
     try:
         stock_news_rows = await fetch_stock_news(symbol)
+        provider_stats.append(
+            {
+                "provider": "eastmoney_stock",
+                "status": "success",
+                "error_type": None,
+                "raw_count": len(stock_news_rows),
+                "mapped_count": 0,
+                "persisted_count": 0,
+            }
+        )
     except Exception as exc:
         # 关键降级：新闻抓取失败时回退为空列表，保证小时同步链路不断。
         logger.warning(
@@ -245,14 +274,37 @@ async def sync_stock_watch_context(
             type(exc).__name__,
         )
         stock_news_rows = []
+        provider_stats.append(
+            {
+                "provider": "eastmoney_stock",
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "raw_count": 0,
+                "mapped_count": 0,
+                "persisted_count": 0,
+            }
+        )
+        degrade_reasons.append("stock.news_failed")
     mapped_news = map_stock_news_rows(
         ts_code=ts_code,
         symbol=symbol,
         rows=stock_news_rows,
     )
+    provider_stats[0]["mapped_count"] = len(mapped_news)
+    provider_stats[0]["persisted_count"] = len(mapped_news)
 
     try:
         announcement_rows = await fetch_stock_announcements(symbol=symbol)
+        provider_stats.append(
+            {
+                "provider": "cninfo_announcement",
+                "status": "success",
+                "error_type": None,
+                "raw_count": len(announcement_rows),
+                "mapped_count": 0,
+                "persisted_count": 0,
+            }
+        )
     except Exception as exc:
         # 关键降级：公告抓取失败时回退为空列表，避免中断后续入库与快照归档。
         logger.warning(
@@ -262,25 +314,68 @@ async def sync_stock_watch_context(
             type(exc).__name__,
         )
         announcement_rows = []
+        provider_stats.append(
+            {
+                "provider": "cninfo_announcement",
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "raw_count": 0,
+                "mapped_count": 0,
+                "persisted_count": 0,
+            }
+        )
+        degrade_reasons.append("stock.announcement_failed")
 
     mapped_announcements = map_stock_announcement_rows(
         ts_code=ts_code,
         symbol=symbol,
         rows=announcement_rows,
     )
+    provider_stats[1]["mapped_count"] = len(mapped_announcements)
+    provider_stats[1]["persisted_count"] = len(mapped_announcements)
     merged_items = [*mapped_news, *mapped_announcements]
     merged_items.sort(
         key=lambda item: item.published_at or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )
 
-    await replace_stock_news_rows(
-        session=session,
-        ts_code=ts_code,
-        symbol=symbol,
-        cache_variant="with_announcements",
-        fetched_at=now,
-        rows=merged_items,
+    if merged_items:
+        await replace_stock_news_rows(
+            session=session,
+            ts_code=ts_code,
+            symbol=symbol,
+            cache_variant="with_announcements",
+            fetched_at=now,
+            batch_id=batch.id,
+            rows=merged_items,
+        )
+
+    await finalize_news_fetch_batch(
+        session,
+        batch=batch,
+        status=(
+            NEWS_FETCH_STATUS_FAILED
+            if not merged_items
+            else (
+                NEWS_FETCH_STATUS_PARTIAL
+                if degrade_reasons
+                else NEWS_FETCH_STATUS_SUCCESS
+            )
+        ),
+        finished_at=now,
+        row_count_raw=sum(int(item["raw_count"]) for item in provider_stats),
+        row_count_mapped=len(merged_items),
+        row_count_persisted=len(merged_items),
+        provider_stats=provider_stats,
+        degrade_reasons=degrade_reasons or (
+            ["mapping.empty_after_filter"] if not merged_items else []
+        ),
+        error_type=None,
+        error_message=(
+            "小时同步未获取到可持久化新闻，已仅保留快照归档"
+            if not merged_items
+            else None
+        ),
     )
 
     snapshot_payload = await _load_watch_snapshot_payload(session, ts_code=ts_code)

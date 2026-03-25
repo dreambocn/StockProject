@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
@@ -12,6 +13,7 @@ from app.db.session import get_db_session
 from app.main import app
 import app.api.routes.news as news_routes
 import app.api.routes.stocks as stocks_routes
+from app.models.news_fetch_batch import NewsFetchBatch
 from app.models.news_event import NewsEvent
 from app.models.stock_instrument import StockInstrument
 from app.schemas.news import (
@@ -223,6 +225,7 @@ def news_client(tmp_path: Path) -> TestClient:
 
     with TestClient(app) as client:
         client.session_maker = session_maker
+        client.fake_redis = fake_redis
         yield client
 
     app.dependency_overrides.pop(get_db_session, None)
@@ -243,6 +246,21 @@ def _append_news_events(news_client: TestClient, rows: list[NewsEvent]) -> None:
             await session.commit()
 
     asyncio.run(_run())
+
+
+def _load_news_fetch_batches(news_client: TestClient, *, scope: str) -> list[NewsFetchBatch]:
+    async def _run() -> list[NewsFetchBatch]:
+        async with news_client.session_maker() as session:
+            rows = (
+                await session.execute(
+                    select(NewsFetchBatch)
+                    .where(NewsFetchBatch.scope == scope)
+                    .order_by(NewsFetchBatch.created_at.asc())
+                )
+            ).scalars().all()
+            return list(rows)
+
+    return asyncio.run(_run())
 
 
 def test_hot_news_route_calls_gateway_once_and_returns_remote_rows(
@@ -453,6 +471,33 @@ def test_hot_news_uses_cache_and_persists_to_db(
     assert second.status_code == 200
     assert called["count"] == 1
     assert second.json()[0]["title"] == "中东局势升级"
+
+
+def test_hot_news_route_persists_fetch_batch_and_version_key(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    async def fake_fetch_hot_news() -> list[dict[str, object]]:
+        return [
+            {
+                "标题": "中东局势升级",
+                "摘要": "避险情绪升温",
+                "发布时间": "2026-03-03 09:00:00",
+                "链接": "https://finance.example.com/a/2",
+            }
+        ]
+
+    monkeypatch.setattr("app.api.routes.news.fetch_hot_news", fake_fetch_hot_news)
+
+    response = news_client.get("/api/news/hot")
+
+    assert response.status_code == 200
+    batches = _load_news_fetch_batches(news_client, scope="hot")
+    assert len(batches) == 1
+    assert batches[0].status == "success"
+    assert batches[0].trigger_source == "api.news.hot"
+    assert batches[0].row_count_persisted == 1
+    assert "news:hot:global:version" in news_client.fake_redis._store
 
 
 def test_impact_map_endpoint_returns_profiles(news_client: TestClient) -> None:
@@ -993,6 +1038,41 @@ def test_policy_news_route_returns_policy_scope(news_client: TestClient, monkeyp
     payload = response.json()
     assert payload[0]["scope"] == "policy"
     assert payload[0]["source"] == "policy_gateway"
+
+
+def test_policy_news_route_uses_cache_and_persists_batch(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    called = {"count": 0}
+
+    async def fake_fetch_policy_events() -> list[dict[str, object]]:
+        called["count"] += 1
+        return [
+            {
+                "title": "证监会调整监管框架",
+                "summary": "加强数据披露要求",
+                "published_at": "2026-03-02 10:00:00",
+                "link": "https://politics.example.com/p/1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "app.api.routes.news.fetch_policy_events",
+        fake_fetch_policy_events,
+    )
+
+    first = news_client.get("/api/news/policy")
+    second = news_client.get("/api/news/policy")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert called["count"] == 1
+    batches = _load_news_fetch_batches(news_client, scope="policy")
+    assert len(batches) == 1
+    assert batches[0].status == "success"
+    assert batches[0].trigger_source == "api.news.policy"
+    assert "news:policy:policy_source:version" in news_client.fake_redis._store
 
 
 def test_hot_news_route_reads_only_latest_archived_batch(news_client: TestClient) -> None:
