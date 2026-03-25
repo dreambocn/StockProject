@@ -144,3 +144,26 @@ def test_settings_accept_custom_llm_values() -> None:
     assert settings.llm_api_key == "test-key"
     assert settings.llm_model == "gpt-5.1-codex-mini"
     assert settings.llm_reasoning_effort == "medium"
+
+
+def test_settings_analysis_event_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.analysis_generation_event_limit == 30
+    assert settings.analysis_generation_candidate_pool_multiplier == 4
+    assert settings.analysis_generation_stock_quota == 12
+    assert settings.analysis_generation_policy_quota == 8
+    assert settings.analysis_generation_hot_quota == 10
+    assert settings.analysis_summary_event_limit == 20
+    assert settings.analysis_summary_candidate_pool_multiplier == 4
+
+
+def test_settings_reject_analysis_quota_sum_greater_than_limit() -> None:
+    with pytest.raises(ValueError, match="ANALYSIS_GENERATION_.*QUOTA"):
+        Settings(
+            _env_file=None,
+            analysis_generation_event_limit=20,
+            analysis_generation_stock_quota=12,
+            analysis_generation_policy_quota=8,
+            analysis_generation_hot_quota=10,
+        )

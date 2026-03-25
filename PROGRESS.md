@@ -228,6 +228,12 @@ Last update: 2026-03-25
   - Added `news_fetch_batches` batch metadata model plus batch lifecycle helpers, and wired `hot` / `policy` / stock API + watchlist hourly sync to persist fetch-batch status and row statistics
   - Moved latest-event selection for analysis and `/api/news/events?batch_mode=latest` to SQL-based latest views, reducing Python-side full-row dedupe
   - Added regression coverage for versioned cache helpers, batch lifecycle helpers, route-level batch persistence, and SQL latest-event selection
+- Completed analysis event balancing and dedupe follow-up:
+  - Added configurable analysis event quotas and candidate-pool multipliers, lifting model input from fixed `20` rows to a balanced `30`-event selection window
+  - Added `analysis_event_selection_service` so generation input now keeps anchor events first, applies `stock/policy/hot` quotas, and backfills unused slots with the best remaining candidates
+  - Summary reads now oversample `analysis_event_links` candidates and return a unique logical-event view, preventing archived duplicate links from surfacing to users
+  - Added `dedupe_analysis_event_links.py` dry-run/apply script to clean historical duplicate logical-event links by report-owned stock scope
+  - Added regression coverage for selection quotas, repository oversampling, summary dedupe, cleanup script safety, and settings validation
 
 ## In Progress
 

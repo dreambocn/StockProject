@@ -1,6 +1,7 @@
 from functools import lru_cache
 from urllib.parse import quote, urlparse
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,10 +55,10 @@ class Settings(BaseSettings):
     stock_adj_factor_cache_ttl_seconds: int = 3600
     stock_related_news_cache_ttl_seconds: int = 3600
     hot_news_cache_ttl_seconds: int = 3600
-    candidate_hot_search_cache_ttl_seconds: int = 3600
     policy_news_cache_ttl_seconds: int = 1800
     news_cache_version_legacy_fallback_enabled: bool = True
     news_cache_version_legacy_fallback_seconds: int = 3600
+    candidate_hot_search_cache_ttl_seconds: int = 3600
     candidate_research_report_cache_ttl_seconds: int = 43200
     candidate_research_refresh_interval_hours: int = 12
     llm_base_url: str = "https://aixj.vip"
@@ -75,6 +76,13 @@ class Settings(BaseSettings):
     analysis_report_freshness_minutes: int = 60
     analysis_worker_poll_interval_seconds: int = 5
     analysis_running_stale_seconds: int = 900
+    analysis_generation_event_limit: int = 30
+    analysis_generation_candidate_pool_multiplier: int = 4
+    analysis_generation_stock_quota: int = 12
+    analysis_generation_policy_quota: int = 8
+    analysis_generation_hot_quota: int = 10
+    analysis_summary_event_limit: int = 20
+    analysis_summary_candidate_pool_multiplier: int = 4
     init_admin_username: str = ""
     init_admin_email: str = ""
     init_admin_password: str = ""
@@ -224,6 +232,20 @@ class Settings(BaseSettings):
             parsed_proxies.append(normalized_proxy)
 
         return parsed_proxies
+
+    @model_validator(mode="after")
+    def validate_analysis_event_quotas(self) -> "Settings":
+        quota_sum = (
+            self.analysis_generation_stock_quota
+            + self.analysis_generation_policy_quota
+            + self.analysis_generation_hot_quota
+        )
+        if quota_sum > self.analysis_generation_event_limit:
+            raise ValueError(
+                "ANALYSIS_GENERATION_STOCK_QUOTA + ANALYSIS_GENERATION_POLICY_QUOTA + "
+                "ANALYSIS_GENERATION_HOT_QUOTA 不能大于 ANALYSIS_GENERATION_EVENT_LIMIT"
+            )
+        return self
 
 
 @lru_cache

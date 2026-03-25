@@ -1,23 +1,27 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
 from app.models.analysis_event_link import AnalysisEventLink
+from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
+from app.services.llm_analysis_service import AnalysisReportResult
 from app.services.analysis_service import (
     get_stock_analysis_summary,
     list_stock_analysis_report_archives,
+    run_analysis_session_by_id,
 )
 
 
@@ -667,6 +671,410 @@ def test_analysis_service_skips_reenrichment_for_unavailable_fallback_ready_sour
             assert first["report"] is not None
             assert second["report"] is not None
             assert called_times["count"] == 0
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_analysis_service_summary_dedupes_duplicate_logical_events(tmp_path: Path) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+            session.add_all(
+                [
+                    NewsEvent(
+                        id="duplicate-old",
+                        scope="stock",
+                        cache_variant="default",
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        title="重复事件",
+                        summary="旧批次",
+                        published_at=base_time - timedelta(hours=1),
+                        url="https://example.com/duplicate",
+                        publisher="测试源",
+                        source="eastmoney_stock",
+                        cluster_key="duplicate-cluster",
+                        fetched_at=base_time - timedelta(hours=1),
+                    ),
+                    NewsEvent(
+                        id="duplicate-new",
+                        scope="stock",
+                        cache_variant="default",
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        title="重复事件",
+                        summary="新批次",
+                        published_at=base_time - timedelta(hours=1),
+                        url="https://example.com/duplicate",
+                        publisher="测试源",
+                        source="eastmoney_stock",
+                        cluster_key="duplicate-cluster",
+                        fetched_at=base_time,
+                    ),
+                    NewsEvent(
+                        id="unique-policy",
+                        scope="policy",
+                        cache_variant="policy_source",
+                        title="政策事件",
+                        summary="政策摘要",
+                        published_at=base_time - timedelta(hours=2),
+                        url="https://example.com/policy",
+                        publisher="测试源",
+                        source="policy-source",
+                        macro_topic="commodity_supply",
+                        fetched_at=base_time - timedelta(hours=2),
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    AnalysisEventLink(
+                        event_id="duplicate-old",
+                        ts_code="600519.SH",
+                        correlation_score=0.6,
+                        created_at=base_time - timedelta(minutes=2),
+                    ),
+                    AnalysisEventLink(
+                        event_id="duplicate-new",
+                        ts_code="600519.SH",
+                        correlation_score=0.9,
+                        created_at=base_time - timedelta(minutes=1),
+                    ),
+                    AnalysisEventLink(
+                        event_id="unique-policy",
+                        ts_code="600519.SH",
+                        correlation_score=0.5,
+                        created_at=base_time,
+                    ),
+                ]
+            )
+            session.add(
+                AnalysisReport(
+                    ts_code="600519.SH",
+                    status="ready",
+                    summary="测试报告",
+                    risk_points=[],
+                    factor_breakdown=[],
+                    generated_at=base_time,
+                )
+            )
+            await session.commit()
+
+            result = await get_stock_analysis_summary(session, "600519.SH")
+
+            assert result["event_count"] == 2
+            assert [item["event_id"] for item in result["events"]] == [
+                "unique-policy",
+                "duplicate-new",
+            ]
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_analysis_service_summary_event_limit_defaults_from_settings_but_explicit_value_wins(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    monkeypatch.setattr(
+        "app.services.analysis_service.get_settings",
+        lambda: SimpleNamespace(
+            analysis_summary_event_limit=1,
+            analysis_summary_candidate_pool_multiplier=4,
+            web_source_metadata_timeout_seconds=3,
+            web_source_metadata_cache_ttl_seconds=86400,
+            web_source_metadata_failure_ttl_seconds=7200,
+            web_source_metadata_max_bytes=1024 * 512,
+        ),
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+            for index in range(3):
+                session.add(
+                    NewsEvent(
+                        id=f"summary-{index}",
+                        scope="stock",
+                        cache_variant="default",
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        title=f"摘要事件 {index}",
+                        summary="摘要",
+                        published_at=base_time - timedelta(minutes=index),
+                        url=f"https://example.com/summary-{index}",
+                        publisher="测试源",
+                        source="eastmoney_stock",
+                        fetched_at=base_time - timedelta(minutes=index),
+                    )
+                )
+                session.add(
+                    AnalysisEventLink(
+                        event_id=f"summary-{index}",
+                        ts_code="600519.SH",
+                        correlation_score=0.8 - index * 0.1,
+                        created_at=base_time - timedelta(minutes=index),
+                    )
+                )
+            session.add(
+                AnalysisReport(
+                    ts_code="600519.SH",
+                    status="ready",
+                    summary="测试报告",
+                    risk_points=[],
+                    factor_breakdown=[],
+                    generated_at=base_time,
+                )
+            )
+            await session.commit()
+
+            default_result = await get_stock_analysis_summary(session, "600519.SH")
+            explicit_result = await get_stock_analysis_summary(
+                session,
+                "600519.SH",
+                event_limit=2,
+            )
+
+            assert default_result["event_count"] == 1
+            assert explicit_result["event_count"] == 2
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    captured = {"candidate_limit": None, "event_count": None}
+
+    async def fake_load_recent_news_events(
+        session,
+        ts_code: str,
+        *,
+        topic,
+        anchor_event_id,
+        published_from,
+        published_to,
+        limit,
+        candidate_limit=None,
+    ):
+        _ = (
+            session,
+            ts_code,
+            topic,
+            anchor_event_id,
+            published_from,
+            published_to,
+            limit,
+        )
+        captured["candidate_limit"] = candidate_limit
+        base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        events: list[NewsEvent] = [
+            NewsEvent(
+                id="stock-anchor",
+                scope="stock",
+                cache_variant="default",
+                ts_code="600519.SH",
+                symbol="600519",
+                title="锚点事件",
+                summary="摘要",
+                published_at=base_time,
+                url="https://example.com/anchor",
+                publisher="测试源",
+                source="stock-source",
+                macro_topic="commodity_supply",
+                fetched_at=base_time,
+            )
+        ]
+        for index in range(1, 12):
+            events.append(
+                NewsEvent(
+                    id=f"stock-{index}",
+                    scope="stock",
+                    cache_variant="default",
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    title=f"个股事件 {index}",
+                    summary="摘要",
+                    published_at=base_time - timedelta(minutes=index),
+                    url=f"https://example.com/stock-{index}",
+                    publisher="测试源",
+                    source="stock-source",
+                    macro_topic="commodity_supply",
+                    fetched_at=base_time - timedelta(minutes=index),
+                )
+            )
+        for index in range(8):
+            events.append(
+                NewsEvent(
+                    id=f"policy-{index}",
+                    scope="policy",
+                    cache_variant="policy_source",
+                    title=f"政策事件 {index}",
+                    summary="摘要",
+                    published_at=base_time - timedelta(hours=1, minutes=index),
+                    url=f"https://example.com/policy-{index}",
+                    publisher="测试源",
+                    source="policy-source",
+                    macro_topic="commodity_supply",
+                    fetched_at=base_time - timedelta(hours=1, minutes=index),
+                )
+            )
+        for index in range(10):
+            events.append(
+                NewsEvent(
+                    id=f"hot-{index}",
+                    scope="hot",
+                    cache_variant="global",
+                    title=f"热点事件 {index}",
+                    summary="摘要",
+                    published_at=base_time - timedelta(hours=2, minutes=index),
+                    url=f"https://example.com/hot-{index}",
+                    publisher="测试源",
+                    source="hot-source",
+                    macro_topic="commodity_supply",
+                    fetched_at=base_time - timedelta(hours=2, minutes=index),
+                )
+            )
+        return events
+
+    async def fake_generate_stock_analysis_report(
+        *,
+        ts_code: str,
+        instrument_name: str | None,
+        events,
+        factor_weights,
+        session,
+        use_web_search: bool,
+        on_delta,
+    ):
+        _ = (
+            ts_code,
+            instrument_name,
+            factor_weights,
+            session,
+            use_web_search,
+            on_delta,
+        )
+        captured["event_count"] = len(list(events))
+        return AnalysisReportResult(
+            status="ready",
+            summary="测试报告",
+            risk_points=[],
+            factor_breakdown=[],
+            generated_at=datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+            used_web_search=False,
+            web_search_status="disabled",
+            web_sources=[],
+        )
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.generate_stock_analysis_report",
+        fake_generate_stock_analysis_report,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr(
+        "app.services.analysis_service.cache_fresh_report_id",
+        fake_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="session-1",
+                    analysis_key="analysis-key",
+                    ts_code="600519.SH",
+                    topic="commodity_supply",
+                    anchor_event_id="stock-anchor",
+                    status="queued",
+                )
+            )
+            session.add_all(
+                [
+                    StockDailySnapshot(
+                        ts_code="600519.SH",
+                        trade_date=datetime(2026, 3, 25, tzinfo=timezone.utc).date(),
+                        close=Decimal("1500.00"),
+                        vol=Decimal("1000"),
+                    ),
+                    StockDailySnapshot(
+                        ts_code="600519.SH",
+                        trade_date=datetime(2026, 3, 26, tzinfo=timezone.utc).date(),
+                        close=Decimal("1510.00"),
+                        vol=Decimal("1200"),
+                    ),
+                ]
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("session-1")
+
+        async with session_maker() as verify_session:
+            persisted_report = (
+                await verify_session.execute(
+                    select(AnalysisReport).where(AnalysisReport.ts_code == "600519.SH")
+                )
+            ).scalar_one()
+
+            assert persisted_report.summary == "测试报告"
+
+        assert captured["candidate_limit"] == 120
+        assert captured["event_count"] == 30
 
     try:
         asyncio.run(run_test())

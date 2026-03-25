@@ -33,6 +33,10 @@ from app.services.analysis_repository import (
     upsert_analysis_event_link,
     update_analysis_report_web_sources,
 )
+from app.services.analysis_event_selection_service import (
+    select_generation_analysis_events,
+    select_summary_analysis_events,
+)
 from app.services.analysis_runtime_service import (
     cache_active_session_id,
     cache_fresh_report_id,
@@ -266,16 +270,28 @@ async def get_stock_analysis_summary(
     event_id: str | None = None,
     published_from: datetime | None = None,
     published_to: datetime | None = None,
-    event_limit: int = 20,
+    event_limit: int | None = None,
 ) -> dict[str, object | None]:
+    settings = get_settings()
     normalized_ts_code = ts_code.strip().upper()
     instrument = await load_stock_instrument(session, normalized_ts_code)
     snapshot = await load_latest_snapshot(session, normalized_ts_code)
+    resolved_event_limit = event_limit or settings.analysis_summary_event_limit
+    candidate_pool_limit = max(
+        resolved_event_limit * settings.analysis_summary_candidate_pool_multiplier,
+        resolved_event_limit + 20,
+    )
     persisted_events = await load_analysis_events(
         session,
         normalized_ts_code,
-        limit=event_limit,
+        limit=resolved_event_limit,
         anchor_event_id=event_id,
+        candidate_limit=candidate_pool_limit,
+    )
+    persisted_events = select_summary_analysis_events(
+        persisted_events,
+        anchor_event_id=event_id,
+        total_limit=resolved_event_limit,
     )
     persisted_report = await load_latest_report(
         session,
@@ -502,14 +518,30 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             if instrument is None:
                 raise AnalysisNotFoundError("stock not found")
 
-            raw_events = await load_recent_news_events(
+            settings = get_settings()
+            generation_limit = settings.analysis_generation_event_limit
+            candidate_pool_limit = max(
+                generation_limit
+                * settings.analysis_generation_candidate_pool_multiplier,
+                generation_limit + 20,
+            )
+            candidate_events = await load_recent_news_events(
                 session,
                 session_row.ts_code,
                 topic=session_row.topic,
                 anchor_event_id=session_row.anchor_event_id,
                 published_from=None,
                 published_to=None,
-                limit=20,
+                limit=generation_limit,
+                candidate_limit=candidate_pool_limit,
+            )
+            raw_events = select_generation_analysis_events(
+                candidate_events,
+                anchor_event_id=session_row.anchor_event_id,
+                total_limit=generation_limit,
+                stock_quota=settings.analysis_generation_stock_quota,
+                policy_quota=settings.analysis_generation_policy_quota,
+                hot_quota=settings.analysis_generation_hot_quota,
             )
             event_payloads: list[dict[str, object | None]] = []
 
