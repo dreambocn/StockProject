@@ -398,6 +398,251 @@ describe('StockDetailView', () => {
     expect(html.indexOf('data-testid="kline-chart"')).toBeLessThan(html.indexOf('浦发银行发布业绩快报'))
   })
 
+  it('limits related news panel height to the measured main panel height on desktop layout', async () => {
+    const originalInnerWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 1280,
+    })
+
+    class ResizeObserverMock {
+      private readonly callback: ResizeObserverCallback
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+
+      observe = (target: Element) => {
+        queueMicrotask(() => {
+          this.callback(
+            [
+              {
+                target,
+                contentRect: {
+                  width: 980,
+                  height: 432,
+                  x: 0,
+                  y: 0,
+                  top: 0,
+                  right: 980,
+                  bottom: 432,
+                  left: 0,
+                  toJSON: () => ({}),
+                } as DOMRectReadOnly,
+              } as ResizeObserverEntry,
+            ],
+            this as unknown as ResizeObserver,
+          )
+        })
+      }
+
+      unobserve = () => {}
+      disconnect = () => {}
+    }
+
+    vi.stubGlobal('ResizeObserver', ResizeObserverMock)
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            adj_factor: 2.0,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            title: '浦发银行发布业绩快报',
+            summary: '净利润同比增长',
+            published_at: '2026-03-03T09:12:00',
+            url: 'https://finance.example.com/a/1',
+            publisher: '东方财富',
+            source: 'eastmoney_stock',
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/stocks/:tsCode', component: StockDetailView }],
+    })
+    await router.push('/stocks/600000.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+
+    const newsPanel = wrapper.get('[data-testid="stock-detail-news-panel"]')
+    expect((newsPanel.element as HTMLElement).style.height).toBe('432px')
+
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: originalInnerWidth,
+    })
+  })
+
+  it('renders related news inside element scrollbar viewport', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            open: 8.1,
+            high: 8.3,
+            low: 8.0,
+            close: 8.25,
+            pre_close: 8.05,
+            change: 0.2,
+            pct_chg: 2.48,
+            vol: 654321,
+            amount: 321098,
+            turnover_rate: null,
+            volume_ratio: null,
+            pe: null,
+            pb: null,
+            total_mv: null,
+            circ_mv: null,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            trade_date: '2026-03-03',
+            adj_factor: 2.0,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            title: '浦发银行发布业绩快报',
+            summary: '净利润同比增长',
+            published_at: '2026-03-03T09:12:00',
+            url: 'https://finance.example.com/a/1',
+            publisher: '东方财富',
+            source: 'eastmoney_stock',
+          },
+          {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            title: '浦发银行零售业务持续回暖',
+            summary: '公司披露月度经营数据',
+            published_at: '2026-03-02T08:00:00',
+            url: 'https://finance.example.com/a/2',
+            publisher: '证券时报',
+            source: 'stv_news',
+          },
+        ]),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/stocks/:tsCode', component: StockDetailView }],
+    })
+    await router.push('/stocks/600000.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    const newsPanel = wrapper.get('[data-testid="stock-detail-news-panel"]')
+    expect(newsPanel.classes()).toContain('detail-card-news')
+    expect(newsPanel.find('[data-testid="related-news-scrollbar"]').exists()).toBe(true)
+    expect(newsPanel.find('.el-scrollbar').exists()).toBe(true)
+    expect(newsPanel.find('[data-testid="related-news-list"]').exists()).toBe(true)
+    expect(newsPanel.findAll('.related-news-item')).toHaveLength(2)
+  })
+
   it('does not refetch related news when switching kline period', async () => {
     const fetchMock = vi
       .fn()

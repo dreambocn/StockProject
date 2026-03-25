@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
@@ -50,6 +50,11 @@ const watchlistItem = ref<WatchlistItemResponse | null>(null)
 const selectedPeriod = ref<KlinePeriod>('daily')
 const selectedAdjustMode = ref<AdjustMode>('none')
 const hoveredIndex = ref<number | null>(null)
+const mainPanelCardRef = ref<HTMLElement | { $el?: unknown } | null>(null)
+const relatedNewsPanelHeight = ref<number | null>(null)
+const isDesktopNewsLayout = ref(false)
+
+let mainPanelResizeObserver: ResizeObserver | null = null
 
 const chartWidth = 980
 const chartHeight = 520
@@ -61,6 +66,7 @@ const volumePanelTop = pricePanelTop + pricePanelHeight + panelGap
 const volumePanelHeight = 95
 const rsiPanelTop = volumePanelTop + volumePanelHeight + panelGap
 const rsiPanelHeight = 80
+const desktopNewsBreakpoint = 960
 
 const tsCode = computed(() => String(route.params.tsCode ?? '').trim().toUpperCase())
 const source = computed(() => String(route.query.source ?? '').trim())
@@ -78,6 +84,85 @@ const watchlistButtonLabel = computed(() => {
     ? t('analysisWorkbench.watchlistRemove')
     : t('analysisWorkbench.watchlistAdd')
 })
+const relatedNewsPanelStyle = computed(() => {
+  if (!isDesktopNewsLayout.value || relatedNewsPanelHeight.value === null) {
+    return undefined
+  }
+
+  const height = `${relatedNewsPanelHeight.value}px`
+  return {
+    height,
+    maxHeight: height,
+  }
+})
+
+const resolveMainPanelElement = () => {
+  if (mainPanelCardRef.value instanceof HTMLElement) {
+    return mainPanelCardRef.value
+  }
+
+  const maybeElement = mainPanelCardRef.value?.$el
+  if (maybeElement instanceof HTMLElement) {
+    return maybeElement
+  }
+
+  if (typeof document !== 'undefined') {
+    const queriedElement = document.querySelector('[data-testid="stock-detail-main-panel"]')
+    return queriedElement instanceof HTMLElement ? queriedElement : null
+  }
+
+  return null
+}
+
+const syncDesktopNewsLayout = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  isDesktopNewsLayout.value = window.innerWidth > desktopNewsBreakpoint
+  if (!isDesktopNewsLayout.value) {
+    relatedNewsPanelHeight.value = null
+  }
+}
+
+const syncRelatedNewsPanelHeight = (measuredHeight?: number) => {
+  if (!isDesktopNewsLayout.value) {
+    relatedNewsPanelHeight.value = null
+    return
+  }
+
+  const panelElement = resolveMainPanelElement()
+  const fallbackHeight = panelElement?.getBoundingClientRect().height ?? 0
+  const nextHeight = Math.round(measuredHeight ?? fallbackHeight)
+  relatedNewsPanelHeight.value = nextHeight > 0 ? nextHeight : null
+}
+
+const observeMainPanelHeight = async () => {
+  await nextTick()
+
+  mainPanelResizeObserver?.disconnect()
+  const panelElement = resolveMainPanelElement()
+  if (!panelElement) {
+    return
+  }
+
+  if (typeof ResizeObserver === 'undefined') {
+    syncRelatedNewsPanelHeight()
+    return
+  }
+
+  mainPanelResizeObserver = new ResizeObserver((entries) => {
+    // 关键流程：右侧新闻卡只跟随左侧主卡高度，避免新闻数量反向撑高整行布局。
+    syncRelatedNewsPanelHeight(entries[0]?.contentRect.height)
+  })
+  mainPanelResizeObserver.observe(panelElement)
+  syncRelatedNewsPanelHeight()
+}
+
+const handleWindowResize = () => {
+  syncDesktopNewsLayout()
+  syncRelatedNewsPanelHeight()
+}
 
 const formatNumber = (value: number | null, digits = 2) => {
   if (value === null) {
@@ -703,6 +788,28 @@ watch(
     void loadWatchlistState()
   },
 )
+
+watch(
+  () => mainPanelCardRef.value,
+  () => {
+    void observeMainPanelHeight()
+  },
+)
+
+onMounted(() => {
+  syncDesktopNewsLayout()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', handleWindowResize)
+  }
+  void observeMainPanelHeight()
+})
+
+onBeforeUnmount(() => {
+  mainPanelResizeObserver?.disconnect()
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', handleWindowResize)
+  }
+})
 </script>
 
 <template>
@@ -767,7 +874,7 @@ watch(
     </el-card>
 
     <section class="content-grid">
-      <el-card data-testid="stock-detail-main-panel" class="detail-card" shadow="never">
+      <el-card ref="mainPanelCardRef" data-testid="stock-detail-main-panel" class="detail-card" shadow="never">
       <div class="daily-header">
         <h2>{{ t('stockDetail.dailyTitle') }}</h2>
         <div class="daily-actions">
@@ -982,7 +1089,12 @@ watch(
       </div>
       </el-card>
 
-      <el-card data-testid="stock-detail-news-panel" class="detail-card detail-card-news" shadow="never">
+      <el-card
+        data-testid="stock-detail-news-panel"
+        class="detail-card detail-card-news"
+        shadow="never"
+        :style="relatedNewsPanelStyle"
+      >
         <div class="related-news-header">
           <h2>{{ t('stockDetail.relatedNews') }}</h2>
           <el-button
@@ -997,26 +1109,36 @@ watch(
         </div>
         <el-skeleton v-if="relatedNewsLoading" :rows="4" animated />
         <el-empty v-else-if="relatedNews.length === 0" :description="t('stockDetail.relatedNewsEmpty')" />
-        <div v-else class="related-news-list">
-          <article
-            v-for="item in displayedNews"
-            :key="`${item.source}-${item.url ?? item.title}-${item.published_at ?? ''}`"
-            class="related-news-item"
-          >
-            <p class="related-news-meta">{{ item.publisher ?? item.source }} · {{ item.published_at ?? '--' }}</p>
-            <a
-              v-if="item.url"
-              class="related-news-link"
-              :href="item.url"
-              target="_blank"
-              rel="noreferrer noopener"
+        <el-scrollbar
+          v-else
+          data-testid="related-news-scrollbar"
+          class="related-news-scrollbar"
+          wrap-class="related-news-scrollbar__wrap"
+          :always="true"
+          height="100%"
+          :aria-label="t('stockDetail.relatedNews')"
+        >
+          <div data-testid="related-news-list" class="related-news-list">
+            <article
+              v-for="item in displayedNews"
+              :key="`${item.source}-${item.url ?? item.title}-${item.published_at ?? ''}`"
+              class="related-news-item"
             >
-              {{ item.title }}
-            </a>
-            <p v-else class="related-news-title">{{ item.title }}</p>
-            <p v-if="item.summary" class="related-news-summary">{{ item.summary }}</p>
-          </article>
-        </div>
+              <p class="related-news-meta">{{ item.publisher ?? item.source }} · {{ item.published_at ?? '--' }}</p>
+              <a
+                v-if="item.url"
+                class="related-news-link"
+                :href="item.url"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {{ item.title }}
+              </a>
+              <p v-else class="related-news-title">{{ item.title }}</p>
+              <p v-if="item.summary" class="related-news-summary">{{ item.summary }}</p>
+            </article>
+          </div>
+        </el-scrollbar>
       </el-card>
     </section>
   </section>
@@ -1032,7 +1154,7 @@ watch(
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 1rem;
-  align-items: start;
+  align-items: stretch;
 }
 
 .content-grid > .detail-card {
@@ -1140,20 +1262,68 @@ h1 {
 }
 
 .detail-card-news {
-  display: flex;
-  flex-direction: column;
+  height: 100%;
   min-height: 0;
-  max-height: 760px;
+  overflow: hidden;
+}
+
+.detail-card-news :deep(.el-card__body) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.detail-card-news :deep(.el-empty),
+.detail-card-news :deep(.el-skeleton) {
+  flex: 1;
+}
+
+.related-news-scrollbar {
+  flex: 1;
+  min-height: 0;
+}
+
+.detail-card-news :deep(.related-news-scrollbar__wrap) {
+  min-height: 0;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+.detail-card-news :deep(.el-scrollbar__bar.is-vertical) {
+  width: 8px;
+  right: 0;
+}
+
+.detail-card-news :deep(.el-scrollbar__bar.is-vertical > div) {
+  border: 1px solid rgba(6, 12, 21, 0.45);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(123, 197, 255, 0.62), rgba(61, 169, 252, 0.32)),
+    color-mix(in srgb, var(--terminal-primary) 42%, rgba(255, 255, 255, 0.08));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 10px rgba(61, 169, 252, 0.18);
+}
+
+.detail-card-news :deep(.el-scrollbar__bar.is-vertical:hover > div) {
+  background:
+    linear-gradient(180deg, rgba(123, 197, 255, 0.8), rgba(61, 169, 252, 0.5)),
+    color-mix(in srgb, var(--terminal-primary) 58%, rgba(255, 255, 255, 0.12));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 0 14px rgba(61, 169, 252, 0.28);
+}
+
+.detail-card-news :deep(.el-scrollbar__thumb) {
+  opacity: 1;
 }
 
 .related-news-list {
   display: grid;
   gap: 0.55rem;
-  flex: 1;
-  min-height: 0;
-  max-height: 620px;
-  overflow: auto;
-  padding-right: 0.2rem;
+  align-content: start;
+  padding-right: 0.35rem;
 }
 
 .related-news-item {
@@ -1434,13 +1604,21 @@ h2 {
   .detail-card-news {
     position: static;
     display: block;
+    height: auto;
     max-height: 520px;
   }
 
-  .related-news-list {
+  .detail-card-news :deep(.el-card__body) {
+    display: block;
+    height: auto;
+  }
+
+  .related-news-scrollbar {
     flex: none;
     max-height: 420px;
-    overflow: auto;
+  }
+
+  .related-news-list {
     padding-right: 0;
   }
 
