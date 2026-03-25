@@ -35,6 +35,7 @@ def _to_optional_date(value: object) -> date | None:
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, float) and isnan(value):
+        # NaN 表示缺失值，避免落库时把 NaN 当作有效日期。
         return None
 
     normalized_value = str(value).strip()
@@ -62,6 +63,7 @@ def _to_optional_decimal(value: object) -> Decimal | None:
     try:
         return Decimal(normalized_value)
     except Exception:
+        # 转换失败直接降级为 None，避免脏数据导致整批写入失败。
         return None
 
 
@@ -224,6 +226,7 @@ async def upsert_kline_rows(
         if trade_date is None:
             continue
 
+        # 幂等 upsert：同一 ts_code/period/trade_date 只更新字段，不重复插入。
         bar = await session.get(StockKlineBar, (ts_code, period, trade_date))
         if bar is None:
             bar = StockKlineBar(ts_code=ts_code, period=period, trade_date=trade_date)
@@ -274,6 +277,7 @@ async def upsert_trade_cal_rows(
         if cal_date is None:
             continue
 
+        # 交易日历写入按 exchange+cal_date 幂等覆盖，适配多次回源更新。
         calendar = await session.get(StockTradeCalendar, (exchange, cal_date))
         if calendar is None:
             calendar = StockTradeCalendar(

@@ -31,6 +31,7 @@ async def get_watchlist_route(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> WatchlistResponse:
+    # 鉴权边界：自选列表绑定当前用户，避免跨用户访问。
     payload = await list_watchlist(session, user_id=current_user.id)
     return WatchlistResponse.model_validate(payload)
 
@@ -52,6 +53,7 @@ async def create_watchlist_item_route(
             payload=request,
         )
     except WatchlistConflictError as exc:
+        # 重复订阅属于冲突错误，返回 409 便于前端提示。
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except WatchlistNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -73,6 +75,7 @@ async def update_watchlist_item_route(
             payload=request,
         )
     except WatchlistNotFoundError as exc:
+        # 用户未订阅该标的时返回 404，避免误导为成功更新。
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return WatchlistItemResponse.model_validate(payload)
 
@@ -91,6 +94,7 @@ async def delete_watchlist_item_route(
         )
     except WatchlistNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # 删除成功返回统一 message，前端无需关心实现细节。
     return MessageResponse(message="watchlist item deleted")
 
 

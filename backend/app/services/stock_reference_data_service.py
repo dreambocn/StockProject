@@ -50,6 +50,7 @@ async def get_trade_calendar_rows(
             pass
         return db_rows
 
+    # 单飞锁避免并发请求同时回源，降低三方接口压力。
     lock = await get_singleflight_lock(cache_key)
     async with lock:
         try:
@@ -98,6 +99,7 @@ async def get_adj_factor_rows(
             pass
         return db_rows
 
+    # 关键边界：复权因子回源耗时高，使用单飞锁避免并发重复拉取。
     lock = await get_singleflight_lock(cache_key)
     async with lock:
         try:

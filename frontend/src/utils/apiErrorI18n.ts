@@ -99,6 +99,7 @@ const resolveValidationArrayMessage = (
 ): string | null => {
   if (!Array.isArray(detail) || detail.length === 0) return null
 
+  // 只取首条错误用于提示，避免多条错误堆叠造成信息噪声。
   const firstItem = detail[0]
   if (!firstItem || typeof firstItem !== 'object') return null
 
@@ -140,6 +141,7 @@ export const mapApiErrorMessage = (
     if (validationMessage) return validationMessage
   }
 
+  // 结构化信息不存在时再尝试文本映射，避免覆盖后端明确提示。
   const rawMessage = resolveErrorMessage(error)
   if (!rawMessage) return t(fallbackKey)
   if (hasCjk(rawMessage)) return rawMessage

@@ -89,6 +89,7 @@ async def ensure_schema_for_engine(target_engine: AsyncEngine) -> None:
         await connection.run_sync(Base.metadata.create_all)
 
         # 关键流程：对历史库执行最小列补齐，避免 create_all 不会自动 ALTER 导致运行期写入失败。
+        # 这里仅补齐必需列与索引，不改变既有数据契约。
         await connection.run_sync(_ensure_stock_instrument_columns)
         await connection.run_sync(_ensure_news_fetch_batch_columns)
         await connection.run_sync(_ensure_news_fetch_batch_indexes)
@@ -160,6 +161,7 @@ def _ensure_news_event_indexes(sync_connection: Connection) -> None:
     if "news_events" not in set(inspector.get_table_names()):
         return
 
+    # 查询维度以 scope/ts_code/cluster_key 为主，索引用于保障新闻检索与去重性能。
     index_sql = (
         "CREATE INDEX IF NOT EXISTS ix_news_events_scope_cache_variant_fetched_at "
         "ON news_events (scope, cache_variant, fetched_at)",
@@ -220,6 +222,7 @@ def _ensure_news_fetch_batch_indexes(sync_connection: Connection) -> None:
     if "news_fetch_batches" not in set(inspector.get_table_names()):
         return
 
+    # 批次检索常以范围与状态聚合，索引优先覆盖后台任务监控与管理台筛选。
     index_sql = (
         "CREATE INDEX IF NOT EXISTS ix_news_fetch_batches_scope_cache_variant_fetched_at "
         "ON news_fetch_batches (scope, cache_variant, fetched_at)",

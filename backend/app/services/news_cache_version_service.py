@@ -42,6 +42,7 @@ def build_news_cache_version_key(
     cache_variant: str,
     ts_code: str | None = None,
 ) -> str:
+    # 版本 key 与具体 cache_variant 强绑定，避免不同来源互相覆盖。
     normalized_scope = scope.strip().lower()
     normalized_variant = cache_variant.strip().lower()
     if not normalized_variant:
@@ -84,6 +85,7 @@ def should_try_legacy_news_cache(
     version: str | None,
     legacy_fallback_enabled: bool,
 ) -> bool:
+    # 仅在没有版本号时才回退旧缓存，避免同时读两条链路造成数据不一致。
     if not legacy_fallback_enabled:
         return False
     return not (version or "").strip()

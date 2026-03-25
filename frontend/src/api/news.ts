@@ -80,6 +80,7 @@ const asNumber = (value: unknown, fallback = 0) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
 const normalizeCandidateSourceBreakdownItem = (item: unknown): CandidateSourceBreakdownItem => {
+  // 防御式解析：后端字段缺失时返回默认值，保证列表渲染稳定。
   if (!isRecord(item)) {
     return { source: '', count: 0 }
   }
@@ -90,6 +91,7 @@ const normalizeCandidateSourceBreakdownItem = (item: unknown): CandidateSourceBr
 }
 
 const normalizeCandidateEvidenceItem = (item: unknown): CandidateEvidenceItem => {
+  // 后端字段缺失时补默认值，避免页面因 undefined 断渲染。
   if (!isRecord(item)) {
     return {
       ts_code: '',
@@ -118,6 +120,7 @@ const normalizeCandidateEvidenceItem = (item: unknown): CandidateEvidenceItem =>
 }
 
 const normalizeAnchorEvent = (value: unknown): AnchorEvent | null => {
+  // 旧版本接口可能为空对象或缺字段，这里统一兜底。
   if (!isRecord(value)) {
     return null
   }
@@ -131,6 +134,7 @@ const normalizeAnchorEvent = (value: unknown): AnchorEvent | null => {
 }
 
 const normalizeHotNewsItem = (item: unknown): HotNewsItem => {
+  // 兼容后端字段缺失，保证热点列表可继续展示。
   if (!isRecord(item)) {
     return {
       event_id: null,
@@ -161,6 +165,7 @@ const normalizeHotNewsItem = (item: unknown): HotNewsItem => {
 }
 
 const normalizeMacroImpactCandidate = (item: unknown): MacroImpactCandidate => {
+  // 影响图谱数据按需补齐默认值，避免单条异常阻断整页渲染。
   if (!isRecord(item)) {
     return {
       ts_code: '',
@@ -199,6 +204,7 @@ const normalizeMacroImpactCandidate = (item: unknown): MacroImpactCandidate => {
 }
 
 const normalizeMacroImpactProfile = (item: unknown): MacroImpactProfile => {
+  // 主题信息缺失时使用默认主题，防止渲染空白卡片。
   if (!isRecord(item)) {
     return {
       topic: 'other',
@@ -229,11 +235,13 @@ export const newsApi = {
   async getHotNews(limit = 50, topic?: string) {
     const query = buildQueryString({ limit, topic })
     const payload = await requestJson<unknown>(`/api/news/hot${query}`)
+    // 后端返回可能为非数组，统一兜底为空列表。
     return Array.isArray(payload) ? payload.map(normalizeHotNewsItem) : []
   },
   async getImpactMap(topic?: string, candidateEvidenceLimit?: number) {
     const query = buildQueryString({ topic, candidate_evidence_limit: candidateEvidenceLimit })
     const payload = await requestJson<unknown>(`/api/news/impact-map${query}`)
+    // 影响图谱接口异常时兜底为空数组，避免页面报错。
     return Array.isArray(payload) ? payload.map(normalizeMacroImpactProfile) : []
   },
 }

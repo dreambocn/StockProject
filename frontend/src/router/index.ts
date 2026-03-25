@@ -41,6 +41,7 @@ export const router = createRouter({
       path: '/admin',
       name: 'admin-console',
       component: () => import('../views/AdminConsoleView.vue'),
+      // 管理台页面统一走 requiresAuth + requiresAdmin 守卫。
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {

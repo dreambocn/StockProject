@@ -46,6 +46,7 @@ async def _upsert_stock_instrument(
     session: AsyncSession, payload: dict[str, str]
 ) -> str:
     ts_code = str(payload["ts_code"]).strip().upper()
+    # 主键按 ts_code 归一化，避免大小写/空格导致重复记录。
     instrument = await session.get(StockInstrument, ts_code)
     is_created = instrument is None
     if instrument is None:
@@ -137,6 +138,7 @@ def _normalize_status_list(
     if normalized:
         return normalized
 
+    # 全部无效时回退到全量状态，避免“空同步”造成误判。
     return list(STOCK_BASIC_FULL_STATUSES)
 
 
@@ -154,6 +156,7 @@ async def _sync_stock_basic_rows(
             ts_code = str(row.get("ts_code") or "").strip().upper()
             if not ts_code:
                 continue
+            # 按 ts_code 覆盖合并多状态行，确保同一标的只写入一次。
             merged_by_code[ts_code] = row
 
     created_count = 0
@@ -178,6 +181,7 @@ async def sync_stock_basic_full(
     gateway: StockDataGateway,
     list_statuses: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, int | list[str]]:
+    # 全量同步结束后记录游标，作为后续排障与增量的时间基准。
     summary = await _sync_stock_basic_rows(
         session,
         gateway,

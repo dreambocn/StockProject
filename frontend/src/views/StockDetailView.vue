@@ -223,6 +223,7 @@ const aggregateRows = (rows: KlineRow[], period: KlinePeriod): KlineRow[] => {
     return rows
   }
 
+  // 关键流程：周/月线按时间桶聚合，确保 OHLC 与成交量口径稳定。
   const grouped = new Map<string, KlineRow[]>()
   for (const item of rows) {
     const key = period === 'weekly' ? getWeekKey(item.tradeDateKey) : item.tradeDateKey.slice(0, 6)
@@ -345,6 +346,7 @@ const adjustedRows = computed(() => {
     return rawBaseRows.value
   }
 
+  // 关键边界：复权因子缺失或异常时回退原始行情，避免图表被错误缩放。
   const factors = factorByTradeDateKey.value
   const rows = rawBaseRows.value
   if (rows.length === 0 || factors.size === 0) {
@@ -604,6 +606,7 @@ const loadAdjFactors = async (rows: StockDailySnapshot[]) => {
     return
   }
 
+  // 关键流程：复权因子与当前行情时间窗对齐，避免跨区间因子混入。
   const sortedKeys = rows
     .map((item) => toTradeDateKey(item.trade_date))
     .filter((key) => key.length === 8)
@@ -746,6 +749,7 @@ const toggleWatchlist = async () => {
   }
 
   if (!authStore.accessToken) {
+    // 关键边界：未登录时引导登录并保留回跳路径。
     await router.push({
       path: '/login',
       query: { redirect: route.fullPath },

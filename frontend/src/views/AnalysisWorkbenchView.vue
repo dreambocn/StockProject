@@ -34,6 +34,7 @@ const webSearchInherited = ref(false)
 const webSearchSeededTsCode = ref('')
 const watchlistLoading = ref(false)
 const watchlistItem = ref<WatchlistItemResponse | null>(null)
+// 通过递增版本号标识“本轮加载”，用于拦截并发返回的过期数据。
 const workbenchLoadVersion = ref(0)
 
 let stopSessionStream: (() => void) | null = null
@@ -43,6 +44,7 @@ const stopStreaming = () => {
   stopSessionStream = null
 }
 
+// 仅允许最新请求写回界面，避免路由切换后的旧响应覆盖新状态。
 const isLatestWorkbenchRequest = (requestVersion: number) =>
   requestVersion === workbenchLoadVersion.value
 
@@ -373,6 +375,7 @@ const loadSummary = async (requestVersion: number) => {
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return
     }
+    // 没有股票代码时立即清空摘要区，避免残留上一次的分析内容。
     summary.value = null
     errorMessage.value = ''
     loading.value = false
@@ -392,6 +395,7 @@ const loadSummary = async (requestVersion: number) => {
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return
     }
+    // 成功态只写入最新请求的结果，避免用户切换股票后被旧响应覆盖。
     summary.value = payload
     if (!selectedReportId.value && payload.report?.id) {
       selectedReportId.value = payload.report.id
@@ -418,6 +422,7 @@ const loadReports = async (requestVersion: number) => {
 
   if (!currentTsCode) {
     if (isLatestWorkbenchRequest(requestVersion)) {
+      // 空上下文时清空历史列表，确保页面状态与路由一致。
       reportArchives.value = []
     }
     return
@@ -430,6 +435,7 @@ const loadReports = async (requestVersion: number) => {
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return
     }
+    // 仅同步当前页面上下文的历史报告，避免跨股票污染。
     reportArchives.value = payload.items
     if (!selectedReportId.value && payload.items[0]?.id) {
       selectedReportId.value = payload.items[0].id
@@ -446,6 +452,7 @@ const loadWatchlistState = async (requestVersion: number) => {
   const currentTsCode = tsCode.value
   if (!currentToken || !currentTsCode) {
     if (isLatestWorkbenchRequest(requestVersion)) {
+      // 未登录或缺少股票代码时直接移除关注态。
       watchlistItem.value = null
     }
     return
@@ -484,6 +491,7 @@ const loadWatchlistState = async (requestVersion: number) => {
 const loadWorkbench = async () => {
   workbenchLoadVersion.value += 1
   const requestVersion = workbenchLoadVersion.value
+  // 并发加载摘要、历史与关注态，用版本号保证回写一致性。
   await Promise.all([
     loadSummary(requestVersion),
     loadReports(requestVersion),
@@ -570,6 +578,7 @@ const toggleWatchlist = async () => {
     return
   }
   if (!authStore.accessToken) {
+    // 未登录时引导去登录，并保留当前页作为回跳目标。
     await router.push({
       path: '/login',
       query: { redirect: route.fullPath },
@@ -616,6 +625,7 @@ const refreshAnalysis = async () => {
       trigger_source: 'manual',
     })
     if (session.cached || !session.session_id) {
+      // 缓存命中或未分配流式会话时，直接回拉最新数据即可。
       streaming.value = false
       await loadWorkbench()
       return
@@ -625,6 +635,7 @@ const refreshAnalysis = async () => {
       session.session_id,
       {
         onDelta: (payload) => {
+          // 流式增量只更新摘要区文本，避免打断其他卡片渲染。
           streamingMarkdown.value = String(payload.content ?? '')
         },
         onCompleted: async () => {
@@ -634,6 +645,7 @@ const refreshAnalysis = async () => {
         },
         onError: (payload) => {
           streaming.value = false
+          // 服务端错误时保留已有内容，并给出统一错误提示。
           errorMessage.value = String(payload.detail ?? t('analysisWorkbench.error'))
           stopStreaming()
         },
@@ -667,6 +679,7 @@ watch(
     if (!tsCode.value) {
       return
     }
+    // 重新登录后刷新关注态，确保按钮与后端一致。
     void loadWatchlistState(workbenchLoadVersion.value)
   },
 )
@@ -678,6 +691,7 @@ watch(
     streaming.value = false
     selectedReportId.value = null
     streamingMarkdown.value = ''
+    // 路由上下文变化时重置继承状态，避免旧股票影响新分析。
     useWebSearch.value = false
     webSearchInherited.value = false
     webSearchSeededTsCode.value = ''

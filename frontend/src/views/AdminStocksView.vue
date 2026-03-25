@@ -122,6 +122,7 @@ const loadStocksFromDb = async () => {
     }
 
     // 关键流程：默认查询统一走数据库分页接口，避免每次刷新都触发外部源拉取。
+    // 查询条件先做最小清洗，避免把空字符串写入请求参数。
     const response = await adminApi.listStocks(accessToken.value, {
       keyword: filters.keyword.trim() || undefined,
       listStatus: filters.listStatus,
@@ -156,6 +157,7 @@ const fetchWithParams = async () => {
     await adminApi.fetchStocksFull(accessToken.value, {
       listStatus: filters.listStatus,
     })
+    // 同步完成后回到第一页，避免当前页码超过最新总数导致空列表。
     pagination.page = 1
     await loadStocksFromDb()
   } catch (error) {
@@ -170,6 +172,7 @@ const fetchWithParams = async () => {
 }
 
 const defaultQuery = async () => {
+  // 默认查询重置页码，保证列表展示与统计一致。
   pagination.page = 1
   await loadStocksFromDb()
 }
@@ -184,6 +187,7 @@ const queryTradeCalendar = async () => {
       startDate: tradeCalendarFilters.startDate || undefined,
       endDate: tradeCalendarFilters.endDate || undefined,
     })
+    // 前端分页只负责切片显示，不做额外排序，避免与后端口径冲突。
     tradeCalendarPagination.total = tradeCalendarRows.value.length
     tradeCalendarPagination.page = 1
   } catch (error) {
@@ -209,11 +213,13 @@ const handleTradeCalendarPageSizeChange = (pageSize: number) => {
 }
 
 const handlePageChange = async (page: number) => {
+  // 切页即触发后端分页查询，确保统计与列表一致。
   pagination.page = page
   await loadStocksFromDb()
 }
 
 const handlePageSizeChange = async (pageSize: number) => {
+  // 每页条数变化需要同步刷新，避免页码范围失真。
   pagination.pageSize = pageSize
   pagination.page = 1
   await loadStocksFromDb()

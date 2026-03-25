@@ -23,6 +23,7 @@ def normalize_provider(provider: str | None, source: str | None = None) -> str:
 
 
 def providers_to_source_coverage(providers: list[str]) -> str:
+    # 聚合来源标签用于显示覆盖面，不暴露具体源列表。
     normalized = sorted(
         {normalize_provider(provider) for provider in providers if provider}
     )
@@ -33,6 +34,7 @@ def providers_to_source_coverage(providers: list[str]) -> str:
 
 
 def _normalize_title(title: str) -> str:
+    # 标题规范化用于聚类，去掉常见媒体尾缀与噪声符号。
     lowered = title.strip().lower()
     lowered = re.sub(r"[：:|｜\-—_·•\s]+", "", lowered)
     lowered = re.sub(r"(财联社|证券时报|东方财富|巨潮资讯|央视新闻)$", "", lowered)
@@ -45,6 +47,7 @@ def build_cluster_key(
     published_at: datetime | None,
     macro_topic: str | None,
 ) -> str:
+    # 聚类键以“标题+日期+主题”稳定生成，避免跨日误并。
     normalized_date = (published_at or datetime.min).strftime("%Y%m%d")
     normalized_title = _normalize_title(title)
     digest = hashlib.sha1(

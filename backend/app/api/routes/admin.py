@@ -34,6 +34,7 @@ async def list_users(
     _current_admin: Annotated[User, Depends(get_current_admin)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[AdminUserResponse]:
+    # 管理台仅列出最近创建的用户，便于审计与人工排查。
     statement = select(User).order_by(User.created_at.desc())
     result = await session.execute(statement)
     users = result.scalars().all()
@@ -141,6 +142,7 @@ async def list_stocks(
         StockInstrument.list_status.in_(list_statuses)
     )
 
+    # 关键过滤：关键词允许 ts_code/symbol/name 联合检索，方便后台定位异常标的。
     normalized_keyword = keyword.strip() if keyword else ""
     if normalized_keyword:
         wildcard = f"%{normalized_keyword}%"

@@ -58,6 +58,7 @@ const sendEmailCode = async () => {
   sendingCode.value = true
   errorMessage.value = ''
   try {
+    // 注册验证码发送失败时只提示错误，不触发任何自动注册流程。
     const result = await authStore.sendRegisterEmailCode(form.email)
     startCodeCountdown(result.cooldown_in)
   } catch (error) {
@@ -97,11 +98,13 @@ const submitRegister = async () => {
   errorMessage.value = ''
 
   if (form.password !== form.confirmPassword) {
+    // 前端先拦住确认密码不一致，避免无意义请求占用风控配额。
     errorMessage.value = t('auth.register.mismatch')
     return
   }
 
   if (!isStrongPassword(form.password)) {
+    // 规则不满足时仅提示，不触发后端注册链路。
     errorMessage.value = t(PASSWORD_POLICY_MESSAGE_KEY)
     return
   }

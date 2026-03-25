@@ -54,10 +54,12 @@ const submitLogin = async () => {
       captcha_id: captchaRequired.value ? captchaId.value : undefined,
       captcha_code: captchaRequired.value ? captchaCode.value.trim().toUpperCase() : undefined,
     })
+    // 登录成功后清理验证码状态，避免切到其他账号时携带旧挑战。
     captchaRequired.value = false
     captchaId.value = ''
     captchaCode.value = ''
     captchaImage.value = ''
+    // 回跳只允许 query.redirect 为字符串，避免非法参数造成跳转异常。
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     await router.push(redirect)
   } catch (error) {

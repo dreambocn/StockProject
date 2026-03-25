@@ -3,10 +3,12 @@ from collections.abc import Sequence
 from typing import Protocol
 
 
+# 风控统一提示语，避免暴露具体阈值细节。
 EMAIL_CODE_RISK_LIMIT_DETAIL = "email verification code send too frequent"
 
 
 class EmailVerificationRiskStore(Protocol):
+    # 仅暴露最小化风控接口，隐藏具体存储实现。
     async def is_ip_blocked(self, ip: str) -> bool: ...
 
     async def check_and_increment_ip_limits(

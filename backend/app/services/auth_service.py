@@ -110,12 +110,14 @@ async def refresh_token_pair(
     refresh_token: str, token_store: TokenStore
 ) -> dict[str, str]:
     try:
+        # 解析时强制期待 refresh token，避免 access token 被误用。
         payload = decode_token(refresh_token, expected_type="refresh")
     except TokenError as exc:
         raise UnauthorizedError("invalid refresh token") from exc
 
     user_id = str(payload["sub"])
     jti = str(payload["jti"])
+    # 校验 refresh token 是否仍有效，避免已撤销凭据继续刷新。
     if not await token_store.validate_refresh_token(jti, user_id):
         raise UnauthorizedError("refresh token revoked")
 
@@ -176,6 +178,7 @@ async def reset_password_by_email(
     if user is None:
         raise NotFoundError("user not found")
 
+    # 找回密码流程不改变账号状态，只更新密码并回收刷新令牌。
     # 忘记密码链路只更新目标用户密码，邮箱验证码校验由上层完成。
     user.password_hash = hash_password(new_password)
     await session.commit()

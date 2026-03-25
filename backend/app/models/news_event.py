@@ -55,6 +55,7 @@ class NewsEvent(Base):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     scope: Mapped[str] = mapped_column(String(16), index=True)
+    # cache_variant 用于区分不同缓存口径，避免同范围数据互相覆盖。
     cache_variant: Mapped[str] = mapped_column(
         String(32), index=True, default="default"
     )
@@ -70,9 +71,12 @@ class NewsEvent(Base):
     source: Mapped[str] = mapped_column(String(64))
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
     external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # cluster_key 用于跨来源聚类，去重时优先按此字段合并。
     cluster_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # source_priority 越高代表来源权重越高，排序与去重时使用。
     source_priority: Mapped[int] = mapped_column(nullable=False, default=0, index=True)
+    # evidence_kind 细分证据类型，便于在前端做分类与筛选。
     evidence_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="hot", index=True)
     macro_topic: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
@@ -92,6 +96,7 @@ class NewsEvent(Base):
     sentiment_label: Mapped[str | None] = mapped_column(String(16), nullable=True)
     sentiment_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     event_tags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # analysis_status 代表分析流水线状态，避免重复触发下游任务。
     analysis_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", index=True
     )

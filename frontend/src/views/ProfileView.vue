@@ -12,6 +12,7 @@ const { t } = useI18n()
 onMounted(async () => {
   // 刷新直达个人中心时若内存态为空，主动补拉用户信息。
   if (!authStore.user) {
+    // 这里依赖 authStore 内部的鉴权失败处理，避免页面层重复写错误提示。
     await authStore.fetchMe()
   }
 })

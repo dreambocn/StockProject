@@ -102,6 +102,7 @@ async def _read_versioned_news_cache(
         redis_client_getter=get_redis_client,
     )
     if version is not None:
+        # 命中版本号时直接读对应版本数据，避免与旧缓存混读。
         return await read_cached_model_rows(
             resolve_news_cache_data_key(
                 base_cache_key=base_cache_key,
@@ -115,6 +116,7 @@ async def _read_versioned_news_cache(
     if not legacy_fallback_enabled:
         return None
 
+    # 仅在最近抓取时间仍在回退窗口内时允许读旧缓存。
     normalized_last_fetch_at = _normalize_datetime(last_fetch_at)
     if (
         normalized_last_fetch_at is not None
@@ -142,6 +144,7 @@ async def _write_versioned_news_cache(
         version_key=version_key,
         redis_client_getter=get_redis_client,
     )
+    # 写入时如果版本为空，仍使用 resolve 结果回写，保持读写一致。
     await write_cached_model_rows(
         resolve_news_cache_data_key(
             base_cache_key=base_cache_key,
@@ -166,6 +169,7 @@ async def get_hot_news(
             detail="invalid topic filter",
         )
 
+    # 缓存 key 绑定主题与限制，确保不同过滤条件互不污染。
     cache_key = f"{HOT_NEWS_CACHE_PREFIX}:{normalized_topic}:{limit}"
     version_key = build_news_cache_version_key(
         scope="hot",
@@ -209,6 +213,7 @@ async def get_hot_news(
 
     async def fetch_remote_and_persist() -> list[HotNewsItemResponse]:
         fetched_at = datetime.now(UTC)
+        # 新批次必须先创建 batch 记录，方便追踪抓取质量与降级原因。
         batch = await create_news_fetch_batch(
             session,
             scope="hot",
@@ -460,6 +465,7 @@ async def get_macro_impact_map(
                 evidence_item_limit=candidate_evidence_limit,
             )
     except Exception as exc:
+        # 候选增强失败时保留基础结果，避免接口因为附加信息缺失而整体失败。
         logger.warning(
             "event=impact_map_dynamic_candidates_degraded error_type=%s message=候选增强失败，保留基础结果",
             type(exc).__name__,

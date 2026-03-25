@@ -34,6 +34,7 @@ const buildAnalysisContext = (payload: {
   eventId?: string
   eventTitle?: string
 }): AnalysisNavContext | null => {
+  // 仅在有有效股票代码时构建上下文，避免导航到“无上下文”的分析页。
   const normalizedTsCode = String(payload.tsCode ?? '').trim().toUpperCase()
   if (!normalizedTsCode) {
     return null
@@ -65,6 +66,7 @@ const readPersistedAnalysisContext = () => {
     return null
   }
   try {
+    // 仅读取本地缓存，不做任何网络校验，确保顶栏导航足够轻量。
     const rawValue = window.localStorage.getItem(LAST_ANALYSIS_CONTEXT_KEY)
     if (!rawValue) {
       return null
@@ -132,6 +134,7 @@ const currentAnalysisContext = computed(() => {
   })
 })
 const analysisNavTarget = computed(() => {
+  // 顶栏“分析”优先使用当前上下文，其次回退最近一次有效上下文。
   const resolvedContext =
     stockDetailAnalysisContext.value
     ?? currentAnalysisContext.value
@@ -162,6 +165,7 @@ const handleAuthAction = async () => {
   // 顶部按钮根据当前登录态执行“登出”或“去登录”两种分支。
   if (authStore.isAuthenticated) {
     await authStore.logout()
+    // 登出后统一回登录页，避免停留在需要鉴权的路由。
     await router.push('/login')
     return
   }

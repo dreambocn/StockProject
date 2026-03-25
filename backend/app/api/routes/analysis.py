@@ -34,6 +34,7 @@ async def get_stock_analysis_summary_route(
     event_limit: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
 ) -> StockAnalysisSummaryResponse:
+    # 摘要查询仅做参数透传与校验，核心业务边界在服务层统一处理。
     payload = await get_stock_analysis_summary(
         session,
         ts_code,
@@ -92,6 +93,7 @@ async def get_stock_analysis_reports_route(
 
 
 def _to_sse_payload(event: str, payload: dict[str, object]) -> str:
+    # SSE 必须是纯文本协议格式，避免二次 JSON 包裹导致前端解析异常。
     serialized = json.dumps(payload, ensure_ascii=False, default=str)
     return f"event: {event}\ndata: {serialized}\n\n"
 
@@ -107,16 +109,19 @@ async def stream_analysis_session_events_route(
         raise HTTPException(status_code=404, detail="analysis session not found")
 
     async def event_stream():
+        # 连接建立后先推送现有状态，确保前端有“可用的初始态”。
         yield _to_sse_payload(
             "status",
             {"session_id": session_id, "status": session_row.status},
         )
         if reused:
+            # reused 表示复用历史会话，前端可以跳过“生成中”动画。
             yield _to_sse_payload(
                 "reused",
                 {"session_id": session_id, "status": session_row.status},
             )
         if session_row.summary_preview:
+            # 预览文本是历史残留片段，先推送以便快速回显。
             yield _to_sse_payload(
                 "delta",
                 {
@@ -126,6 +131,7 @@ async def stream_analysis_session_events_route(
                 },
             )
         if session_row.status == "completed":
+            # 已完成会话直接下发 completed，避免进入订阅循环。
             yield _to_sse_payload(
                 "completed",
                 {
@@ -136,6 +142,7 @@ async def stream_analysis_session_events_route(
             )
             return
         if session_row.status == "failed":
+            # 失败态立即返回 error，前端无需再等消息流。
             yield _to_sse_payload(
                 "error",
                 {
@@ -150,6 +157,7 @@ async def stream_analysis_session_events_route(
                 event_name, payload = await queue.get()
                 yield _to_sse_payload(event_name, payload)
                 if event_name in {"completed", "error"}:
+                    # 终态事件到达后主动结束流，释放连接资源。
                     return
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

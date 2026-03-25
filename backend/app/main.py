@@ -39,6 +39,7 @@ app = FastAPI(title="Stock Project API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
+    # 统一从配置读取 CORS 白名单，避免在代码里写死环境差异。
     allow_origins=settings.cors_allow_origins_list,
     allow_origin_regex=(settings.cors_allow_origin_regex or None),
     allow_credentials=settings.cors_allow_credentials,

@@ -84,6 +84,7 @@ MAX_CANDIDATE_POOL_SIZE = 24
 
 
 def detect_macro_topic(*, title: str, summary: str | None) -> str:
+    # 宏观主题只做关键字匹配，命中则锁定，避免过度推断。
     haystack = f"{title} {summary or ''}".lower()
     for topic, keywords in MACRO_TOPIC_KEYWORDS.items():
         for keyword in keywords:
@@ -105,6 +106,7 @@ def normalize_provider(provider: str | None, source: str | None = None) -> str:
 
 
 def providers_to_source_coverage(providers: list[str]) -> str:
+    # 用简短标签表示来源覆盖，便于前端展示合并来源。
     normalized = sorted({normalize_provider(provider) for provider in providers if provider})
     if not normalized:
         return "IN"
@@ -113,6 +115,7 @@ def providers_to_source_coverage(providers: list[str]) -> str:
 
 
 def _normalize_title(title: str) -> str:
+    # 聚类标题要去除噪声符号与常见媒体后缀，保证摘要聚合稳定。
     lowered = title.strip().lower()
     lowered = re.sub(r"[：:|｜\-—_·•\s]+", "", lowered)
     lowered = re.sub(r"(财联社|证券时报|东方财富|巨潮资讯|央视新闻)$", "", lowered)
@@ -125,6 +128,7 @@ def build_cluster_key(
     published_at: datetime | None,
     macro_topic: str | None,
 ) -> str:
+    # 聚类键基于标题+日期+主题，避免不同日重复事件混到一起。
     normalized_date = (published_at or datetime.min).strftime("%Y%m%d")
     normalized_title = _normalize_title(title)
     digest = hashlib.sha1(f"{normalized_title}|{normalized_date}|{macro_topic or ''}".encode("utf-8")).hexdigest()
@@ -167,6 +171,7 @@ def _normalize_datetime(value: datetime | None) -> datetime | None:
 
 
 def _build_candidate_freshness_score(latest_published_at: datetime | None) -> int:
+    # 新鲜度分数用于排序候选池，越近越高。
     normalized_published_at = _normalize_datetime(latest_published_at)
     if normalized_published_at is None:
         return 0
@@ -186,6 +191,7 @@ def _build_candidate_freshness_score(latest_published_at: datetime | None) -> in
 
 
 def _build_candidate_confidence(score: int, source_hit_count: int) -> str:
+    # 置信度由分数与来源数量共同决定，避免单一来源导致误判偏高。
     if score >= 60 and source_hit_count >= 4:
         return "高"
     if score >= 40 and source_hit_count >= 2:
@@ -198,6 +204,7 @@ def _to_evidence_item_payload(
     *,
     limit: int,
 ) -> list[dict[str, object | None]]:
+    # 证据条目限制上限，避免返回过长列表影响前端性能。
     return [item.model_dump(mode="json") for item in items[: max(1, min(limit, 5))]]
 
 
@@ -214,6 +221,7 @@ def _build_base_candidate_signals(
     signal_hits = 0
     haystack = f"{instrument.industry or ''} {instrument.name or ''} {instrument.fullname or ''}"
 
+    # 目标股命中权重最高，优先提高分数与命中数。
     if instrument.name in target_names:
         score += 35
         reasons.append("命中主题目标股")

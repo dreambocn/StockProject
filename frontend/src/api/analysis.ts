@@ -117,6 +117,7 @@ export const analysisApi = {
     options?: { topic?: string | null; eventId?: string | null },
   ) {
     const query = buildQueryString({
+      // 空值不下发，避免触发后端错误的过滤条件。
       topic: options?.topic || undefined,
       event_id: options?.eventId || undefined,
     })
@@ -132,6 +133,7 @@ export const analysisApi = {
   ) {
     const query = buildQueryString({
       limit,
+      // 空值不下发，保持后端默认口径。
       topic: options?.topic || undefined,
       event_id: options?.eventId || undefined,
     })
@@ -150,6 +152,7 @@ export const analysisApi = {
       trigger_source?: 'manual' | 'watchlist_daily'
     },
   ) {
+    // force_refresh 与 use_web_search 由后端控制真正行为，这里仅透传。
     return requestJson<AnalysisSessionCreateResponse>(
       `/api/analysis/stocks/${encodeURIComponent(tsCode)}/sessions`,
       {
@@ -171,6 +174,7 @@ export const analysisApi = {
     options?: { reused?: boolean },
   ) {
     const query = options?.reused ? '?reused=true' : ''
+    // SSE 事件流用于增量渲染分析过程，统一在此处封装事件名。
     return openEventSource(`/api/analysis/sessions/${encodeURIComponent(sessionId)}/events${query}`, {
       status: (payload) => handlers.onStatus?.(payload as AnalysisSessionStatusEvent),
       reused: (payload) => handlers.onReused?.(payload as AnalysisSessionStatusEvent),

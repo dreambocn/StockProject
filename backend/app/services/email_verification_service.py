@@ -2,6 +2,7 @@ import secrets
 import string
 
 
+# 场景常量用于区分不同验证码用途，避免互相串用。
 REGISTER_EMAIL_SCENE = "register"
 CHANGE_PASSWORD_EMAIL_SCENE = "change_password"
 RESET_PASSWORD_EMAIL_SCENE = "reset_password"

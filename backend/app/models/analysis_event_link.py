@@ -12,6 +12,7 @@ class AnalysisEventLink(Base):
     event_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("news_events.id"), primary_key=True
     )
+    # 事件与股票的关联表，以 event_id + ts_code 作为复合主键。
     ts_code: Mapped[str] = mapped_column(String(12), primary_key=True, index=True)
     anchor_trade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     window_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)

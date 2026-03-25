@@ -18,7 +18,10 @@ if settings.postgres_schema:
 
 engine = create_async_engine(settings.postgres_async_dsn, **engine_options)
 SessionLocal = async_sessionmaker(
-    bind=engine, class_=AsyncSession, expire_on_commit=False
+    # 关闭提交后过期，避免后续响应序列化时触发隐式刷新。
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
 )
 
 

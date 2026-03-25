@@ -13,6 +13,7 @@ class StockAdjFactor(Base):
     ts_code: Mapped[str] = mapped_column(
         String(12), ForeignKey("stock_instruments.ts_code"), primary_key=True
     )
+    # 复权因子按交易日记录，配合行情复权计算。
     trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
     adj_factor: Mapped[Decimal] = mapped_column(Numeric(20, 10))
     created_at: Mapped[datetime] = mapped_column(

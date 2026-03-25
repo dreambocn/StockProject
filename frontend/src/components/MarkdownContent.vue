@@ -30,6 +30,7 @@ markdown.renderer.rules.link_open = (
   env: unknown,
   self: { renderToken: (tokens: any[], idx: number, options: Record<string, unknown>) => string },
 ) => {
+  // 外链统一新开并加上 rel，避免反向标签页劫持风险。
   tokens[idx]?.attrSet('target', '_blank')
   tokens[idx]?.attrSet('rel', 'noreferrer noopener')
   return defaultLinkOpenRenderer(tokens, idx, options, env, self)
@@ -37,6 +38,7 @@ markdown.renderer.rules.link_open = (
 
 const renderedHtml = computed(() => {
   const rawHtml = markdown.render(props.source || '')
+  // 渲染后的 HTML 需要清洗，避免 Markdown 注入脚本。
   return DOMPurify.sanitize(rawHtml, {
     USE_PROFILES: { html: true },
   })

@@ -56,6 +56,7 @@ export type AdminStockSyncResult = {
 
 export const adminApi = {
   listUsers: (accessToken: string) =>
+    // 管理员接口必须携带 access token，权限校验由后端统一处理。
     requestJson<AdminUser[]>('/api/admin/users', {
       method: 'GET',
       accessToken,
@@ -70,6 +71,7 @@ export const adminApi = {
     const query = buildQueryString({
       list_status: filters?.listStatus,
     })
+    // 全量同步会触发后端入库任务，仅用于管理员手动触发。
     return requestJson<AdminStockSyncResult>(`/api/admin/stocks/full${query}`, {
       method: 'POST',
       accessToken,
@@ -91,6 +93,7 @@ export const adminApi = {
       page: filters?.page,
       page_size: filters?.pageSize,
     })
+    // 走后台分页接口，避免前端拿到过量数据导致渲染压力。
     return requestJson<AdminStockPage>(`/api/admin/stocks${query}`, {
       method: 'GET',
       accessToken,

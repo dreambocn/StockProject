@@ -39,6 +39,7 @@ async def _load_watchlist_item(
 async def _serialize_watchlist_item(
     session: AsyncSession, item: UserWatchlistItem
 ) -> dict[str, object]:
+    # 关键边界：序列化时补齐最新报告与股票信息，避免前端再发多次查询。
     instrument = await load_stock_instrument(session, item.ts_code)
     latest_report = await load_latest_report(session, item.ts_code)
     return WatchlistItemResponse.model_validate(
@@ -81,6 +82,7 @@ async def create_watchlist_item(
     user_id: str,
     payload: WatchlistItemCreateRequest,
 ) -> dict[str, object]:
+    # 统一标准化股票代码，避免同一标的因大小写/前后空格产生重复数据。
     normalized_ts_code = payload.ts_code.strip().upper()
     instrument = await load_stock_instrument(session, normalized_ts_code)
     if instrument is None:
@@ -114,6 +116,7 @@ async def update_watchlist_item(
     ts_code: str,
     payload: WatchlistItemUpdateRequest,
 ) -> dict[str, object]:
+    # 更新目标必须绑定用户与股票，避免跨用户误更新。
     normalized_ts_code = ts_code.strip().upper()
     row = await _load_watchlist_item(
         session,
@@ -141,6 +144,7 @@ async def delete_watchlist_item(
     user_id: str,
     ts_code: str,
 ) -> None:
+    # 删除只影响用户自选股，不触及股票主数据或历史分析记录。
     normalized_ts_code = ts_code.strip().upper()
     row = await _load_watchlist_item(
         session,
@@ -165,6 +169,7 @@ async def get_watchlist_feed(
     items = (await session.execute(statement)).scalars().all()
     payload: list[dict[str, object]] = []
     for item in items:
+        # Feed 仅返回摘要字段，避免把完整报告在列表层重复透传。
         instrument = await load_stock_instrument(session, item.ts_code)
         latest_report = await load_latest_report(session, item.ts_code)
         payload.append(

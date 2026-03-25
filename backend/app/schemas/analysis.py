@@ -52,6 +52,7 @@ class AnalysisReportResponse(BaseModel):
     published_from: datetime | None
     published_to: datetime | None
     trigger_source: str = "manual"
+    # used_web_search 标识是否实际调用检索能力，避免与开关混淆。
     used_web_search: bool = False
     web_search_status: Literal["used", "disabled", "unsupported"] = "disabled"
     session_id: str | None = None
@@ -60,6 +61,7 @@ class AnalysisReportResponse(BaseModel):
     content_format: Literal["markdown"] = "markdown"
     anchor_event_id: str | None = None
     anchor_event_title: str | None = None
+    # structured_sources/web_sources 用于前端来源展示，允许为空数组。
     structured_sources: list[dict[str, object]] = []
     web_sources: list[dict[str, object]] = []
 
@@ -76,6 +78,7 @@ class AnalysisReportArchiveListResponse(BaseModel):
 class AnalysisSessionCreateRequest(BaseModel):
     topic: str | None = None
     event_id: str | None = None
+    # force_refresh 为真时绕过缓存，强制重新生成。
     force_refresh: bool = False
     use_web_search: bool = False
     trigger_source: Literal["manual", "watchlist_daily"] = "manual"
@@ -98,6 +101,7 @@ class StockAnalysisSummaryResponse(BaseModel):
     status: Literal["ready", "partial", "pending"]
     generated_at: datetime | None
     topic: str | None
+    # event_context_status 表示事件上下文获取口径，用于解释摘要来源。
     event_context_status: Literal["direct", "topic_fallback", "none"] = "none"
     event_context_message: str | None = None
     published_from: datetime | None

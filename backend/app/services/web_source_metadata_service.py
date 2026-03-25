@@ -42,6 +42,7 @@ def _normalize_url(url: str | None) -> str | None:
         return None
     text = str(url).strip()
     if not text.startswith(("http://", "https://")):
+        # 非 HTTP/HTTPS 直接拒绝，避免解析本地/私有协议。
         return None
     return text
 
@@ -183,6 +184,7 @@ def _extract_page_metadata(html: str, domain: str | None) -> dict[str, Any]:
             published_at = time_match.group(1).strip()
 
     resolved_published_at = _parse_datetime_text(published_at)
+    # metadata_status 仅表示解析质量，不代表内容可信度。
     metadata_status = "enriched" if resolved_published_at or (source and source != domain) else "domain_inferred"
 
     return {
@@ -201,6 +203,7 @@ async def _load_cached_metadata(
     url_hash: str,
     now: datetime,
 ) -> WebSourceMetadataCache | None:
+    # 仅返回未过期缓存，避免过期数据影响来源展示。
     statement = (
         select(WebSourceMetadataCache)
         .where(WebSourceMetadataCache.url_hash == url_hash)
@@ -238,6 +241,7 @@ async def _upsert_metadata_cache(
     row.resolved_published_at = metadata.get("resolved_published_at")
     row.metadata_status = str(metadata.get("metadata_status") or "unavailable")
     row.fetched_at = now
+    # 成功与失败使用不同 TTL，避免失败缓存长期阻塞重试。
     ttl_seconds = (
         success_ttl_seconds
         if row.metadata_status == "enriched"
@@ -282,6 +286,7 @@ async def enrich_web_sources(
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     owns_client = http_client is None
+    # 解析来源元数据时使用短超时，避免阻塞分析主链路。
     client = http_client or httpx.AsyncClient(
         follow_redirects=True,
         timeout=timeout_seconds,
@@ -342,6 +347,7 @@ async def enrich_web_sources(
                 if response.status_code >= 400:
                     raise RuntimeError(f"unexpected status: {response.status_code}")
                 if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+                    # 非 HTML 资源不解析正文，直接回退为域名来源。
                     raise RuntimeError("non-html response")
 
                 content_bytes = response.content[:max_bytes]
@@ -349,6 +355,7 @@ async def enrich_web_sources(
                 metadata = _extract_page_metadata(html, domain)
             except Exception:
                 if domain:
+                    # 失败时回退为域名来源，避免返回空对象。
                     metadata = {
                         "resolved_title": raw_source.get("title"),
                         "resolved_source": _resolve_source_from_domain(domain),

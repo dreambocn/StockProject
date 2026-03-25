@@ -13,6 +13,7 @@ class StockDailySnapshot(Base):
     ts_code: Mapped[str] = mapped_column(
         String(12), ForeignKey("stock_instruments.ts_code"), primary_key=True
     )
+    # 日频快照以交易日为主键，保证同日数据幂等写入。
     trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
     open: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     high: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)

@@ -51,12 +51,14 @@ class NewsFetchBatch(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # row_count_* 分别记录原始、映射、落库数量，用于追踪降级与过滤比例。
     row_count_raw: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     row_count_mapped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     row_count_persisted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     provider_stats_json: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON, nullable=True
     )
+    # degrade_reasons_json 保存降级原因列表，便于排查外部依赖异常。
     degrade_reasons_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

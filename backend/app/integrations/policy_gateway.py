@@ -6,6 +6,7 @@ from app.integrations.tushare_gateway import TushareGateway
 
 
 def _pick_text(row: dict[str, object], *keys: str) -> str | None:
+    # 逐个候选字段寻找可用文本，兼容不同数据源字段命名。
     for key in keys:
         value = row.get(key)
         if value is None:
@@ -25,6 +26,7 @@ def _normalize_policy_row(
     link_keys: tuple[str, ...],
     source_label: str,
 ) -> dict[str, Any] | None:
+    # 标题缺失则放弃该条，避免生成无意义事件。
     title = _pick_text(row, *title_keys)
     if not title:
         return None
@@ -41,6 +43,7 @@ def _normalize_policy_row(
 
 async def fetch_policy_events() -> list[dict[str, Any]]:
     settings = get_settings()
+    # 未配置 tushare token 直接返回空，避免污染日志与异常。
     if not settings.tushare_token.strip():
         return []
 
@@ -62,6 +65,7 @@ async def fetch_policy_events() -> list[dict[str, Any]]:
             if normalized is not None:
                 rows.append(normalized)
     except Exception:
+        # 上游不稳定时降级为忽略，保证其他数据源仍可返回。
         pass
 
     try:
@@ -78,6 +82,7 @@ async def fetch_policy_events() -> list[dict[str, Any]]:
             if normalized is not None:
                 rows.append(normalized)
     except Exception:
+        # 避免单一来源失败导致整体查询失败。
         pass
 
     rows.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)

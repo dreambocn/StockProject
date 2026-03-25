@@ -19,6 +19,7 @@ const adminEntries = [
     noteKey: 'adminConsole.entries.stocks.note',
   },
 ]
+// 后台入口使用配置数组渲染，便于后续扩展时保持结构一致。
 </script>
 
 <template>

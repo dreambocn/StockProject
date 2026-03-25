@@ -17,6 +17,7 @@ class StockWatchSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
+    # source 标识采集来源，便于区分定时任务与手动触发。
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="worker")
     payload_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

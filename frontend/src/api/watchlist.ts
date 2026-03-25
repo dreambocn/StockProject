@@ -34,6 +34,7 @@ export type WatchlistFeedResponse = {
 
 export const watchlistApi = {
   getWatchlist(accessToken: string) {
+    // 关注列表必须携带 token，权限校验由后端统一处理。
     return requestJson<WatchlistResponse>('/api/watchlist', {
       accessToken,
     })
@@ -64,6 +65,7 @@ export const watchlistApi = {
       web_search_enabled?: boolean
     },
   ) {
+    // PATCH 仅更新传入字段，避免覆盖未修改的开关状态。
     return requestJson<WatchlistItemResponse>(`/api/watchlist/items/${encodeURIComponent(tsCode)}`, {
       method: 'PATCH',
       accessToken,
@@ -72,6 +74,7 @@ export const watchlistApi = {
   },
 
   deleteWatchlistItem(accessToken: string, tsCode: string) {
+    // 删除只影响当前用户关注记录，不影响股票主数据。
     return requestJson<{ message: string }>(`/api/watchlist/items/${encodeURIComponent(tsCode)}`, {
       method: 'DELETE',
       accessToken,

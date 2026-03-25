@@ -20,12 +20,14 @@ class AnalysisGenerationSession(Base):
         String(36), nullable=True, index=True
     )
     use_web_search: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # trigger_source_group 用于区分批量任务来源，便于队列聚合与统计。
     trigger_source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="manual", index=True
     )
     trigger_source_group: Mapped[str] = mapped_column(
         String(32), nullable=False, default="manual", index=True
     )
+    # status 代表会话执行状态，避免重复生成。
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="queued", index=True
     )

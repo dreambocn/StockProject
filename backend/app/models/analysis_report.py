@@ -12,6 +12,7 @@ class AnalysisReport(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     ts_code: Mapped[str] = mapped_column(String(12), index=True)
+    # status 标识报告生命周期，供前端显示生成进度。
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     risk_points: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
@@ -22,6 +23,7 @@ class AnalysisReport(Base):
     trigger_source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="manual", index=True
     )
+    # used_web_search 表示本次是否实际调用了外部检索能力。
     used_web_search: Mapped[bool] = mapped_column(Boolean, default=False)
     web_search_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="disabled"
@@ -36,6 +38,7 @@ class AnalysisReport(Base):
     content_format: Mapped[str] = mapped_column(
         String(16), nullable=False, default="markdown"
     )
+    # anchor_event_* 用于把报告锚定到关键事件，便于跨页面跳转。
     anchor_event_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True
     )

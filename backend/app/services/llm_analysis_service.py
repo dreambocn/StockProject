@@ -45,6 +45,7 @@ def _contains_agentic_output(summary: str) -> bool:
     if not normalized_summary:
         return False
 
+    # 过滤“代理自述”类文本，避免污染终端用户可见的分析结论。
     return any(pattern in normalized_summary for pattern in AGENTIC_OUTPUT_PATTERNS)
 
 
@@ -55,6 +56,7 @@ def _sanitize_analysis_summary(summary: str) -> str:
         if not line:
             sanitized_lines.append("")
             continue
+        # 如果检测到代理流程输出，直接丢弃整行。
         if any(pattern in line for pattern in AGENTIC_OUTPUT_PATTERNS):
             continue
         sanitized_lines.append(raw_line.rstrip())
@@ -144,6 +146,7 @@ async def generate_stock_analysis_report(
     web_search_status = "disabled"
     web_sources: list[dict[str, object]] = []
     try:
+        # 有 on_delta 时走流式输出，用于前端实时展示进度与摘要片段。
         if on_delta is not None:
             llm_result = await generate_streamed_llm_result(
                 prompt,
@@ -178,6 +181,7 @@ async def generate_stock_analysis_report(
             raise RuntimeError("empty llm summary")
         status = "ready"
     except Exception:
+        # 关键降级：LLM 失败时回退规则化摘要，保证分析页面始终有可展示内容。
         summary = _build_rule_based_summary(
             ts_code=ts_code,
             instrument_name=instrument_name,
@@ -186,10 +190,12 @@ async def generate_stock_analysis_report(
         )
         status = "partial"
         if use_web_search and web_search_status == "disabled":
+            # 当环境不支持 web_search 时标记为 unsupported，避免前端误判为成功检索。
             web_search_status = "unsupported"
             used_web_search = False
 
     if web_sources and session is not None:
+        # 仅在有来源且持有数据库会话时补全元数据，避免纯计算场景阻塞。
         web_sources = await enrich_web_sources(
             session=session,
             raw_sources=web_sources,

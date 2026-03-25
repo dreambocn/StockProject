@@ -15,6 +15,7 @@ StockQuoteLoader = Callable[
 def _is_quote_complete(value: StockDailySnapshotResponse | None) -> bool:
     if value is None:
         return False
+    # 只要收盘价与交易日齐全即可认为“足够展示”。
     return value.close is not None and value.trade_date is not None
 
 
@@ -72,6 +73,7 @@ async def list_stock_items_with_quote_completion(
         if not _is_quote_complete(quote_by_ts_code.get(ts_code))
     ]
     if missing_after_kline:
+        # 最后回退到三方行情补齐，尽量减少接口调用范围。
         tushare_quote_by_ts_code = await fetch_latest_tushare(missing_after_kline)
         for ts_code, quote in tushare_quote_by_ts_code.items():
             if _is_quote_complete(quote):

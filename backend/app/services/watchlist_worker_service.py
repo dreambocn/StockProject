@@ -74,6 +74,7 @@ async def list_daily_analysis_targets(
                 use_web_search=bool(row.web_search_enabled),
             )
             continue
+        # 同一标的有多个自选项时，只要任一开启 web_search 就视为需要。
         if row.web_search_enabled:
             current.use_web_search = True
 
@@ -86,6 +87,7 @@ async def mark_hourly_sync_completed(
     ts_code: str,
     synced_at: datetime,
 ) -> None:
+    # 只更新开启小时同步的自选项，避免影响关闭同步的记录。
     statement = select(UserWatchlistItem).where(UserWatchlistItem.ts_code == ts_code)
     rows = (await session.execute(statement)).scalars().all()
     for row in rows:
@@ -99,6 +101,7 @@ async def mark_daily_analysis_completed(
     ts_code: str,
     analyzed_at: datetime,
 ) -> None:
+    # 每日分析完成仅标记开关为真的项，防止误写其他配置。
     statement = select(UserWatchlistItem).where(UserWatchlistItem.ts_code == ts_code)
     rows = (await session.execute(statement)).scalars().all()
     for row in rows:
@@ -126,6 +129,7 @@ async def has_daily_watchlist_report_for_date(
     report_generated_at = report.generated_at
     if report_generated_at.tzinfo is None:
         report_generated_at = report_generated_at.replace(tzinfo=UTC)
+    # 以报告生成日期为判断基准，避免同日重复触发生成。
     return report_generated_at.date() == target_date
 
 
@@ -177,6 +181,7 @@ async def _load_watch_snapshot_payload(
         rows = []
 
     if rows:
+        # 优先使用三方日线数据，保证快照反映最新市场行情。
         sorted_rows = sorted(
             rows,
             key=lambda item: str(item.get("trade_date") or ""),
@@ -208,6 +213,7 @@ async def _load_watch_snapshot_payload(
     if snapshot is None:
         return None
 
+    # 回退到本地快照时做显式类型转换，统一为可序列化的 float/str。
     return {
         "ts_code": snapshot.ts_code,
         "trade_date": snapshot.trade_date.isoformat(),

@@ -22,6 +22,7 @@ from app.services.email_service import EmailSender
 from app.services.smtp_email_sender import SmtpEmailSender
 
 
+# 统一使用 Bearer 头解析；auto_error=True 时缺失凭据会直接返回 401。
 http_bearer = HTTPBearer(auto_error=True)
 settings = get_settings()
 
@@ -60,6 +61,7 @@ async def get_current_user(
             detail="invalid access token",
         ) from exc
 
+    # 必须回库校验用户状态，避免仅凭 token 继续访问已禁用账号。
     user_id = str(payload["sub"])
     user = await get_user_by_id(session, user_id)
     if user is None or not user.is_active:

@@ -10,6 +10,7 @@ export class ApiError extends Error {
   }
 }
 
+// 未配置时回退本地地址，便于本机调试与测试环境直接启动。
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 
 type RequestOptions = {
@@ -81,6 +82,7 @@ export const openEventSource = (path: string, handlers: SseHandlerMap) => {
   }
 
   source.onerror = () => {
+    // EventSource 断线时统一回调错误分支，交给上层决定是否重试。
     handlers.error?.({ detail: 'eventsource_error' })
   }
 

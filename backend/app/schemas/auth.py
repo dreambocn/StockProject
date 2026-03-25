@@ -35,11 +35,13 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     account: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=8, max_length=128)
+    # captcha_* 仅在触发风控后携带，未触发时允许为空。
     captcha_id: str | None = None
     captcha_code: str | None = None
 
 
 class RefreshTokenRequest(BaseModel):
+    # 仅接收 refresh token，access token 由后端在校验后签发新对。
     refresh_token: str
 
 
@@ -61,6 +63,7 @@ class ChangePasswordRequest(BaseModel):
 class TokenPairResponse(BaseModel):
     access_token: str
     refresh_token: str
+    # token_type 固定为 bearer，前端用于拼装 Authorization 头。
     token_type: str = "bearer"
 
 
@@ -81,6 +84,7 @@ class MessageResponse(BaseModel):
 class CaptchaChallengeResponse(BaseModel):
     captcha_id: str
     image_base64: str
+    # expires_in 表示验证码失效时间（秒），用于前端倒计时展示。
     expires_in: int
 
 

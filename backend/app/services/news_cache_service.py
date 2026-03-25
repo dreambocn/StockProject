@@ -69,6 +69,7 @@ async def get_news_rows(
                 pass
             return db_rows
 
+    # 单飞锁防止并发请求同时回源，保护三方接口与数据库。
     lock = await get_singleflight_lock(cache_key)
     async with lock:
         cached_rows_after_lock = await read_cache(cache_key)
@@ -94,6 +95,7 @@ async def get_news_rows(
                 return db_rows_after_lock
 
         try:
+            # 回源成功后写入缓存，保证后续请求命中。
             remote_rows = await fetch_remote_and_persist()
             try:
                 await write_cache(cache_key, remote_rows, cache_ttl_seconds)

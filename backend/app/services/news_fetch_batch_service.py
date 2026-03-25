@@ -62,6 +62,7 @@ def _truncate_error_message(message: str | None, limit: int = 500) -> str | None
     normalized_message = message.strip()
     if not normalized_message:
         return None
+    # 错误信息只保留前 N 字符，避免日志和数据库被异常长文本撑爆。
     return normalized_message[:limit]
 
 
@@ -128,6 +129,7 @@ async def finalize_news_fetch_batch(
 
     resolved_finished_at = _normalize_datetime(finished_at)
     resolved_started_at = _normalize_datetime(batch.started_at)
+    # duration_ms 以 started_at 为基准，异常时间戳回退为 0。
     duration_ms = int((resolved_finished_at - resolved_started_at).total_seconds() * 1000)
     if duration_ms < 0:
         duration_ms = 0

@@ -80,6 +80,7 @@ def _resolve_readiness_status(
 
 @router.get("/health/liveness")
 async def liveness() -> dict[str, str]:
+    # 存活检查仅反映进程是否可响应，不做外部依赖探测。
     return {"status": "ok"}
 
 
@@ -88,6 +89,7 @@ async def readiness() -> dict[str, object]:
     postgres_status = await _probe_postgres()
     redis_status = await _probe_redis()
     smtp_status = await _probe_smtp()
+    # readiness 聚合核心依赖探针，用于负载均衡与滚动发布判定。
     services = {
         "postgres": postgres_status,
         "redis": redis_status,

@@ -59,6 +59,7 @@ class AnalysisNotFoundError(Exception):
 def _derive_status(
     report_status: str | None, event_count: int
 ) -> Literal["ready", "partial", "pending"]:
+    # 状态推导优先相信报告状态，事件为空时回退为 pending。
     if report_status == "ready":
         return "ready"
     if report_status == "partial":
@@ -69,6 +70,7 @@ def _derive_status(
 
 
 def _resolve_event_type(*, scope: str, source: str, event_tags: list[str]) -> str:
+    # 事件类型用于分桶与权重统计，优先级：政策/公告/普通新闻。
     if scope == "policy" or "policy" in event_tags or "regulation" in event_tags:
         return "policy"
     if source == "cninfo_announcement" or "announcement" in event_tags:
@@ -77,6 +79,7 @@ def _resolve_event_type(*, scope: str, source: str, event_tags: list[str]) -> st
 
 
 def _build_structured_sources(events: list[dict[str, object | None]]) -> list[dict[str, object]]:
+    # 只统计来源覆盖，不透出具体来源细节，避免前端展示泄露不稳定字段。
     provider_counts: dict[str, int] = {}
     for event in events:
         source = str(event.get("source") or "").lower()
@@ -193,6 +196,7 @@ async def _backfill_report_web_sources(
     settings = get_settings()
     target_sources = [raw_sources[index] for index in target_indexes]
     try:
+        # 元数据补全依赖外部 HTTP；失败时直接回退到原始来源数据。
         enriched_sources = await enrich_web_sources(
             session=session,
             raw_sources=target_sources,
@@ -213,6 +217,7 @@ async def _backfill_report_web_sources(
             changed = True
 
     if changed:
+        # 只有来源有变化时才写回，避免无意义的数据库写放大。
         await update_analysis_report_web_sources(
             session,
             report=report_obj,
@@ -233,6 +238,7 @@ def _serialize_report(
         {
             "id": getattr(report_obj, "id", None),
             "status": getattr(report_obj, "status", "pending") or "pending",
+            # summary/risk_points 等字段可能为空，统一填默认值确保前端安全渲染。
             "summary": getattr(report_obj, "summary", ""),
             "risk_points": getattr(report_obj, "risk_points", None) or [],
             "factor_breakdown": getattr(report_obj, "factor_breakdown", None) or [],

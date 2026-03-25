@@ -50,6 +50,7 @@ export const createAuthGuard = (authStore: GuardStoreLike) => {
 
     // 访客页面：已登录用户不应再次进入登录/注册页。
     if (to.meta.guestOnly && authStore.isAuthenticated) {
+      // 仅允许显式携带的 redirect 生效，避免被异常 query 劫持跳转目标。
       const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/'
       return { path: redirect }
     }

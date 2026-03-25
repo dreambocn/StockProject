@@ -101,6 +101,7 @@ def generate_captcha_challenge(length: int) -> CaptchaChallenge:
     # challenge 一次一 id，避免验证码答案在不同请求之间复用。
     answer = _build_answer(length)
     image_bytes = _render_captcha_png(answer)
+    # 图片转 base64 便于前端直接渲染，避免额外文件存储。
     image_base64 = base64.b64encode(image_bytes).decode("ascii")
     captcha_id = secrets.token_urlsafe(16)
     return CaptchaChallenge(

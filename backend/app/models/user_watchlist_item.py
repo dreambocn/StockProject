@@ -11,6 +11,7 @@ class UserWatchlistItem(Base):
     __tablename__ = "user_watchlist_items"
     __table_args__ = (UniqueConstraint("user_id", "ts_code", name="uq_user_watchlist"),)
 
+    # 用户维度唯一约束由表级唯一索引保证，避免重复订阅同一股票。
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
@@ -18,6 +19,7 @@ class UserWatchlistItem(Base):
     ts_code: Mapped[str] = mapped_column(String(12), index=True)
     hourly_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     daily_analysis_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # web_search_enabled 控制是否触发外部检索，避免不必要的成本。
     web_search_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     last_hourly_sync_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

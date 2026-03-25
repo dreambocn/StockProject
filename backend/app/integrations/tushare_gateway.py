@@ -13,6 +13,7 @@ STOCK_BASIC_FIELDS = (
 class TushareGateway:
     def __init__(self, token: str) -> None:
         self._token = token.strip()
+        # 运行前校验 token，避免后续批量同步时才抛出难以定位的异常。
         if not self._token:
             raise ValueError("TUSHARE_TOKEN is required for stock sync")
         self._client = ts.pro_api(self._token)
@@ -21,6 +22,7 @@ class TushareGateway:
         self, list_status: str
     ) -> list[dict[str, str]]:
         def _run() -> list[dict[str, str]]:
+            # 使用固定字段列表，确保映射层依赖字段齐全且稳定。
             frame = self._client.stock_basic(
                 exchange="",
                 list_status=list_status,
@@ -42,6 +44,7 @@ class TushareGateway:
                 fields="cal_date",
             )
             values = [str(item["cal_date"]) for item in frame.to_dict(orient="records")]
+            # 交易日期按倒序返回，便于取最近 N 天。
             values.sort(reverse=True)
             return values[:limit]
 
@@ -79,6 +82,7 @@ class TushareGateway:
         end_date: str,
     ) -> list[dict[str, str | float]]:
         def _run() -> list[dict[str, str | float]]:
+            # 明确字段避免隐式变更影响本地数据对齐。
             frame = self._client.daily(
                 ts_code=ts_code,
                 start_date=start_date,
@@ -99,6 +103,7 @@ class TushareGateway:
         end_date: str,
     ) -> list[dict[str, str | float]]:
         def _run() -> list[dict[str, str | float]]:
+            # 周线维持与日线一致字段，便于统一处理。
             frame = self._client.weekly(
                 ts_code=ts_code,
                 start_date=start_date,
@@ -119,6 +124,7 @@ class TushareGateway:
         end_date: str,
     ) -> list[dict[str, str | float]]:
         def _run() -> list[dict[str, str | float]]:
+            # 月线沿用统一字段，保持模型对齐。
             frame = self._client.monthly(
                 ts_code=ts_code,
                 start_date=start_date,
@@ -140,6 +146,7 @@ class TushareGateway:
         is_open: str | None,
     ) -> list[dict[str, str]]:
         def _run() -> list[dict[str, str]]:
+            # is_open 为 None 时由 tushare 返回全量日历。
             frame = self._client.trade_cal(
                 exchange=exchange,
                 start_date=start_date,
@@ -171,35 +178,66 @@ class TushareGateway:
 
     async def fetch_major_news(self, **kwargs) -> list[dict[str, object]]:
         def _run() -> list[dict[str, object]]:
-            frame = self._client.major_news(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            # 过滤空参数，避免 tushare 侧校验报错。
+            frame = self._client.major_news(
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if value not in (None, "")
+                }
+            )
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)
 
     async def fetch_announcements(self, **kwargs) -> list[dict[str, object]]:
         def _run() -> list[dict[str, object]]:
-            frame = self._client.anns_d(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            frame = self._client.anns_d(
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if value not in (None, "")
+                }
+            )
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)
 
     async def fetch_cctv_news(self, **kwargs) -> list[dict[str, object]]:
         def _run() -> list[dict[str, object]]:
-            frame = self._client.cctv_news(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            frame = self._client.cctv_news(
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if value not in (None, "")
+                }
+            )
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)
 
     async def fetch_economic_calendar(self, **kwargs) -> list[dict[str, object]]:
         def _run() -> list[dict[str, object]]:
-            frame = self._client.eco_cal(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            frame = self._client.eco_cal(
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if value not in (None, "")
+                }
+            )
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)
 
     async def fetch_ths_members(self, **kwargs) -> list[dict[str, object]]:
         def _run() -> list[dict[str, object]]:
-            frame = self._client.ths_member(**{key: value for key, value in kwargs.items() if value not in (None, "")})
+            frame = self._client.ths_member(
+                **{
+                    key: value
+                    for key, value in kwargs.items()
+                    if value not in (None, "")
+                }
+            )
             return frame.to_dict(orient="records")
 
         return await asyncio.to_thread(_run)

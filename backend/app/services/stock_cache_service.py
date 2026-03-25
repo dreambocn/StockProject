@@ -28,6 +28,7 @@ def _log_cache_warning(*, cache_key: str, operation: str, error: Exception) -> N
 
 
 async def get_singleflight_lock(cache_key: str) -> asyncio.Lock:
+    # 单飞锁避免同一 cache_key 并发回源，保护三方配额与数据库压力。
     async with _singleflight_lock_guard:
         existing_lock = _singleflight_locks.get(cache_key)
         if existing_lock is None:
@@ -57,6 +58,7 @@ async def read_cached_model_rows(
     try:
         payload = json.loads(raw_payload)
     except json.JSONDecodeError:
+        # 缓存损坏时可选择清理，避免后续重复解析失败。
         if delete_on_decode_error:
             try:
                 await resolved_getter().delete(cache_key)
@@ -72,6 +74,7 @@ async def read_cached_model_rows(
     try:
         return [model_type.model_validate(item) for item in payload]
     except Exception as exc:
+        # 数据结构不匹配时直接降级为未命中，交由上层回源。
         _log_cache_warning(
             cache_key=cache_key,
             operation="decode_model_rows",
@@ -90,6 +93,7 @@ async def write_cached_model_rows(
     resolved_getter = redis_client_getter or get_redis_client
     cache_payload = [item.model_dump(mode="json") for item in rows]
     try:
+        # ensure_ascii=False 保留中文字段，避免二次解码时出现转义噪声。
         await resolved_getter().set(
             cache_key,
             json.dumps(cache_payload, ensure_ascii=False),

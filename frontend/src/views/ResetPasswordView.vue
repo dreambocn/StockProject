@@ -92,12 +92,14 @@ const submitResetPassword = async () => {
   successMessage.value = ''
 
   if (form.newPassword !== form.confirmPassword) {
+    // 双输入不一致时直接提示，避免消耗一次验证码校验机会。
     errorMessage.value = t('resetPassword.mismatch')
     loading.value = false
     return
   }
 
   if (!isStrongPassword(form.newPassword)) {
+    // 不满足强度规则时阻止提交，避免后端产生失败日志。
     errorMessage.value = t(PASSWORD_POLICY_MESSAGE_KEY)
     loading.value = false
     return
@@ -108,6 +110,7 @@ const submitResetPassword = async () => {
     await authStore.resetPassword(form.email, form.emailCode.trim(), form.newPassword)
     successMessage.value = t('resetPassword.success')
     setTimeout(() => {
+      // 延迟跳转留给用户看到成功提示，避免误以为提交失败。
       void router.push('/login')
     }, 800)
   } catch (error) {

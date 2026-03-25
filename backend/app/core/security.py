@@ -21,6 +21,7 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    # 验证过程由安全库负责，避免手写比对带来时序风险。
     return password_hasher.verify(password, password_hash)
 
 
@@ -44,11 +45,13 @@ def _create_token(
 
 
 def create_access_token(user_id: str) -> str:
+    # access token 生命周期较短，不进入可撤销存储。
     token, _ = _create_token(user_id, "access", settings.access_token_expire_seconds)
     return token
 
 
 def create_refresh_token(user_id: str) -> tuple[str, str, int]:
+    # refresh token 生命周期更长，必须配合缓存支持撤销。
     token, jti = _create_token(
         user_id, "refresh", settings.refresh_token_expire_seconds
     )

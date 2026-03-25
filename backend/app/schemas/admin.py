@@ -10,6 +10,7 @@ UserLevel = Literal["user", "admin"]
 
 
 def _is_strong_password(value: str) -> bool:
+    # 与注册/改密保持一致的强度校验，避免策略分叉。
     has_upper = any(ch.isupper() for ch in value)
     has_lower = any(ch.islower() for ch in value)
     has_digit = any(ch.isdigit() for ch in value)

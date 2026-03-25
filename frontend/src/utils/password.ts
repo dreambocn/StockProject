@@ -1,5 +1,6 @@
 export const PASSWORD_POLICY_MESSAGE_KEY = 'password.policy'
 
+// 正则口径与后端一致，前端只做提示与拦截，最终校验仍以服务端为准。
 const strongPasswordPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,128}$/
 
 // 与后端保持一致的强密码判定，避免前后端策略不一致。

@@ -11,6 +11,7 @@ class StockTradeCalendar(Base):
 
     exchange: Mapped[str] = mapped_column(String(8), primary_key=True)
     cal_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    # is_open 为 1/0 字符串，沿用数据源格式，避免转换误差。
     is_open: Mapped[str] = mapped_column(String(1), index=True)
     pretrade_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

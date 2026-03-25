@@ -39,6 +39,7 @@ async def get_stock_daily_rows(
 ) -> list[DailyRowT]:
     cached_rows = await read_cache(cache_key)
     if cached_rows is not None:
+        # 缓存命中直接返回，避免无谓的数据库查询。
         return cached_rows
 
     db_rows = await load_kline_from_db()

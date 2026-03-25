@@ -59,6 +59,7 @@ const loadUsers = async () => {
       throw new Error('No access token')
     }
 
+    // 后台用户列表只读加载，避免在此处做额外过滤以免与服务端口径不一致。
     users.value = await adminApi.listUsers(accessToken.value)
   } catch (error) {
     if (error instanceof ApiError) {
@@ -80,6 +81,7 @@ const submitCreateUser = async () => {
       throw new Error('No access token')
     }
 
+    // 关键流程：提交前做输入清洗，避免多余空格导致“重复账号/邮箱”误判。
     await adminApi.createUser(accessToken.value, {
       username: createForm.username.trim(),
       email: createForm.email.trim(),

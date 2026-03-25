@@ -14,12 +14,14 @@ class EventLinkResult:
 
 def _calculate_return_pct(prices: list[float]) -> float:
     if not prices or prices[0] == 0:
+        # 空样本或基准为 0 时无法计算收益，直接回落 0。
         return 0.0
     return (prices[-1] - prices[0]) / prices[0] * 100
 
 
 def _calculate_volatility(pct_changes: list[float]) -> float:
     if len(pct_changes) <= 1:
+        # 只有一个点时波动率不可用，按 0 处理。
         return 0.0
     return pstdev(pct_changes)
 
@@ -29,6 +31,7 @@ def _calculate_abnormal_volume(volumes: list[float]) -> float:
         return 0.0
     avg = mean(volumes)
     if avg <= 0:
+        # 均值为 0 代表无量能，避免除零。
         return 0.0
     return max(volumes) / avg
 
@@ -41,6 +44,7 @@ def _correlation_score(window_return_pct: float, sentiment_score: float) -> floa
 
 
 def _confidence_label(window_days: int, label_count: int) -> str:
+    # 置信度只依赖窗口长度和标签命中数量，避免引入不稳定指标。
     if window_days >= 5 and label_count > 0:
         return "high"
     if window_days >= 3:

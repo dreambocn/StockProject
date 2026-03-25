@@ -9,6 +9,7 @@ from app.db.base import Base
 class StockInstrument(Base):
     __tablename__ = "stock_instruments"
 
+    # 基础证券信息来自外部数据源，作为其他行情与事件的主表引用。
     ts_code: Mapped[str] = mapped_column(String(12), primary_key=True)
     symbol: Mapped[str] = mapped_column(String(10), index=True)
     name: Mapped[str] = mapped_column(String(64), index=True)
@@ -20,6 +21,7 @@ class StockInstrument(Base):
     market: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     exchange: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
     curr_type: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # list_status 参考 tushare 口径，常见值 L(上市)/D(退市)/P(暂停)。
     list_status: Mapped[str] = mapped_column(String(1), default="L", index=True)
     list_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     delist_date: Mapped[date | None] = mapped_column(Date, nullable=True)

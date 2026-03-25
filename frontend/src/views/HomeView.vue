@@ -92,6 +92,7 @@ const backfillMissingCardQuotes = async (items: StockListItem[]) => {
     return
   }
 
+  // 关键边界：分批并发补拉，避免触底时集中请求导致接口被瞬时打满。
   const concurrency = 5
   for (let index = 0; index < missingCodes.length; index += concurrency) {
     const chunk = missingCodes.slice(index, index + concurrency)
@@ -128,6 +129,7 @@ const mergeStocksByTsCode = (existing: StockListItem[], incoming: StockListItem[
   const seen = new Set(merged.map((item) => item.ts_code))
   let appendedCount = 0
 
+  // 关键流程：分页合并按 ts_code 去重，避免后端排序变化导致重复卡片占位。
   for (const item of incoming) {
     if (seen.has(item.ts_code)) {
       continue
@@ -145,6 +147,7 @@ const mergeStocksByTsCode = (existing: StockListItem[], incoming: StockListItem[
 
 const loadStocksPage = async (reset: boolean) => {
   if (reset) {
+    // 关键流程：重置搜索时清空分页与补丁缓存，确保结果和关键字一致。
     page.value = 1
     hasMore.value = true
     loading.value = true
@@ -238,6 +241,7 @@ const setupLoadMoreObserver = () => {
       }
     },
     {
+      // 关键边界：提前触底预加载，避免用户滚动到底部时出现明显空窗。
       rootMargin: '0px 0px 260px 0px',
       threshold: 0.01,
     },

@@ -57,6 +57,7 @@ def build_news_event_logical_key(row: NewsEvent) -> str:
     if cluster_key:
         return cluster_key
 
+    # 回退键用于缺失 cluster_key 的去重，避免同一事件重复展示。
     published_at = _sortable_datetime(row.published_at).isoformat()
     return "|".join(
         [
@@ -70,6 +71,7 @@ def build_news_event_logical_key(row: NewsEvent) -> str:
 
 
 def dedupe_news_events_to_latest(rows: list[NewsEvent]) -> list[NewsEvent]:
+    # 先按时间/权重降序选最新，再按展示排序回传。
     latest_rows: dict[str, NewsEvent] = {}
     ordered_rows = sorted(
         rows,
@@ -164,6 +166,7 @@ async def _load_latest_news_batch_or_fetched_at(
     cache_variant: str,
     ts_code: str | None = None,
 ) -> tuple[NewsFetchBatch | None, datetime | None]:
+    # 优先使用批次表时间，缺失时回退到新闻表最新 fetched_at。
     latest_batch = await load_latest_news_fetch_batch(
         session,
         scope=scope,
@@ -250,6 +253,7 @@ async def load_hot_news_rows_from_db(
     if latest_batch is not None:
         statement = statement.where(NewsEvent.batch_id == latest_batch.id)
     else:
+        # 兼容旧数据：未写入批次时按最新 fetched_at 回退。
         statement = statement.where(NewsEvent.fetched_at == latest_fetched_at)
     statement = statement.order_by(
         NewsEvent.source_priority.desc(),

@@ -38,6 +38,7 @@ def calculate_factor_weights(events: list[dict[str, object]]) -> List[FactorWeig
         elif sentiment <= -0.2:
             negative_sentiments += 1
 
+    # 使用事件占比作为基础权重，情绪信号单独作为补充因子。
     total = sum(base_counters.values()) or 1
     sentiment_signal = positive_sentiments - negative_sentiments
     weights: List[FactorWeight] = []
@@ -74,6 +75,7 @@ def calculate_factor_weights(events: list[dict[str, object]]) -> List[FactorWeig
         )
     )
 
+    # 归一化确保权重和为 1，避免下游渲染出现比例异常。
     normalization_base = sum(item[2] for item in raw_weights) or 1.0
     for factor_key, factor_label, raw_weight, factor_direction, evidence, reason in raw_weights:
         weights.append(

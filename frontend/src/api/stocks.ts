@@ -116,6 +116,7 @@ export type StockTradeCalendarQueryOptions = {
 export const stocksApi = {
   async listStocks(keyword?: string, listStatus?: string, page = 1, pageSize = 20) {
     const query = buildQueryString({
+      // keyword/listStatus 为空时不下发，保持后端默认筛选口径。
       keyword,
       list_status: listStatus,
       page,
@@ -167,6 +168,7 @@ export const stocksApi = {
   async getStockRelatedNews(tsCode: string, limit = 50) {
     const query = buildQueryString({
       limit,
+      // 详情页默认包含公告，避免热点与公告拆分导致信息缺口。
       include_announcements: 'true',
     })
     return requestJson<StockRelatedNewsItem[]>(

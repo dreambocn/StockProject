@@ -40,6 +40,7 @@ RESEARCH_REPORT_CACHE_KEY = "candidate-evidence:research-report"
 
 
 def _normalize_ts_code_list(ts_codes: list[str]) -> list[str]:
+    # 统一股票代码并去重，避免对同一标的重复拉取与缓存写入。
     normalized: list[str] = []
     seen: set[str] = set()
     for item in ts_codes:
@@ -83,6 +84,7 @@ def _parse_datetime(value: object | None) -> datetime | None:
         "%Y%m%d",
     ):
         try:
+            # 多格式容错解析，避免三方字段格式变化导致整批数据丢失。
             parsed = (
                 datetime.fromisoformat(normalized)
                 if fmt is None
@@ -128,6 +130,7 @@ def _resolve_instrument(
     instruments_by_symbol: dict[str, StockInstrument],
     instruments_by_name: dict[str, StockInstrument],
 ) -> StockInstrument | None:
+    # 先按代码匹配，再按名称匹配，避免名称重名时误配。
     symbol = _normalize_symbol(
         raw_row.get("股票代码")
         or raw_row.get("代码")
@@ -466,6 +469,7 @@ async def get_candidate_evidence_snapshots(
             allow_remote_fetch=allow_remote_fetch,
         )
     except Exception:
+        # 热搜抓取失败不影响研报与页面整体渲染，直接降级为空列表。
         hot_search_rows = []
 
     try:
@@ -484,6 +488,7 @@ async def get_candidate_evidence_snapshots(
             allow_remote_fetch=allow_remote_fetch,
         )
     except Exception:
+        # 研报抓取失败同样降级为无数据，避免阻塞其余证据展示。
         research_report_rows = []
 
     research_report_rows = _filter_recent_research_report_rows(
@@ -542,6 +547,7 @@ async def refresh_candidate_evidence_caches(
 ) -> dict[str, int]:
     settings = get_settings()
     resolved_now = now or datetime.now(UTC)
+    # 后台刷新统一写入 Redis，确保前台“只读缓存”的路径稳定。
     resolved_redis_getter = redis_client_getter or get_redis_client
 
     hot_rows = await _refresh_evidence_rows(

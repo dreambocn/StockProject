@@ -53,6 +53,7 @@ def build_latest_news_events_statement(
     base_alias = aliased(NewsEvent, base_subquery)
     normalized_cluster_key = func.nullif(func.trim(base_alias.cluster_key), "")
 
+    # 以抓取/创建/来源权重为主排序，保证同一聚类选择“最新且可信”的记录。
     ranking_order = (
         base_alias.fetched_at.desc(),
         base_alias.created_at.desc(),
@@ -87,6 +88,7 @@ def build_latest_news_events_statement(
         .label("rn"),
     ).where(normalized_cluster_key.is_(None))
 
+    # 将 cluster_key 与 fallback 逻辑拼接成统一排名子查询。
     ranked_subquery = (
         union_all(cluster_rank_statement, fallback_rank_statement)
     ).subquery("news_events_ranked")

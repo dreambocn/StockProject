@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 class StockListItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # 列表页仅暴露必要字段，避免过度拉取大字段。
     ts_code: str
     symbol: str
     name: str
@@ -68,11 +69,13 @@ class StockDailySnapshotResponse(BaseModel):
 
 
 class StockDetailResponse(BaseModel):
+    # 详情页聚合证券基础信息与最近快照，快照可能为空。
     instrument: StockInstrumentResponse
     latest_snapshot: StockDailySnapshotResponse | None
 
 
 class StockBasicSyncResponse(BaseModel):
+    # 同步结果用于后台任务反馈，不影响前台业务数据。
     message: str
     total: int
     created: int
@@ -85,6 +88,7 @@ class StockTradeCalendarResponse(BaseModel):
 
     exchange: str
     cal_date: date
+    # is_open 为数据源原样字符串，保持口径一致。
     is_open: str
     pretrade_date: date | None
 

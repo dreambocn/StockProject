@@ -29,6 +29,7 @@ def build_analysis_prompt(
     header = (
         f"请针对 {ts_code}（{instrument_name or '未知标的'}）输出一份事件点评快报风格的中文 Markdown 股票分析简报。"
     )
+    # 事件与因子必须摘要化，避免 prompt 过长影响模型稳定性。
     event_lines = []
     for event in events:
         title = event.get("title") or "未知事件"

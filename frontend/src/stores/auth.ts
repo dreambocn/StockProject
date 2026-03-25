@@ -47,6 +47,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const hydrateFromStorage = () => {
+    // 冷启动只读本地存储，不在此处做任何网络校验。
     accessToken.value = localStorage.getItem(ACCESS_TOKEN_KEY)
     refreshToken.value = localStorage.getItem(REFRESH_TOKEN_KEY)
   }

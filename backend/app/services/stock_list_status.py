@@ -15,8 +15,10 @@ def parse_stock_list_status_filter(
 ) -> list[str]:
     normalized_value = value.strip().upper()
     if not normalized_value:
+        # 空值默认只返回上市状态，避免查询范围过大。
         return list(default_statuses)
     if normalized_value == "ALL":
+        # ALL 表示全量状态集合，按配置顺序返回。
         return list(all_statuses)
 
     parsed: list[str] = []

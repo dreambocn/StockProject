@@ -129,6 +129,7 @@ async def _read_versioned_stock_news_cache(
         redis_client_getter=get_redis_client,
     )
     if version is not None:
+        # 版本化缓存：避免旧数据与新批次混用。
         return await read_cached_model_rows(
             resolve_news_cache_data_key(
                 base_cache_key=base_cache_key,
@@ -148,6 +149,7 @@ async def _read_versioned_stock_news_cache(
         and datetime.now(UTC) - normalized_last_fetch_at
         > timedelta(seconds=legacy_fallback_seconds)
     ):
+        # 超过回退窗口时不再读取旧缓存，避免长期使用过期数据。
         return None
 
     return await read_cached_model_rows(
@@ -238,6 +240,7 @@ async def _fetch_latest_daily_quotes_from_tushare(
 
     end_date = date.today()
     start_date = end_date - timedelta(days=45)
+    # 拉取最近约 45 天，确保覆盖最新交易日与节假日空窗。
     try:
         rows = await gateway.fetch_daily_by_range(
             ts_code=",".join(ts_codes),
@@ -305,6 +308,7 @@ async def list_stocks(
     session: AsyncSession = Depends(get_db_session),
 ) -> list[StockListItemResponse]:
     try:
+        # 默认 list_status=L，只返回上市标的，避免列表过大。
         list_statuses = parse_stock_list_status_filter(
             list_status,
             all_statuses=STOCK_BASIC_FULL_STATUSES,
@@ -392,6 +396,7 @@ async def get_trade_calendar(
     is_open: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[StockTradeCalendarResponse]:
+    # 交易所代码统一大写，缺省回退 SSE。
     normalized_exchange = exchange.strip().upper() or "SSE"
     try:
         normalized_is_open = policy_parse_is_open(is_open)
@@ -753,6 +758,7 @@ async def get_stock_daily(
         )
 
     try:
+        # trade_date 与 limit 互斥使用：指定 trade_date 时强制查询单日窗口。
         normalized_period = policy_parse_period(
             period,
             supported_periods=SUPPORTED_KLINE_PERIODS,

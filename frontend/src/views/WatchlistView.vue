@@ -19,6 +19,7 @@ const isUpdating = computed(() => (tsCode: string, field: string) =>
 )
 
 const resetWatchlistState = () => {
+  // 关键流程：登录态变化时统一清空列表与加载状态，避免旧数据残留。
   items.value = []
   updatingKeys.value = []
   loading.value = false
@@ -57,6 +58,7 @@ const removeItem = async (tsCode: string) => {
   if (!authStore.accessToken) {
     return
   }
+  // 关键边界：删除成功后再刷新列表，确保页面与后端状态一致。
   await watchlistApi.deleteWatchlistItem(authStore.accessToken, tsCode)
   await loadWatchlist()
 }
@@ -70,6 +72,7 @@ const updateItemSwitch = async (
     return
   }
 
+  // 关键流程：用 updatingKeys 锁住当前开关，避免重复点击引发并发写入。
   const updateKey = `${item.ts_code}:${field}`
   updatingKeys.value = [...updatingKeys.value, updateKey]
   try {

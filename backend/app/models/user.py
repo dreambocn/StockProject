@@ -18,10 +18,13 @@ class User(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
+    # username/email 唯一约束用于登录标识，避免多账号绑定同一凭据。
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    # is_active 用于禁用账号的访问，服务层必须回库校验。
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # user_level 控制管理员权限，路由守卫依赖该字段判断访问边界。
     user_level: Mapped[str] = mapped_column(
         String(16), default=USER_LEVEL_USER, index=True
     )

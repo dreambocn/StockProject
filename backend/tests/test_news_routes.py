@@ -1075,7 +1075,10 @@ def test_policy_news_route_uses_cache_and_persists_batch(
     assert "news:policy:policy_source:version" in news_client.fake_redis._store
 
 
-def test_hot_news_route_reads_only_latest_archived_batch(news_client: TestClient) -> None:
+def test_hot_news_route_reads_only_latest_archived_batch(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
     _append_news_events(
         news_client,
         [
@@ -1096,6 +1099,11 @@ def test_hot_news_route_reads_only_latest_archived_batch(news_client: TestClient
             )
         ],
     )
+
+    async def fake_fetch_hot_news() -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr("app.api.routes.news.fetch_hot_news", fake_fetch_hot_news)
 
     response = news_client.get("/api/news/hot", params={"limit": 10})
 

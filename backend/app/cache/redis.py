@@ -34,6 +34,7 @@ class RedisTokenStore(TokenStore):
             )
 
     async def validate_refresh_token(self, jti: str, user_id: str) -> bool:
+        # refresh token 校验以 jti -> user_id 绑定为准，避免仅凭 token 存在性通过。
         value = await self.client.get(f"auth:refresh:{jti}")
         return value == user_id
 
@@ -43,6 +44,7 @@ class RedisTokenStore(TokenStore):
 
         # 单 token 撤销也要同步维护用户索引，避免索引长期残留脏数据。
         if user_id is None:
+            # 键不存在时仍确保删除，避免异常情况下残留空键。
             await self.client.delete(refresh_key)
             return
 

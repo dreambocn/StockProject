@@ -12,6 +12,7 @@ def parse_period(value: str, *, supported_periods: tuple[str, ...]) -> str:
     normalized_value = value.strip().lower()
     if normalized_value in supported_periods:
         return normalized_value
+    # 参数错误直接在策略层抛出，避免带着无效周期进入数据查询。
     raise ValueError("invalid period, expected daily, weekly, or monthly")
 
 
@@ -39,6 +40,7 @@ def resolve_calendar_date_range(
         if start_date
         else resolved_end - timedelta(days=400)
     )
+    # 默认向前拉取约 400 天，满足一年多滚动窗口的查询需求。
     if resolved_start > resolved_end:
         raise ValueError("start_date must be earlier than or equal to end_date")
 
@@ -83,6 +85,7 @@ def to_trade_cal_cache_key(
     is_open: str | None,
 ) -> str:
     cache_is_open = is_open or "ALL"
+    # cache key 必须包含 is_open，避免开闭市查询互相污染缓存。
     return f"{prefix}:{exchange}:{start_date}:{end_date}:{cache_is_open}"
 
 
@@ -96,6 +99,7 @@ def to_adj_factor_cache_key(
     trade_date: str | None,
 ) -> str:
     cache_trade_date = trade_date or "ALL"
+    # trade_date 作为可选维度写入 key，保证单日查询与区间查询隔离。
     return f"{prefix}:{ts_code}:{start_date}:{end_date}:{limit}:{cache_trade_date}"
 
 

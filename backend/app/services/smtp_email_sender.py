@@ -12,6 +12,7 @@ logger = get_logger("app.email")
 
 class SmtpEmailSender(EmailSender):
     def __init__(self, settings: Settings) -> None:
+        # settings 通过依赖注入传入，便于在测试中替换配置。
         self.settings = settings
 
     async def send_register_verification_code(
@@ -121,6 +122,7 @@ class SmtpEmailSender(EmailSender):
             self.settings.smtp_port,
             timeout=10,
         ) as server:
+            # STARTTLS 仅在非 SSL 模式下启用，避免重复握手。
             server.starttls()
             server.login(self.settings.smtp_username, self.settings.smtp_password)
             server.send_message(message)

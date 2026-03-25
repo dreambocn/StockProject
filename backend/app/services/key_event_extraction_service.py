@@ -19,6 +19,7 @@ def extract_key_event_types(title: str, summary: str | None) -> List[str]:
     text = f"{title} {summary or ''}".lower()
     labels: List[str] = []
 
+    # 按优先级顺序匹配，最多返回 3 个标签，避免前端标签过多失焦。
     for label, keywords in KEYWORD_MAP.items():
         for keyword in keywords:
             if keyword in text and label not in labels:
@@ -27,4 +28,5 @@ def extract_key_event_types(title: str, summary: str | None) -> List[str]:
         if len(labels) >= 3:
             break
 
+    # 未命中任何关键词时回落为通用 news 标签。
     return labels or ["news"]

@@ -8,6 +8,7 @@ def _to_optional_float(value: object) -> float | None:
     if value is None:
         return None
     if isinstance(value, float) and isnan(value):
+        # Tushare 有时会返回 NaN，占位值需要显式转成空。
         return None
 
     normalized_value = str(value).strip()
@@ -27,6 +28,7 @@ def _to_optional_date(value: object) -> date | None:
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, float) and isnan(value):
+        # NaN 代表缺失日期，避免影响后续排序与回写。
         return None
 
     normalized_value = str(value).strip()

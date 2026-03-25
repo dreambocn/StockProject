@@ -90,6 +90,7 @@ const submitChangePassword = async () => {
   errorMessage.value = ''
 
   if (!isStrongPassword(form.newPassword)) {
+    // 强度不达标时仅提示并返回，避免无意义请求触发风控。
     errorMessage.value = t(PASSWORD_POLICY_MESSAGE_KEY)
     loading.value = false
     return
@@ -99,6 +100,7 @@ const submitChangePassword = async () => {
     // 关键提交：当前密码 + 新密码 + 邮箱验证码缺一不可。
     await authStore.changePassword(form.currentPassword, form.newPassword, form.emailCode.trim())
     successMessage.value = t('changePassword.success')
+    // 成功后清理输入，避免浏览器回退时残留敏感信息。
     form.currentPassword = ''
     form.newPassword = ''
     form.emailCode = ''

@@ -44,6 +44,7 @@ def _build_generation_sort_key(
     *,
     anchor_event: NewsEvent | None,
 ) -> tuple[object, ...]:
+    # 排序优先保证同标的/同主题靠前，再按时间与来源权重排序。
     same_ts_code = (
         1
         if anchor_event
@@ -95,6 +96,7 @@ def _dedupe_preserving_order(
     deduped: list[NewsEvent | Mapping[str, Any]] = []
     seen_keys: set[tuple[object, ...]] = set()
     if anchor_event is not None:
+        # 锚点事件必须保留在首位，保证摘要上下文稳定。
         anchor_key = build_analysis_event_logical_key(anchor_event)
         deduped.append(anchor_event)
         seen_keys.add(anchor_key)
@@ -151,6 +153,7 @@ def select_generation_analysis_events(
         if anchor_bucket is not None:
             used_quota[anchor_bucket] += 1
 
+    # 按分桶配额先选足 stock/policy/hot，保证输入结构稳定。
     for bucket in ("stock", "policy", "hot"):
         for event in deduped_events:
             if event.id in seen_event_ids:

@@ -51,6 +51,7 @@ export const authApi = {
     requestJson<CaptchaChallengeResponse>('/api/auth/captcha', { method: 'GET' }),
 
   refresh: (refreshToken: string) =>
+    // 刷新接口只接受 refresh token，access token 过期由后端统一校验。
     requestJson<AuthTokens>('/api/auth/refresh', {
       method: 'POST',
       body: { refresh_token: refreshToken },
@@ -88,6 +89,7 @@ export const authApi = {
     }),
 
   logout: (refreshToken: string) =>
+    // 登出通过撤销 refresh token 实现，access token 自然到期。
     requestJson<{ message: string }>('/api/auth/logout', {
       method: 'POST',
       body: { refresh_token: refreshToken },

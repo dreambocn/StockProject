@@ -35,6 +35,7 @@ def build_analysis_key(
     use_web_search: bool,
     trigger_source: str,
 ) -> str:
+    # 分析 key 用于会话去重，包含主题/锚点/检索开关等关键维度。
     return (
         f"{ts_code.strip().upper()}|{(topic or '').strip()}|{(anchor_event_id or '').strip()}|"
         f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}"
@@ -71,6 +72,7 @@ async def load_recent_news_events(
     limit: int,
     candidate_limit: int | None = None,
 ) -> list[NewsEvent]:
+    # 取数优先覆盖股票/政策/宏观三类，必要时按 topic 追加热点事件。
     resolved_limit = max(limit, candidate_limit or limit)
     scope_conditions = [
         and_(NewsEvent.scope == "stock", NewsEvent.ts_code == ts_code),
@@ -105,11 +107,13 @@ async def load_recent_news_events(
 
     anchor_row = await session.get(NewsEvent, anchor_event_id)
     if anchor_row is None:
+        # 锚点不存在时直接回退到最新列表，避免空锚点导致全量丢失。
         return rows[:limit]
 
     ordered_rows: list[NewsEvent] = [anchor_row]
     seen_keys = {build_news_event_identity_key(anchor_row)}
     if anchor_row.cluster_key:
+        # 同一聚类的兄弟事件需要优先串联，保证摘要上下文一致。
         sibling_base_statement = select(NewsEvent).where(
             NewsEvent.cluster_key == anchor_row.cluster_key
         )
@@ -145,6 +149,7 @@ async def load_price_window_rows(
     if anchor_from is None:
         return []
 
+    # 价格窗口以“锚点日期起始”的前向窗口为准，供事件关联度计算使用。
     statement = (
         select(StockDailySnapshot)
         .where(StockDailySnapshot.ts_code == ts_code)
@@ -181,6 +186,7 @@ async def upsert_analysis_event_link(
         row = AnalysisEventLink(event_id=event_id, ts_code=ts_code)
         session.add(row)
 
+    # 关联指标以最新结果覆盖，确保分析重复运行时口径一致。
     row.anchor_trade_date = anchor_trade_date
     row.window_return_pct = window_return_pct
     row.window_volatility = window_volatility

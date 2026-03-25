@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 
 class HotNewsItemResponse(BaseModel):
+    # providers/source_coverage 用于展示多来源覆盖情况。
     event_id: str | None = None
     cluster_key: str | None = None
     providers: list[str] = []
@@ -49,6 +50,7 @@ class CandidateEvidenceSummaryResponse(BaseModel):
     hot_search_count: int = 0
     research_report_count: int = 0
     latest_published_at: datetime | None = None
+    # source_breakdown 用于展示证据来源占比。
     source_breakdown: list[CandidateEvidenceSourceBreakdownResponse] = []
     evidence_items: list[CandidateEvidenceItemResponse] = []
 
@@ -65,6 +67,7 @@ class MacroImpactCandidateResponse(BaseModel):
     source_breakdown: list[CandidateEvidenceSourceBreakdownResponse] = []
     freshness_score: int = 0
     candidate_confidence: str = "低"
+    # evidence_items 仅返回必要条目，避免列表过大。
     evidence_items: list[CandidateEvidenceItemResponse] = []
 
 

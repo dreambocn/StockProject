@@ -14,6 +14,7 @@ class AnalysisSessionEventBus:
     async def publish(
         self, session_id: str, event: str, payload: dict[str, object]
     ) -> None:
+        # 事件总线只在内存中广播，避免分析任务把 Redis 当成高频消息队列。
         async with self._guard:
             subscribers = list(self._channels.get(session_id, set()))
         for queue in subscribers:
@@ -29,6 +30,7 @@ class AnalysisSessionEventBus:
         try:
             yield queue
         finally:
+            # 关键边界：订阅结束后必须清理队列，避免长连接断开时内存泄漏。
             async with self._guard:
                 subscribers = self._channels.get(session_id)
                 if subscribers is not None:
@@ -43,6 +45,7 @@ class AnalysisSessionLockRegistry:
         self._guard = asyncio.Lock()
 
     async def get_lock(self, analysis_key: str) -> asyncio.Lock:
+        # 每个分析 key 共享一把锁，保证同标的分析不会并发重复生成。
         async with self._guard:
             if analysis_key not in self._locks:
                 self._locks[analysis_key] = asyncio.Lock()
@@ -92,6 +95,7 @@ async def cache_active_session_id(
             ex=ttl_seconds,
         )
     except Exception as exc:
+        # 缓存失败只影响后续去重，不应阻断分析主流程。
         _log_cache_warning(
             event="analysis_runtime_cache_failed",
             analysis_key=analysis_key,
@@ -123,6 +127,7 @@ async def clear_cached_active_session_id(
         if session_id is not None:
             cached = await get_redis_client().get(key)
             if cached and str(cached) != session_id:
+                # 只允许清理自己写入的 session，避免并发请求互相误删。
                 return
         await get_redis_client().delete(key)
     except Exception as exc:
@@ -145,6 +150,7 @@ async def cache_fresh_report_id(
             ex=ttl_seconds,
         )
     except Exception as exc:
+        # 新鲜报告缓存失败时继续走数据库读取，保证功能可用。
         _log_cache_warning(
             event="analysis_runtime_cache_failed",
             analysis_key=analysis_key,

@@ -8,6 +8,7 @@ from app.core.settings import Settings, get_settings
 
 def build_openai_base_url(base_url: str) -> str:
     normalized_base_url = base_url.rstrip("/")
+    # 统一保证以 /v1 结尾，避免配置了根域时调用错误路径。
     if normalized_base_url.endswith("/v1"):
         return normalized_base_url
     return f"{normalized_base_url}/v1"
@@ -48,6 +49,7 @@ def _build_responses_input(
 
 
 def _extract_output_text(response: object) -> str:
+    # 优先读取 output_text，兼容不同 SDK 的响应字段形态。
     output_text = str(getattr(response, "output_text", "") or "").strip()
     if output_text:
         return output_text
@@ -66,6 +68,7 @@ def _extract_output_text(response: object) -> str:
 
 
 def _iter_output_text_contents(response: object) -> list[object]:
+    # 收集可能包含引用标注的输出内容，为 web_sources 提取做准备。
     output_items = getattr(response, "output", None) or []
     contents: list[object] = []
     for item in output_items:
@@ -90,6 +93,7 @@ def build_openai_client(settings: Settings | None = None):
     from openai import OpenAI
 
     return OpenAI(
+        # base_url 允许自定义网关，避免直连被防火墙阻断。
         base_url=build_openai_base_url(resolved_settings.llm_base_url),
         api_key=resolved_settings.llm_api_key,
     )
@@ -124,6 +128,7 @@ def _build_create_kwargs(
 
 
 def _is_web_search_unsupported(error: Exception) -> bool:
+    # 只要异常信息包含 web_search/tool/unsupported 即视为不支持。
     message = str(error).lower()
     return "web_search" in message or "tool" in message or "unsupported" in message
 
@@ -212,6 +217,7 @@ async def generate_llm_result(
     except Exception as exc:
         if not web_search_requested or not _is_web_search_unsupported(exc):
             raise
+        # web_search 不支持时降级为普通请求，保持主流程可用。
 
         fallback_kwargs = _build_create_kwargs(
             prompt=prompt,
@@ -273,6 +279,7 @@ async def generate_streamed_llm_result(
     resolved_client = client or build_openai_client(resolved_settings)
 
     if not resolved_settings.llm_stream_enabled:
+        # 未开启流式时直接复用非流式逻辑，避免两套分支重复。
         return await generate_llm_result(
             prompt,
             client=resolved_client,
@@ -308,12 +315,14 @@ async def generate_streamed_llm_result(
                     if event_type == "response.output_text.delta":
                         delta = str(getattr(event, "delta", "") or "")
                         if delta:
+                            # 使用线程安全回调写入队列，避免跨线程竞争。
                             loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
                 final_response = stream.get_final_response()
                 loop.call_soon_threadsafe(queue.put_nowait, ("final", final_response))
         except Exception as exc:
             loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
         finally:
+            # 无论成功/失败都发送 done，保证消费者退出循环。
             loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
 
     worker = asyncio.create_task(asyncio.to_thread(_run_stream))
@@ -332,6 +341,7 @@ async def generate_streamed_llm_result(
                 error = payload if isinstance(payload, Exception) else RuntimeError("llm stream failed")
                 if not web_search_requested or not _is_web_search_unsupported(error):
                     raise error
+                # 流式失败且不支持 web_search 时，降级为非流式结果。
                 fallback_result = await generate_llm_result(
                     prompt,
                     client=resolved_client,
@@ -379,6 +389,7 @@ async def stream_llm_text(
     resolved_client = client or build_openai_client(resolved_settings)
 
     if not resolved_settings.llm_stream_enabled:
+        # 流式关闭时直接 yield 完整文本，保持调用方统一消费接口。
         yield await generate_llm_text(
             prompt,
             client=resolved_client,
@@ -412,12 +423,14 @@ async def stream_llm_text(
                     if event_type == "response.output_text.delta":
                         delta = str(getattr(event, "delta", "") or "")
                         if delta:
+                            # 仅投递增量文本，避免占用过多内存。
                             loop.call_soon_threadsafe(
                                 queue.put_nowait, ("delta", delta)
                             )
         except Exception as exc:
             loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
         finally:
+            # 发送 done 表示流结束，调用方可退出消费循环。
             loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
 
     worker = asyncio.create_task(asyncio.to_thread(_run_stream))

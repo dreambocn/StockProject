@@ -64,6 +64,7 @@ settings = get_settings()
 
 
 def _resolve_request_client_ip(request: Request) -> str:
+    # IP 解析边界：只有在信任代理头时才会解析 X-Forwarded-For，防止伪造来源 IP。
     direct_client_ip = request.client.host if request.client else "unknown"
     return resolve_client_ip(
         direct_client_ip=direct_client_ip,
@@ -89,6 +90,7 @@ async def _enforce_email_code_ip_risk_control(
             block_seconds=settings.email_code_ip_block_seconds,
         )
     except EmailCodeRiskControlError as exc:
+        # IP 触发风控时统一返回 429，避免泄露更细的风控阈值与规则。
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
@@ -213,6 +215,7 @@ async def login(
     ],
 ) -> TokenPairResponse:
     client_ip = request.client.host if request.client else "unknown"
+    # 失败计数绑定账号 + IP，降低撞库时跨 IP 复用失败次数的问题。
     identity_key = build_login_identity_key(payload.account, client_ip)
     failed_login_count = await login_challenge_store.get_failed_login_count(
         identity_key
@@ -235,6 +238,7 @@ async def login(
             payload.captcha_code.strip().upper(),
         )
         if not is_captcha_valid:
+            # 验证码错误仍返回 401，前端可继续提示输入验证码。
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={
@@ -271,6 +275,7 @@ async def login(
     # 成功登录后清理风控状态，避免后续正常登录被历史失败次数误伤。
     await login_challenge_store.reset_failed_login_count(identity_key)
     if payload.captcha_id:
+        # 成功登录后撤销验证码挑战，避免旧 challenge 被重放。
         await login_challenge_store.revoke_captcha_challenge(payload.captcha_id)
 
     logger.info("event=auth.login.success user_id=%s", user.id)
@@ -304,6 +309,7 @@ async def refresh(
     token_store: Annotated[TokenStore, Depends(get_token_store)],
 ) -> TokenPairResponse:
     try:
+        # 刷新只接受 refresh token，并在服务层完成旋转与撤销。
         tokens = await refresh_token_pair(payload.refresh_token, token_store)
     except AuthError as exc:
         logger.warning("event=auth.refresh.failed reason=%s", exc.detail)
@@ -556,6 +562,7 @@ async def do_logout(
     token_store: Annotated[TokenStore, Depends(get_token_store)],
 ) -> MessageResponse:
     try:
+        # 登出仅撤销 refresh token；access token 自然过期。
         await logout(payload.refresh_token, token_store)
     except AuthError as exc:
         logger.warning("event=auth.logout.failed reason=%s", exc.detail)

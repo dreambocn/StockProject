@@ -13,6 +13,7 @@ class StockKlineBar(Base):
     ts_code: Mapped[str] = mapped_column(
         String(12), ForeignKey("stock_instruments.ts_code"), primary_key=True
     )
+    # period 用于区分日/周/月等周期，作为复合主键的一部分。
     period: Mapped[str] = mapped_column(String(8), primary_key=True)
     trade_date: Mapped[date] = mapped_column(Date, primary_key=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     postgres_maintenance_db: str = "postgres"
     db_auto_create_database: bool = True
     db_auto_create_tables: bool = True
+    # 登录失败计数达到阈值后触发验证码挑战。
     login_captcha_threshold: int = 2
     login_fail_window_seconds: int = 900
     captcha_ttl_seconds: int = 300
@@ -37,7 +38,9 @@ class Settings(BaseSettings):
     email_code_ip_limit_per_minute: int = 10
     email_code_ip_limit_per_day: int = 200
     email_code_ip_block_seconds: int = 900
+    # 是否信任代理头解析真实客户端 IP，开启前需限制可信代理来源。
     trust_proxy_headers: bool = False
+    # 仅在信任代理头时生效，逗号分隔的可信代理 IP 列表。
     trusted_proxy_ips: str = ""
     smtp_host: str = ""
     smtp_username: str = ""

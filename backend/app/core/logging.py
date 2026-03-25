@@ -46,6 +46,7 @@ def reset_request_id(token: Token[str]) -> None:
 
 
 def get_request_id() -> str:
+    # 未设置时返回 "-"，避免非请求线程抛异常。
     return _request_id_ctx.get()
 
 
