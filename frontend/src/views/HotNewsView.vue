@@ -22,6 +22,8 @@ const errorMessage = ref('')
 const items = ref<HotNewsItem[]>([])
 const impactProfiles = ref<MacroImpactProfile[]>([])
 const selectedAnchorEventIds = ref<Record<string, string>>({})
+const hotNewsLoadVersion = ref(0)
+const impactLoadVersion = ref(0)
 const topicOptions = [
   'all',
   'geopolitical_conflict',
@@ -35,6 +37,11 @@ const normalizeTopic = (value: string) =>
   topicOptions.includes(value as (typeof topicOptions)[number]) ? value : 'all'
 
 const selectedTopic = ref(normalizeTopic(String(route.query.topic ?? 'all')))
+const isLatestHotNewsRequest = (requestVersion: number) =>
+  requestVersion === hotNewsLoadVersion.value
+
+const isLatestImpactRequest = (requestVersion: number) =>
+  requestVersion === impactLoadVersion.value
 
 const formatTime = (value: string | null) => {
   if (!value) {
@@ -67,35 +74,59 @@ const formatCandidateEvidenceKind = (value: string) =>
   t(`hotNews.candidateEvidenceKinds.${value}`)
 
 const loadHotNews = async () => {
+  hotNewsLoadVersion.value += 1
+  const requestVersion = hotNewsLoadVersion.value
   loading.value = true
   errorMessage.value = ''
   try {
     // 关键流程：热点页只请求全局快讯接口，不混入个股接口结果，保证信息语义清晰。
     // 关键业务分支：仅当用户选择具体主题时携带 topic 参数，all 分支保持默认全量热点流。
     const topic = selectedTopic.value === 'all' ? undefined : selectedTopic.value
-    items.value = await newsApi.getHotNews(100, topic)
+    const payload = await newsApi.getHotNews(100, topic)
+    // 关键状态边界：仅允许最新主题请求写回列表，避免旧主题慢响应覆盖用户刚切换的结果。
+    if (!isLatestHotNewsRequest(requestVersion)) {
+      return
+    }
+    items.value = payload
   } catch (error) {
+    if (!isLatestHotNewsRequest(requestVersion)) {
+      return
+    }
     if (error instanceof ApiError) {
       errorMessage.value = error.message
     } else {
       errorMessage.value = t('errors.fallback')
     }
   } finally {
-    loading.value = false
+    if (isLatestHotNewsRequest(requestVersion)) {
+      loading.value = false
+    }
   }
 }
 
 const loadImpactProfiles = async () => {
+  impactLoadVersion.value += 1
+  const requestVersion = impactLoadVersion.value
   impactLoading.value = true
   try {
     const topic = selectedTopic.value === 'all' ? undefined : selectedTopic.value
     // 关键流程：影响面板与新闻列表使用同一 topic，保证用户看到的新闻与影响解释语义一致。
-    impactProfiles.value = await newsApi.getImpactMap(topic)
+    const payload = await newsApi.getImpactMap(topic)
+    // 关键状态边界：影响面板只接受最新主题结果，避免慢请求把面板回写到旧主题。
+    if (!isLatestImpactRequest(requestVersion)) {
+      return
+    }
+    impactProfiles.value = payload
   } catch {
+    if (!isLatestImpactRequest(requestVersion)) {
+      return
+    }
     // 降级分支：影响面板失败不影响热点新闻主体浏览，保持页面可读性。
     impactProfiles.value = []
   } finally {
-    impactLoading.value = false
+    if (isLatestImpactRequest(requestVersion)) {
+      impactLoading.value = false
+    }
   }
 }
 

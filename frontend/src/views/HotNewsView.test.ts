@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -6,9 +6,20 @@ import ElementPlus from 'element-plus'
 import { MotionPlugin } from '@vueuse/motion'
 
 import HotNewsView from './HotNewsView.vue'
+import { newsApi, type HotNewsItem, type MacroImpactProfile } from '../api/news'
 import { i18n, setAppLocale } from '../i18n'
 
 const HOT_NEWS_ANCHOR_STORAGE_KEY = 'hot-news-anchor-event-selections'
+
+const createDeferred = <T>() => {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
+}
 
 const jsonResponse = (payload: unknown) => ({
   ok: true,
@@ -19,7 +30,188 @@ const jsonResponse = (payload: unknown) => ({
   json: async () => payload,
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
 describe('HotNewsView', () => {
+  it('keeps latest topic impact panel when topics switch rapidly', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/news/hot', component: HotNewsView }],
+    })
+    await router.push({ path: '/news/hot', query: { topic: 'geopolitical_conflict' } })
+    await router.isReady()
+
+    const initialGeoNews: HotNewsItem[] = [
+      {
+        event_id: 'evt-geo-initial',
+        cluster_key: 'cluster-geo-initial',
+        providers: ['akshare'],
+        source_coverage: 'AK',
+        title: '初始地缘新闻',
+        summary: '初始地缘摘要',
+        published_at: '2026-03-03T09:00:00',
+        url: 'https://finance.example.com/geo-initial',
+        source: 'eastmoney_global',
+        macro_topic: 'geopolitical_conflict',
+      },
+    ]
+    const initialGeoImpact: MacroImpactProfile[] = [
+      {
+        topic: 'geopolitical_conflict',
+        affected_assets: ['初始地缘资产'],
+        beneficiary_sectors: ['初始地缘受益'],
+        pressure_sectors: ['初始地缘承压'],
+        a_share_targets: ['初始地缘标的'],
+        anchor_event: {
+          event_id: 'evt-geo-initial',
+          title: '初始地缘联动事件',
+          published_at: '2026-03-03T09:00:00',
+          providers: ['akshare'],
+          source_coverage: 'AK',
+        },
+        a_share_candidates: [],
+      },
+    ]
+    const latestGeoNews: HotNewsItem[] = [
+      {
+        event_id: 'evt-geo-latest',
+        cluster_key: 'cluster-geo-latest',
+        providers: ['akshare'],
+        source_coverage: 'AK',
+        title: '最终地缘新闻',
+        summary: '最终地缘摘要',
+        published_at: '2026-03-03T10:00:00',
+        url: 'https://finance.example.com/geo-latest',
+        source: 'eastmoney_global',
+        macro_topic: 'geopolitical_conflict',
+      },
+    ]
+    const latestGeoImpact: MacroImpactProfile[] = [
+      {
+        topic: 'geopolitical_conflict',
+        affected_assets: ['最终地缘资产'],
+        beneficiary_sectors: ['最终地缘受益'],
+        pressure_sectors: ['最终地缘承压'],
+        a_share_targets: ['最终地缘标的'],
+        anchor_event: {
+          event_id: 'evt-geo-latest',
+          title: '最终地缘联动事件',
+          published_at: '2026-03-03T10:00:00',
+          providers: ['akshare'],
+          source_coverage: 'AK',
+        },
+        a_share_candidates: [],
+      },
+    ]
+    const staleMonetaryNews: HotNewsItem[] = [
+      {
+        event_id: 'evt-monetary-stale',
+        cluster_key: 'cluster-monetary-stale',
+        providers: ['akshare'],
+        source_coverage: 'AK',
+        title: '过期货币政策新闻',
+        summary: '过期货币政策摘要',
+        published_at: '2026-03-03T11:00:00',
+        url: 'https://finance.example.com/monetary-stale',
+        source: 'eastmoney_macro',
+        macro_topic: 'monetary_policy',
+      },
+    ]
+    const staleMonetaryImpact: MacroImpactProfile[] = [
+      {
+        topic: 'monetary_policy',
+        affected_assets: ['过期货币资产'],
+        beneficiary_sectors: ['过期货币受益'],
+        pressure_sectors: ['过期货币承压'],
+        a_share_targets: ['过期货币标的'],
+        anchor_event: {
+          event_id: 'evt-monetary-stale',
+          title: '过期货币联动事件',
+          published_at: '2026-03-03T11:00:00',
+          providers: ['akshare'],
+          source_coverage: 'AK',
+        },
+        a_share_candidates: [],
+      },
+    ]
+
+    const pendingMonetaryNews = createDeferred<HotNewsItem[]>()
+    const pendingMonetaryImpact = createDeferred<MacroImpactProfile[]>()
+    const pendingLatestGeoNews = createDeferred<HotNewsItem[]>()
+    const pendingLatestGeoImpact = createDeferred<MacroImpactProfile[]>()
+    let geopoliticalNewsCalls = 0
+    let geopoliticalImpactCalls = 0
+
+    vi.spyOn(newsApi, 'getHotNews').mockImplementation(async (_limit, topic) => {
+      if (topic === 'monetary_policy') {
+        return pendingMonetaryNews.promise
+      }
+      if (topic === 'geopolitical_conflict') {
+        geopoliticalNewsCalls += 1
+        return geopoliticalNewsCalls === 1 ? initialGeoNews : pendingLatestGeoNews.promise
+      }
+      return []
+    })
+    vi.spyOn(newsApi, 'getImpactMap').mockImplementation(async (topic) => {
+      if (topic === 'monetary_policy') {
+        return pendingMonetaryImpact.promise
+      }
+      if (topic === 'geopolitical_conflict') {
+        geopoliticalImpactCalls += 1
+        return geopoliticalImpactCalls === 1 ? initialGeoImpact : pendingLatestGeoImpact.promise
+      }
+      return []
+    })
+
+    const wrapper = mount(HotNewsView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+    expect(wrapper.text()).toContain('初始地缘新闻')
+    expect(wrapper.text()).toContain('初始地缘受益')
+
+    const monetaryButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().trim() === '货币政策')
+    const geopoliticalButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().trim() === '地缘冲突')
+
+    expect(monetaryButton).toBeDefined()
+    expect(geopoliticalButton).toBeDefined()
+
+    await monetaryButton!.trigger('click')
+    await flushPromises()
+    await geopoliticalButton!.trigger('click')
+    await flushPromises()
+
+    pendingLatestGeoNews.resolve(latestGeoNews)
+    pendingLatestGeoImpact.resolve(latestGeoImpact)
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.topic).toBe('geopolitical_conflict')
+    expect(wrapper.text()).toContain('最终地缘受益')
+    expect(wrapper.text()).toContain('最终地缘新闻')
+
+    pendingMonetaryNews.resolve(staleMonetaryNews)
+    pendingMonetaryImpact.resolve(staleMonetaryImpact)
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.topic).toBe('geopolitical_conflict')
+    expect(wrapper.text()).toContain('最终地缘受益')
+    expect(wrapper.text()).toContain('最终地缘新闻')
+    expect(wrapper.text()).not.toContain('过期货币联动事件')
+    expect(wrapper.text()).not.toContain('过期货币受益')
+    expect(wrapper.text()).not.toContain('过期货币政策新闻')
+  })
+
   it('persists selected anchor event across remounts', async () => {
     window.localStorage.clear()
 
