@@ -6,6 +6,13 @@ from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.job_service import (
+    JOB_STATUS_FAILED,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_SUCCESS,
+    create_job_run,
+    finish_job_run,
+)
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
 from app.models.stock_sync_cursor import StockSyncCursor
@@ -181,19 +188,55 @@ async def sync_stock_basic_full(
     gateway: StockDataGateway,
     list_statuses: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, int | list[str]]:
+    normalized_statuses = _normalize_status_list(list_statuses)
+    job = await create_job_run(
+        session,
+        job_type="stock_sync_full",
+        status=JOB_STATUS_RUNNING,
+        trigger_source="admin.stocks.full",
+        resource_type="stock_basic",
+        resource_key=",".join(normalized_statuses),
+        summary="股票主数据全量同步执行中",
+        payload_json={"list_statuses": normalized_statuses},
+    )
     # 全量同步结束后记录游标，作为后续排障与增量的时间基准。
-    summary = await _sync_stock_basic_rows(
-        session,
-        gateway,
-        list_statuses=list_statuses,
-    )
-    await _upsert_cursor(
-        session,
-        "stock_basic_last_sync",
-        datetime.now(UTC).replace(microsecond=0).isoformat(),
-    )
-    await session.commit()
-    return summary
+    try:
+        summary = await _sync_stock_basic_rows(
+            session,
+            gateway,
+            list_statuses=normalized_statuses,
+        )
+        await _upsert_cursor(
+            session,
+            "stock_basic_last_sync",
+            datetime.now(UTC).replace(microsecond=0).isoformat(),
+        )
+        await finish_job_run(
+            session,
+            job=job,
+            status=JOB_STATUS_SUCCESS,
+            summary="股票主数据全量同步完成",
+            metrics_json={
+                "total": int(summary["total"]),
+                "created": int(summary["created"]),
+                "updated": int(summary["updated"]),
+                "list_statuses": list(summary["list_statuses"]),
+            },
+        )
+        await session.commit()
+        return summary
+    except Exception as exc:
+        await finish_job_run(
+            session,
+            job=job,
+            status=JOB_STATUS_FAILED,
+            summary="股票主数据全量同步失败",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            metrics_json={"list_statuses": normalized_statuses},
+        )
+        await session.commit()
+        raise
 
 
 async def sync_recent_trade_days(

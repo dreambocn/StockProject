@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -10,8 +11,17 @@ from app.core.settings import get_settings
 from app.db.session import get_db_session
 from app.integrations.tushare_gateway import TushareGateway
 from app.models.stock_instrument import StockInstrument
+from app.models.system_job_run import SystemJobRun
 from app.models.user import User
 from app.schemas.admin import AdminCreateUserRequest, AdminUserResponse
+from app.schemas.admin_jobs import (
+    AdminJobDetailResponse,
+    AdminJobFailureSummaryResponse,
+    AdminJobLinkedEntityResponse,
+    AdminJobListItemResponse,
+    AdminJobPageResponse,
+    AdminJobSummaryResponse,
+)
 from app.schemas.stocks import (
     AdminStockPageResponse,
     StockBasicSyncResponse,
@@ -23,10 +33,38 @@ from app.services.stock_list_status import (
     parse_stock_list_status_filter,
 )
 from app.services.stock_sync_service import sync_stock_basic_full
+from app.services.job_query_service import (
+    get_job_status_counts,
+    get_job_type_counts,
+    list_job_runs,
+    list_recent_failed_jobs,
+)
 
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = get_logger("app.admin")
+
+
+def _serialize_admin_job_item(job: SystemJobRun) -> AdminJobListItemResponse:
+    return AdminJobListItemResponse(
+        id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        trigger_source=job.trigger_source,
+        resource_type=job.resource_type,
+        resource_key=job.resource_key,
+        summary=job.summary,
+        linked_entity=AdminJobLinkedEntityResponse(
+            entity_type=job.linked_entity_type,
+            entity_id=job.linked_entity_id,
+        ),
+        started_at=job.started_at,
+        heartbeat_at=job.heartbeat_at,
+        finished_at=job.finished_at,
+        duration_ms=job.duration_ms,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
 
 
 @router.get("/users", response_model=list[AdminUserResponse])
@@ -169,4 +207,85 @@ async def list_stocks(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/jobs", response_model=AdminJobPageResponse)
+async def list_jobs(
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    job_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    trigger_source: str | None = Query(default=None),
+    resource_key: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    started_from: datetime | None = Query(default=None),
+    started_to: datetime | None = Query(default=None),
+) -> AdminJobPageResponse:
+    items, total = await list_job_runs(
+        session,
+        job_type=job_type,
+        status=status,
+        trigger_source=trigger_source,
+        resource_key=resource_key,
+        page=page,
+        page_size=page_size,
+        started_from=started_from,
+        started_to=started_to,
+    )
+    return AdminJobPageResponse(
+        items=[_serialize_admin_job_item(item) for item in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/jobs/summary", response_model=AdminJobSummaryResponse)
+async def get_jobs_summary(
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AdminJobSummaryResponse:
+    status_counts = await get_job_status_counts(session)
+    type_counts = await get_job_type_counts(session)
+    recent_failures = await list_recent_failed_jobs(session)
+    total = sum(status_counts.values())
+    return AdminJobSummaryResponse(
+        total=total,
+        status_counts=status_counts,
+        type_counts=type_counts,
+        recent_failures=[
+            AdminJobFailureSummaryResponse(
+                id=item.id,
+                job_type=item.job_type,
+                trigger_source=item.trigger_source,
+                resource_key=item.resource_key,
+                error_type=item.error_type,
+                error_message=item.error_message,
+                finished_at=item.finished_at,
+            )
+            for item in recent_failures
+        ],
+    )
+
+
+@router.get("/jobs/{job_id}", response_model=AdminJobDetailResponse)
+async def get_job_detail(
+    job_id: str,
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AdminJobDetailResponse:
+    job = await session.get(SystemJobRun, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
+
+    base_item = _serialize_admin_job_item(job)
+    return AdminJobDetailResponse(
+        **base_item.model_dump(),
+        idempotency_key=job.idempotency_key,
+        payload_json=job.payload_json,
+        metrics_json=job.metrics_json,
+        error_type=job.error_type,
+        error_message=job.error_message,
     )

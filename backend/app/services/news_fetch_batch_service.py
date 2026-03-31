@@ -5,6 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.news_fetch_batch import NewsFetchBatch
+from app.models.system_job_run import SystemJobRun
+from app.services.job_service import (
+    JOB_STATUS_RUNNING,
+    create_job_run,
+    finish_job_run,
+)
 
 
 NEWS_FETCH_SCOPE_HOT = "hot"
@@ -81,8 +87,23 @@ async def create_news_fetch_batch(
     if normalized_scope == NEWS_FETCH_SCOPE_STOCK and not normalized_ts_code:
         raise ValueError("stock scope requires ts_code")
 
+    job = await create_job_run(
+        session,
+        job_type="news_fetch",
+        status=JOB_STATUS_RUNNING,
+        trigger_source=trigger_source.strip() or "unknown",
+        resource_type=normalized_scope,
+        resource_key=normalized_ts_code or (cache_variant.strip() or "default"),
+        summary="新闻抓取任务执行中",
+        payload_json={
+            "scope": normalized_scope,
+            "cache_variant": cache_variant.strip() or "default",
+            "ts_code": normalized_ts_code,
+        },
+    )
     # 关键流程：批次在启动阶段先写入 running 状态，后续统一由 finalize 更新统计和结论。
     row = NewsFetchBatch(
+        system_job_id=job.id,
         scope=normalized_scope,
         cache_variant=cache_variant.strip() or "default",
         ts_code=normalized_ts_code,
@@ -98,6 +119,8 @@ async def create_news_fetch_batch(
     )
     session.add(row)
     await session.flush()
+    job.linked_entity_type = "news_fetch_batch"
+    job.linked_entity_id = row.id
     LOGGER.info(
         "event=news_fetch_batch_started batch_id=%s scope=%s cache_variant=%s ts_code=%s trigger_source=%s",
         row.id,
@@ -144,6 +167,39 @@ async def finalize_news_fetch_batch(
     batch.degrade_reasons_json = degrade_reasons or []
     batch.error_type = error_type.strip() if error_type else None
     batch.error_message = _truncate_error_message(error_message)
+    if batch.system_job_id:
+        job = await session.get(SystemJobRun, batch.system_job_id)
+        if job is not None:
+            await finish_job_run(
+                session,
+                job=job,
+                status=(
+                    "success"
+                    if normalized_status == NEWS_FETCH_STATUS_SUCCESS
+                    else (
+                        "partial"
+                        if normalized_status == NEWS_FETCH_STATUS_PARTIAL
+                        else "failed"
+                    )
+                ),
+                summary=(
+                    "新闻抓取任务完成"
+                    if normalized_status != NEWS_FETCH_STATUS_FAILED
+                    else "新闻抓取任务失败"
+                ),
+                metrics_json={
+                    "row_count_raw": batch.row_count_raw,
+                    "row_count_mapped": batch.row_count_mapped,
+                    "row_count_persisted": batch.row_count_persisted,
+                    "provider_stats": batch.provider_stats_json or [],
+                    "degrade_reasons": batch.degrade_reasons_json or [],
+                },
+                error_type=batch.error_type,
+                error_message=batch.error_message,
+                linked_entity_type="news_fetch_batch",
+                linked_entity_id=batch.id,
+                finished_at=resolved_finished_at,
+            )
     await session.flush()
     LOGGER.info(
         "event=news_fetch_batch_finished batch_id=%s status=%s duration_ms=%s raw=%s mapped=%s persisted=%s",

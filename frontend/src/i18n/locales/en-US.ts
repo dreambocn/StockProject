@@ -336,6 +336,10 @@ export default {
         title: 'Stock Control Center',
         note: 'Fetch full stock master data with parameters and inspect listing states.',
       },
+      jobs: {
+        title: 'Job Center',
+        note: 'Inspect analysis, news, watchlist and sync task runs in one place.',
+      },
     },
   },
   adminStocks: {

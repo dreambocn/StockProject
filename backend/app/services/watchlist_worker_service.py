@@ -18,10 +18,18 @@ from app.models.analysis_report import AnalysisReport
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
 from app.models.stock_trade_calendar import StockTradeCalendar
+from app.models.system_job_run import SystemJobRun
 from app.models.stock_watch_snapshot import StockWatchSnapshot
 from app.models.user_watchlist_item import UserWatchlistItem
 from app.services.analysis_service import start_analysis_session
 from app.services.candidate_evidence_service import refresh_candidate_evidence_caches
+from app.services.job_service import (
+    JOB_STATUS_FAILED,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_SUCCESS,
+    create_job_run,
+    finish_job_run,
+)
 from app.services.news_fetch_batch_service import (
     NEWS_FETCH_STATUS_FAILED,
     NEWS_FETCH_STATUS_PARTIAL,
@@ -438,13 +446,55 @@ async def run_hourly_watchlist_sync(
             )
 
     for ts_code in await list_hourly_sync_targets(session):
+        watch_job = await create_job_run(
+            session,
+            job_type="watchlist_hourly_sync",
+            status=JOB_STATUS_RUNNING,
+            trigger_source="worker.watchlist.hourly",
+            resource_type="stock",
+            resource_key=ts_code,
+            summary="自选股小时同步执行中",
+            payload_json={
+                "ts_code": ts_code,
+                "run_at": now.isoformat(),
+            },
+        )
+        watch_job_id = watch_job.id
+        await session.commit()
         try:
             await sync_stock_watch_context(session=session, ts_code=ts_code, now=now)
             await mark_hourly_sync_completed(session, ts_code=ts_code, synced_at=now)
+            await finish_job_run(
+                session,
+                job=watch_job,
+                status=JOB_STATUS_SUCCESS,
+                summary="自选股小时同步完成",
+                metrics_json={
+                    "ts_code": ts_code,
+                    "processed": 1,
+                    "skipped": 0,
+                },
+            )
             await session.commit()
             processed += 1
         except Exception as exc:
             await session.rollback()
+            watch_job = await session.get(SystemJobRun, watch_job_id)
+            if watch_job is not None:
+                await finish_job_run(
+                    session,
+                    job=watch_job,
+                    status=JOB_STATUS_FAILED,
+                    summary="自选股小时同步失败",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    metrics_json={
+                        "ts_code": ts_code,
+                        "processed": 0,
+                        "skipped": 1,
+                    },
+                )
+                await session.commit()
             # 降级分支：单只股票小时同步失败时仅跳过该项，避免一次异常阻断整批任务。
             logger.warning(
                 "event=watchlist_item_sync_failed ts_code=%s stage=%s error_type=%s message=小时同步失败",
@@ -469,6 +519,22 @@ async def run_daily_watchlist_analysis(
     skipped = 0
 
     for target in await list_daily_analysis_targets(session):
+        watch_job = await create_job_run(
+            session,
+            job_type="watchlist_daily_analysis",
+            status=JOB_STATUS_RUNNING,
+            trigger_source="worker.watchlist.daily",
+            resource_type="stock",
+            resource_key=target.ts_code,
+            summary="自选股日分析任务执行中",
+            payload_json={
+                "ts_code": target.ts_code,
+                "run_date": now.date().isoformat(),
+                "use_web_search": target.use_web_search,
+            },
+        )
+        watch_job_id = watch_job.id
+        await session.commit()
         if await has_daily_watchlist_report_for_date(
             session,
             ts_code=target.ts_code,
@@ -479,12 +545,24 @@ async def run_daily_watchlist_analysis(
                 ts_code=target.ts_code,
                 analyzed_at=now,
             )
+            await finish_job_run(
+                session,
+                job=watch_job,
+                status=JOB_STATUS_SUCCESS,
+                summary="当日已存在日报，跳过重复生成",
+                metrics_json={
+                    "ts_code": target.ts_code,
+                    "processed": 0,
+                    "skipped": 1,
+                    "skip_reason": "report_exists",
+                },
+            )
             await session.commit()
             skipped += 1
             continue
 
         try:
-            await start_analysis_session_fn(
+            analysis_result = await start_analysis_session_fn(
                 session,
                 target.ts_code,
                 topic=None,
@@ -498,10 +576,49 @@ async def run_daily_watchlist_analysis(
                 ts_code=target.ts_code,
                 analyzed_at=now,
             )
+            await finish_job_run(
+                session,
+                job=watch_job,
+                status=JOB_STATUS_SUCCESS,
+                summary="自选股日分析任务完成",
+                linked_entity_type=(
+                    "analysis_generation_session"
+                    if analysis_result.get("session_id")
+                    else None
+                ),
+                linked_entity_id=(
+                    str(analysis_result.get("session_id"))
+                    if analysis_result.get("session_id")
+                    else None
+                ),
+                metrics_json={
+                    "ts_code": target.ts_code,
+                    "processed": 1,
+                    "skipped": 0,
+                    "cached": bool(analysis_result.get("cached")),
+                    "reused": bool(analysis_result.get("reused")),
+                },
+            )
             await session.commit()
             processed += 1
         except Exception as exc:
             await session.rollback()
+            watch_job = await session.get(SystemJobRun, watch_job_id)
+            if watch_job is not None:
+                await finish_job_run(
+                    session,
+                    job=watch_job,
+                    status=JOB_STATUS_FAILED,
+                    summary="自选股日分析任务失败",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    metrics_json={
+                        "ts_code": target.ts_code,
+                        "processed": 0,
+                        "skipped": 1,
+                    },
+                )
+                await session.commit()
             # 降级分支：单只股票每日报告失败时继续处理后续标的，统计语义保持不变。
             logger.warning(
                 "event=watchlist_item_analysis_failed ts_code=%s stage=%s error_type=%s message=每日报告分析失败",

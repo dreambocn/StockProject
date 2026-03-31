@@ -569,17 +569,20 @@ describe('AnalysisWorkbenchView', () => {
     )
     expect(toolbar.find('[data-testid="analysis-source-action"]').classes()).toContain('is-plain')
     expect(toolbar.find('[data-testid="analysis-source-action"]').classes()).not.toContain('is-text')
-    expect(toolbar.findAll('.analysis-action-btn--outline')).toHaveLength(3)
+    expect(toolbar.findAll('.analysis-action-btn--outline')).toHaveLength(5)
 
     const orderedButtons = toolbar
       .findAll('button')
       .map((item) => item.text().trim())
       .filter(Boolean)
-    expect(orderedButtons).toHaveLength(4)
-    expect(orderedButtons[0]).toBe('刷新分析')
-    expect(orderedButtons[1]).toBe('查看个股详情')
-    expect(orderedButtons[2]).toContain('关注')
-    expect(orderedButtons[3]).toBe('返回热点主题')
+    expect(orderedButtons).toEqual([
+      '刷新分析',
+      '查看个股详情',
+      '导出 Markdown',
+      '导出 HTML',
+      expect.stringContaining('关注'),
+      '返回热点主题',
+    ])
 
     const stockDetailButton = toolbar
       .findAll('button')

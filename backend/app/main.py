@@ -28,8 +28,9 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     is_pytest = "pytest" in sys.modules
-    # 测试环境跳过自动建表，避免用例对真实基础设施产生副作用。
-    if settings.db_auto_create_tables and not is_pytest:
+    # 测试环境跳过 schema 检查，避免用例对真实基础设施产生副作用；
+    # 其余环境统一走迁移模式判断，确保 API 与 Worker 对数据库状态的理解一致。
+    if not is_pytest:
         await ensure_database_schema()
 
     yield

@@ -2,7 +2,7 @@ from datetime import datetime
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
@@ -19,6 +19,12 @@ from app.services.analysis_service import (
     get_stock_analysis_summary,
     list_stock_analysis_report_archives,
     start_analysis_session,
+)
+from app.services.analysis_export_service import (
+    AnalysisExportNotFoundError,
+    load_analysis_report_for_export,
+    render_report_html,
+    render_report_markdown,
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -90,6 +96,45 @@ async def get_stock_analysis_reports_route(
         limit=limit,
     )
     return AnalysisReportArchiveListResponse.model_validate(payload)
+
+
+@router.get("/reports/{report_id}/export")
+async def export_analysis_report_route(
+    report_id: str,
+    format: str = Query(default="markdown"),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    normalized_format = format.strip().lower() or "markdown"
+    if normalized_format not in {"markdown", "html"}:
+        raise HTTPException(status_code=422, detail="invalid export format")
+
+    try:
+        report = await load_analysis_report_for_export(session, report_id=report_id)
+    except AnalysisExportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if normalized_format == "html":
+        html_content = render_report_html(report)
+        return Response(
+            content=html_content,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{report.ts_code}-{report.id}.html"'
+                )
+            },
+        )
+
+    markdown_content = render_report_markdown(report)
+    return Response(
+        content=markdown_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{report.ts_code}-{report.id}.md"'
+            )
+        },
+    )
 
 
 def _to_sse_payload(event: str, payload: dict[str, object]) -> str:

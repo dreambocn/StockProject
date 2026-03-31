@@ -38,6 +38,7 @@ from app.services.news_mapper_service import (
     map_policy_news_rows,
     map_tushare_major_news_rows,
 )
+from app.services.market_theme_service import attach_theme_matches_to_profiles
 from app.services.news_repository import (
     load_hot_news_rows_from_db,
     load_latest_hot_news_fetch_at,
@@ -463,6 +464,10 @@ async def get_macro_impact_map(
                 profiles=profiles,
                 per_topic_limit=candidate_limit,
                 evidence_item_limit=candidate_evidence_limit,
+            )
+            profiles = await attach_theme_matches_to_profiles(
+                session,
+                profiles=profiles,
             )
     except Exception as exc:
         # 候选增强失败时保留基础结果，避免接口因为附加信息缺失而整体失败。

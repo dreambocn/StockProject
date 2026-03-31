@@ -51,6 +51,8 @@ export type MacroImpactCandidate = {
   source_breakdown: CandidateSourceBreakdownItem[]
   freshness_score: number
   candidate_confidence: string
+  theme_matches: string[]
+  theme_evidence: string[]
   evidence_items: CandidateEvidenceItem[]
 }
 
@@ -179,6 +181,8 @@ const normalizeMacroImpactCandidate = (item: unknown): MacroImpactCandidate => {
       source_breakdown: [],
       freshness_score: 0,
       candidate_confidence: '',
+      theme_matches: [],
+      theme_evidence: [],
       evidence_items: [],
     }
   }
@@ -197,6 +201,8 @@ const normalizeMacroImpactCandidate = (item: unknown): MacroImpactCandidate => {
       : [],
     freshness_score: asNumber(item.freshness_score),
     candidate_confidence: asString(item.candidate_confidence),
+    theme_matches: asStringArray(item.theme_matches),
+    theme_evidence: asStringArray(item.theme_evidence),
     evidence_items: Array.isArray(item.evidence_items)
       ? item.evidence_items.map(normalizeCandidateEvidenceItem)
       : [],

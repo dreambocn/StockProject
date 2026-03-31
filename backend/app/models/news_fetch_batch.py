@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Index, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -37,6 +37,12 @@ class NewsFetchBatch(Base):
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    system_job_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("system_job_runs.id"),
+        nullable=True,
+        index=True,
     )
     scope: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     cache_variant: Mapped[str] = mapped_column(String(32), nullable=False, index=True)

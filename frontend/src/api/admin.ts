@@ -54,6 +54,60 @@ export type AdminStockSyncResult = {
   list_statuses: string[]
 }
 
+export type AdminJobLinkedEntity = {
+  entity_type: string | null
+  entity_id: string | null
+}
+
+export type AdminJobListItem = {
+  id: string
+  job_type: string
+  status: 'queued' | 'running' | 'success' | 'partial' | 'failed'
+  trigger_source: string
+  resource_type: string | null
+  resource_key: string | null
+  summary: string | null
+  linked_entity: AdminJobLinkedEntity
+  started_at: string | null
+  heartbeat_at: string | null
+  finished_at: string | null
+  duration_ms: number | null
+  created_at: string
+  updated_at: string
+}
+
+export type AdminJobPage = {
+  items: AdminJobListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type AdminJobFailureSummary = {
+  id: string
+  job_type: string
+  trigger_source: string
+  resource_key: string | null
+  error_type: string | null
+  error_message: string | null
+  finished_at: string | null
+}
+
+export type AdminJobSummary = {
+  total: number
+  status_counts: Record<string, number>
+  type_counts: Record<string, number>
+  recent_failures: AdminJobFailureSummary[]
+}
+
+export type AdminJobDetail = AdminJobListItem & {
+  idempotency_key: string | null
+  payload_json: Record<string, unknown> | unknown[] | null
+  metrics_json: Record<string, unknown> | unknown[] | null
+  error_type: string | null
+  error_message: string | null
+}
+
 export const adminApi = {
   listUsers: (accessToken: string) =>
     // 管理员接口必须携带 access token，权限校验由后端统一处理。
@@ -99,6 +153,47 @@ export const adminApi = {
       accessToken,
     })
   },
+
+  listJobs: (
+    accessToken: string,
+    filters?: {
+      jobType?: string
+      status?: string
+      triggerSource?: string
+      resourceKey?: string
+      page?: number
+      pageSize?: number
+      startedFrom?: string
+      startedTo?: string
+    },
+  ) => {
+    const query = buildQueryString({
+      job_type: filters?.jobType,
+      status: filters?.status,
+      trigger_source: filters?.triggerSource,
+      resource_key: filters?.resourceKey,
+      page: filters?.page,
+      page_size: filters?.pageSize,
+      started_from: filters?.startedFrom,
+      started_to: filters?.startedTo,
+    })
+    return requestJson<AdminJobPage>(`/api/admin/jobs${query}`, {
+      method: 'GET',
+      accessToken,
+    })
+  },
+
+  getJobSummary: (accessToken: string) =>
+    requestJson<AdminJobSummary>('/api/admin/jobs/summary', {
+      method: 'GET',
+      accessToken,
+    }),
+
+  getJobDetail: (accessToken: string, jobId: string) =>
+    requestJson<AdminJobDetail>(`/api/admin/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'GET',
+      accessToken,
+    }),
 
   createUser: (accessToken: string, payload: CreateAdminUserPayload) =>
     requestJson<AdminUser>('/api/admin/users', {

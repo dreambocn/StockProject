@@ -346,6 +346,20 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
                 </div>
                 <p class="impact-candidate-reason">{{ candidate.evidence_summary }}</p>
                 <p
+                  v-if="(candidate.theme_matches?.length ?? 0) > 0"
+                  class="impact-candidate-breakdown"
+                >
+                  <strong>主题命中：</strong>
+                  {{ candidate.theme_matches.join(' / ') }}
+                </p>
+                <p
+                  v-if="(candidate.theme_evidence?.length ?? 0) > 0"
+                  class="impact-candidate-breakdown"
+                >
+                  <strong>主题证据：</strong>
+                  {{ candidate.theme_evidence.join('；') }}
+                </p>
+                <p
                   v-if="(candidate.source_breakdown?.length ?? 0) > 0"
                   class="impact-candidate-breakdown"
                 >

@@ -171,6 +171,7 @@ def test_ensure_initial_admin_user_creates_seed_admin(tmp_path) -> None:
         postgres_user="postgres",
         postgres_password="postgres",
         redis_jdbc_url="jdbc:redis://127.0.0.1:6379/0",
+        init_admin_enabled=True,
         init_admin_username="admin-root",
         init_admin_email="admin-root@example.com",
         init_admin_password="StrongP@ss1",

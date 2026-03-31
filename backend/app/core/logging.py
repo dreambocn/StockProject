@@ -32,7 +32,17 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(name)
+    logger = logging.getLogger(name)
+    logger.disabled = False
+    logger.propagate = True
+    return logger
+
+
+def _ensure_logger_active(logger: logging.Logger) -> logging.Logger:
+    # 测试与热重载场景下 logger 可能被其他配置改写，这里统一恢复为可捕获状态。
+    logger.disabled = False
+    logger.propagate = True
+    return logger
 
 
 def set_request_id(request_id: str) -> Token[str]:
@@ -56,6 +66,7 @@ def log_request_started(
     path: str,
 ) -> None:
     # 请求入口日志：用于统计流量与定位请求链路起点。
+    logger = _ensure_logger_active(logger)
     logger.info(
         "event=request_started request_id=%s method=%s path=%s",
         get_request_id(),
@@ -72,6 +83,7 @@ def log_request_finished(
     duration_ms: float,
 ) -> None:
     # 请求完成日志：记录状态码与耗时，便于 SLA 监控。
+    logger = _ensure_logger_active(logger)
     logger.info(
         "event=request_finished request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
         get_request_id(),
@@ -90,6 +102,7 @@ def log_request_failed(
     error: Exception,
 ) -> None:
     # 异常日志走 exception，保留堆栈以便故障定位。
+    logger = _ensure_logger_active(logger)
     logger.exception(
         "event=request_failed request_id=%s method=%s path=%s duration_ms=%.2f error=%s",
         get_request_id(),

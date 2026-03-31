@@ -29,6 +29,7 @@ const showAllFactors = ref(false)
 const selectedReportId = ref<string | null>(null)
 const streamingMarkdown = ref('')
 const streaming = ref(false)
+const exportLoading = ref(false)
 const useWebSearch = ref(false)
 const webSearchInherited = ref(false)
 const webSearchSeededTsCode = ref('')
@@ -217,6 +218,31 @@ const currentReportWebSearchStatus = computed(() =>
     ? translateWebSearchStatus('used')
     : translateWebSearchStatus(selectedReport.value?.web_search_status),
 )
+const reportRuntimeMeta = computed(() => {
+  if (!selectedReport.value) {
+    return []
+  }
+  return [
+    selectedReport.value.prompt_version
+      ? `Prompt ${selectedReport.value.prompt_version}`
+      : null,
+    selectedReport.value.model_name
+      ? `模型 ${selectedReport.value.model_name}`
+      : null,
+    selectedReport.value.reasoning_effort
+      ? `推理 ${selectedReport.value.reasoning_effort}`
+      : null,
+    typeof selectedReport.value.token_usage_input === 'number'
+      ? `输入 Token ${selectedReport.value.token_usage_input}`
+      : null,
+    typeof selectedReport.value.token_usage_output === 'number'
+      ? `输出 Token ${selectedReport.value.token_usage_output}`
+      : null,
+    selectedReport.value.failure_type
+      ? `失败类型 ${selectedReport.value.failure_type}`
+      : null,
+  ].filter((item): item is string => Boolean(item))
+})
 const showWebSearchInheritedHint = computed(
   () => Boolean(watchlistItem.value) && webSearchInherited.value,
 )
@@ -658,6 +684,39 @@ const refreshAnalysis = async () => {
   }
 }
 
+const triggerReportDownload = (content: string, fileName: string, mimeType: string) => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return
+  }
+  const blob = new Blob([content], { type: mimeType })
+  const objectUrl = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = fileName
+  anchor.click()
+  window.URL.revokeObjectURL(objectUrl)
+}
+
+const exportSelectedReport = async (format: 'markdown' | 'html') => {
+  if (!selectedReport.value?.id) {
+    return
+  }
+  exportLoading.value = true
+  try {
+    const content = await analysisApi.exportReport(selectedReport.value.id, format)
+    const suffix = format === 'html' ? 'html' : 'md'
+    triggerReportDownload(
+      content,
+      `${tsCode.value || 'analysis-report'}-${selectedReport.value.id}.${suffix}`,
+      format === 'html' ? 'text/html;charset=utf-8' : 'text/markdown;charset=utf-8',
+    )
+  } catch {
+    errorMessage.value = '导出报告失败，请稍后重试'
+  } finally {
+    exportLoading.value = false
+  }
+}
+
 onMounted(() => {
   void loadWorkbench()
 })
@@ -831,6 +890,24 @@ watch(
                     <el-button
                       class="analysis-action-btn analysis-action-btn--outline"
                       plain
+                      :disabled="!selectedReport?.id"
+                      :loading="exportLoading"
+                      @click="exportSelectedReport('markdown')"
+                    >
+                      导出 Markdown
+                    </el-button>
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      plain
+                      :disabled="!selectedReport?.id"
+                      :loading="exportLoading"
+                      @click="exportSelectedReport('html')"
+                    >
+                      导出 HTML
+                    </el-button>
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      plain
                       :loading="watchlistLoading"
                       @click="toggleWatchlist"
                     >
@@ -900,6 +977,18 @@ watch(
                     class="analysis-token"
                   >
                     {{ `${sourceItem.provider ?? 'source'} × ${sourceItem.count ?? 0}` }}
+                  </span>
+                </div>
+                <div
+                  v-if="reportRuntimeMeta.length > 0"
+                  class="analysis-runtime-meta"
+                >
+                  <span
+                    v-for="metaItem in reportRuntimeMeta"
+                    :key="metaItem"
+                    class="analysis-token"
+                  >
+                    {{ metaItem }}
                   </span>
                 </div>
                 <div
@@ -1511,6 +1600,13 @@ watch(
 }
 
 .analysis-source-evidence {
+  margin-bottom: 0.8rem;
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.analysis-runtime-meta {
   margin-bottom: 0.8rem;
   display: flex;
   gap: 0.45rem;

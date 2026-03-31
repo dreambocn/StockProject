@@ -25,6 +25,7 @@ from app.schemas.stocks import (
     StockDetailResponse,
     StockInstrumentResponse,
     StockListItemResponse,
+    StockThemeResponse,
     StockTradeCalendarResponse,
 )
 from app.schemas.news import StockRelatedNewsItemResponse
@@ -91,6 +92,7 @@ from app.services.news_repository import (
     load_stock_news_rows_from_db,
     replace_stock_news_rows,
 )
+from app.services.market_theme_service import list_stock_themes
 
 
 router = APIRouter()
@@ -498,6 +500,23 @@ async def get_stock_detail(
             else None
         ),
     )
+
+
+@router.get("/stocks/{ts_code}/themes", response_model=list[StockThemeResponse])
+async def get_stock_themes(
+    ts_code: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> list[StockThemeResponse]:
+    normalized_ts_code = ts_code.strip().upper()
+    instrument = await session.get(StockInstrument, normalized_ts_code)
+    if instrument is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="stock not found",
+        )
+
+    theme_items = await list_stock_themes(session, ts_code=normalized_ts_code)
+    return [StockThemeResponse.model_validate(item) for item in theme_items]
 
 
 @router.get(

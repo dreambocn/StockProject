@@ -1,6 +1,6 @@
 # Project Progress
 
-Last update: 2026-03-25
+Last update: 2026-03-31
 
 ## Completed
 
@@ -234,6 +234,14 @@ Last update: 2026-03-25
   - Summary reads now oversample `analysis_event_links` candidates and return a unique logical-event view, preventing archived duplicate links from surfacing to users
   - Added `dedupe_analysis_event_links.py` dry-run/apply script to clean historical duplicate logical-event links by report-owned stock scope
   - Added regression coverage for selection quotas, repository oversampling, summary dedupe, cleanup script safety, and settings validation
+- Completed engineering baseline and unified task center rollout:
+  - Added Alembic baseline plus follow-up revisions for `system_job_runs`、analysis runtime metadata、market theme domain
+  - Added runtime mode governance (`APP_ENV` / `DB_SCHEMA_BOOTSTRAP_MODE` / `INIT_ADMIN_ENABLED`) and aligned API + Worker schema behavior
+  - Added root `.env.example`、environment matrix doc、runtime topology doc、GitHub Actions CI workflow
+  - Added `system_job_runs` unified task model and backend admin job APIs (`/api/admin/jobs*`)
+  - Wired analysis/news/watchlist/stock-sync flows into unified task records with status/metrics/error tracing
+  - Added analysis report Markdown/HTML export route and frontend export actions
+  - Added market theme domain, stock themes API, impact-map candidate theme enhancement, stock-detail theme panel, and admin task center page
 
 ## In Progress
 

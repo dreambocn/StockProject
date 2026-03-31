@@ -20,15 +20,17 @@
 - 安全防护到位：JWT 鉴权、密码哈希、刷新令牌全局撤销、登录验证码、邮箱验证码、IP 限流、CORS 白名单、请求级 `X-Request-ID` 日志追踪。
 - 股票数据闭环：支持股票基础信息同步、最近交易日行情增量同步、个股详情、`daily/weekly/monthly` 周期行情查询与数据库优先回源策略。
 - 新闻与事件沉淀：支持热点新闻、个股新闻、公告统一持久化，并提供历史事件查询与主题筛选能力。
-- AI 分析工作台：支持事件锚点分析、流式生成、历史报告归档、结构化引用展示、联网来源元数据补全。
-- 候选股影响映射：支持热点主题到板块、受益方向、A 股候选股的动态关联与证据增强展示。
+- AI 分析工作台：支持事件锚点分析、流式生成、历史报告归档、结构化引用展示、联网来源元数据补全，以及 Markdown/HTML 导出。
+- 候选股影响映射：支持热点主题到板块、受益方向、A 股候选股的动态关联、主题命中与证据增强展示。
 - 关注列表自动化：支持关注股票管理、小时级资讯归档、交易日日报分析、后台 Worker 去重调度。
+- 工程底座完善：引入 Alembic 统一管理数据库结构演进，新增 GitHub Actions CI 与环境矩阵文档。
+- 后台任务中心：通过统一任务表 `system_job_runs` 聚合分析、新闻、自选、股票同步任务。
 - 前端体验完整：包含首页、热点页、个股详情、分析工作台、关注页、后台管理页，并内置中英文国际化。
 
 ## 技术栈
 
 - 前端：Vue 3、Vite、TypeScript、Pinia、Vue Router、Element Plus、VueUse Motion
-- 后端：FastAPI、SQLAlchemy、Redis、PostgreSQL、uv
+- 后端：FastAPI、SQLAlchemy、Alembic、Redis、PostgreSQL、uv
 - 数据源：Tushare、AkShare
 - AI 能力：兼容 Responses 风格接口的大模型网关
 - 测试：Pytest、Vitest
@@ -42,7 +44,13 @@ docs/       文档目录（当前已清理阶段性计划）
 PROGRESS.md 迭代进度记录
 ```
 
-后端当前按领域拆分了 `auth`、`stocks`、`news`、`analysis`、`watchlist`、`admin` 等模块；前端围绕 `dashboard`、`hot news`、`stock detail`、`analysis workbench`、`watchlist`、`admin` 等页面组织。
+后端当前按领域拆分了 `auth`、`stocks`、`news`、`analysis`、`watchlist`、`admin`、`market_theme` 等模块；前端围绕 `dashboard`、`hot news`、`stock detail`、`analysis workbench`、`watchlist`、`admin` 等页面组织。
+
+## 工程化文档
+
+- 运行拓扑：`docs/architecture/runtime-topology.md`
+- 环境矩阵：`docs/deploy/environment-matrix.md`
+- 实施计划：`docs/plans/2026-03-30-stockproject-module-audit-and-next-steps.md`
 
 ## 功能模块
 
@@ -72,10 +80,15 @@ PROGRESS.md 迭代进度记录
 - `GET /api/news/events`
 - `GET /api/news/impact-map`
 - `GET /api/stocks/{ts_code}/news`
+- `GET /api/stocks/{ts_code}/themes`
 - `GET /api/analysis/stocks/{ts_code}/summary`
 - `POST /api/analysis/stocks/{ts_code}/sessions`
 - `GET /api/analysis/sessions/{session_id}/events`
 - `GET /api/analysis/stocks/{ts_code}/reports`
+- `GET /api/analysis/reports/{report_id}/export`
+- `GET /api/admin/jobs`
+- `GET /api/admin/jobs/summary`
+- `GET /api/admin/jobs/{job_id}`
 - `GET/POST/PATCH/DELETE /api/watchlist*`
 
 ## 快速开始
@@ -103,8 +116,7 @@ npm install
 
 ```powershell
 Set-Location 'E:\Development\Project\StockProject'
-Copy-Item '.\backend\.env.example' '.\backend\.env'
-Copy-Item '.\frontend\.env.example' '.\frontend\.env'
+Copy-Item '.\.env.example' '.\.env'
 ```
 
 后端最少需要补齐以下配置：
@@ -122,9 +134,16 @@ Copy-Item '.\frontend\.env.example' '.\frontend\.env'
 - `LLM_*`：分析工作台与 AI 报告生成
 - `INIT_ADMIN_*`：首次启动自动创建管理员
 
-完整示例请参考 `backend/.env.example` 与 `frontend/.env.example`。
+完整示例请参考根目录 `.env.example`。
 
-### 4. 一键启动开发环境
+### 4. 先执行迁移（推荐）
+
+```powershell
+Set-Location 'E:\Development\Project\StockProject\backend'
+uv run alembic upgrade head
+```
+
+### 5. 一键启动开发环境
 
 ```powershell
 Set-Location 'E:\Development\Project\StockProject'
@@ -209,7 +228,20 @@ npm run build
 
 ```powershell
 Set-Location 'E:\Development\Project\StockProject\backend'
-uv run python -c "import asyncio; from app.db.init_db import ensure_database_schema; asyncio.run(ensure_database_schema()); print('schema ensured')"
+uv run alembic upgrade head
+uv run python -c "import asyncio; from app.db.migrations import validate_database_schema; from app.db.session import engine; asyncio.run(validate_database_schema(target_engine=engine)); print('schema validated')"
+```
+
+### CI 本地对齐
+
+```powershell
+Set-Location 'E:\Development\Project\StockProject\backend'
+uv run alembic upgrade head
+uv run pytest -q
+
+Set-Location 'E:\Development\Project\StockProject\frontend'
+npm run test -- --run
+npm run build
 ```
 
 ## 目录结构
@@ -248,9 +280,9 @@ StockProject/
 
 ## Roadmap
 
-- 增强主题与概念映射能力，例如补充概念成分股和更细粒度的候选解释
-- 增加报告导出、结果交付与更完整的研究成果沉淀能力
-- 补充部署、CI、容器化等开源工程交付材料
+- 增强主题与概念映射能力，例如补充更稳定的外部同步源与只读运营入口
+- 增加更完整的研究成果交付能力，例如 PDF 导出与归档治理
+- 持续补充部署、容器化与发布工程材料
 
 ## 贡献方式
 

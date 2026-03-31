@@ -10,6 +10,10 @@ from app.core.logging import get_logger
 from app.core.security import hash_password
 from app.core.settings import Settings, get_settings
 from app.db.base import Base
+from app.db.migrations import (
+    run_database_migrations,
+    validate_database_schema as validate_database_schema_revision,
+)
 from app.db.session import SessionLocal, engine
 from app.models.user import USER_LEVEL_ADMIN, User
 
@@ -316,6 +320,9 @@ async def ensure_initial_admin_user(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> None:
+    if not settings.init_admin_enabled:
+        return
+
     admin_username = settings.init_admin_username.strip()
     admin_email = settings.init_admin_email.strip().lower()
     admin_password = settings.init_admin_password.strip()
@@ -365,16 +372,56 @@ async def ensure_initial_admin_user(
     )
 
 
-async def ensure_database_schema() -> None:
-    settings = get_settings()
-    if settings.db_auto_create_database:
-        # 先保证数据库存在，再进行 schema 与表初始化，避免后续步骤失败。
-        await ensure_database_exists(settings)
+async def ensure_database_schema(
+    *,
+    settings: Settings | None = None,
+    target_engine: AsyncEngine | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    await ensure_database_schema_with_runtime(
+        settings=settings or get_settings(),
+        target_engine=target_engine or engine,
+        session_factory=session_factory or SessionLocal,
+    )
 
-    await ensure_postgres_schema_exists(settings)
 
-    await ensure_schema_for_engine(engine)
-    await ensure_initial_admin_user(settings)
+async def upgrade_database_schema(
+    *,
+    settings: Settings,
+    target_engine: AsyncEngine,
+) -> None:
+    _ = settings, target_engine
+    await run_database_migrations()
+
+
+async def validate_database_schema(
+    *,
+    settings: Settings,
+    target_engine: AsyncEngine,
+) -> None:
+    _ = settings
+    await validate_database_schema_revision(target_engine=target_engine)
+
+
+async def ensure_database_schema_with_runtime(
+    *,
+    settings: Settings,
+    target_engine: AsyncEngine,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    if settings.should_auto_apply_schema:
+        if settings.db_auto_create_database:
+            # 开发模式允许先补数据库与 schema，再执行迁移，降低本地首次启动门槛。
+            await ensure_database_exists(settings)
+        await ensure_postgres_schema_exists(settings)
+        await upgrade_database_schema(settings=settings, target_engine=target_engine)
+    else:
+        # 非开发环境只校验迁移版本，避免服务启动时隐式改表。
+        await validate_database_schema(settings=settings, target_engine=target_engine)
+
+    if settings.init_admin_enabled:
+        # 显式开启种子管理员时才执行初始化，避免校验模式下仍触发账户侧副作用。
+        await ensure_initial_admin_user(settings, session_factory=session_factory)
     logger.info(
         "event=db.schema.ensure.success tables=%s",
         ",".join(sorted(Base.metadata.tables.keys())),

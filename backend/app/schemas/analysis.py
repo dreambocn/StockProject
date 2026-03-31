@@ -64,6 +64,13 @@ class AnalysisReportResponse(BaseModel):
     # structured_sources/web_sources 用于前端来源展示，允许为空数组。
     structured_sources: list[dict[str, object]] = []
     web_sources: list[dict[str, object]] = []
+    prompt_version: str | None = None
+    model_name: str | None = None
+    reasoning_effort: str | None = None
+    token_usage_input: int | None = None
+    token_usage_output: int | None = None
+    cost_estimate: float | None = None
+    failure_type: str | None = None
 
 
 class AnalysisReportArchiveItemResponse(AnalysisReportResponse):

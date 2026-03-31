@@ -1,8 +1,12 @@
 from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_report import AnalysisReport
+from app.models.market_theme import MarketTheme
+from app.models.market_theme_membership import MarketThemeMembership
+from app.models.market_theme_sync_batch import MarketThemeSyncBatch
 from app.models.news_fetch_batch import NewsFetchBatch
 from app.models.news_event import NewsEvent
+from app.models.system_job_run import SystemJobRun
 from app.models.stock_adj_factor import StockAdjFactor
 from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
 from app.models.stock_daily_snapshot import StockDailySnapshot
@@ -21,8 +25,12 @@ __all__ = [
     "AnalysisEventLink",
     "AnalysisGenerationSession",
     "AnalysisReport",
+    "MarketTheme",
+    "MarketThemeMembership",
+    "MarketThemeSyncBatch",
     "NewsFetchBatch",
     "NewsEvent",
+    "SystemJobRun",
     "StockInstrument",
     "StockCandidateEvidenceCache",
     "StockDailySnapshot",

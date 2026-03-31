@@ -74,6 +74,15 @@ class StockDetailResponse(BaseModel):
     latest_snapshot: StockDailySnapshotResponse | None
 
 
+class StockThemeResponse(BaseModel):
+    theme_code: str
+    theme_name: str
+    theme_type: str
+    match_score: int = 0
+    evidence_summary: str | None = None
+    theme_evidence: list[str] = []
+
+
 class StockBasicSyncResponse(BaseModel):
     # 同步结果用于后台任务反馈，不影响前台业务数据。
     message: str

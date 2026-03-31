@@ -335,6 +335,10 @@ export default {
         title: '股票管理中心',
         note: '按参数获取股票主数据全量信息并执行状态巡检。',
       },
+      jobs: {
+        title: '任务中心',
+        note: '统一查看分析、新闻、自选与同步任务的执行轨迹。',
+      },
     },
   },
   adminStocks: {

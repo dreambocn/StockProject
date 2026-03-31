@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import quote, urlparse
 
 from pydantic import model_validator
@@ -14,6 +15,11 @@ def _remove_jdbc_prefix(url: str) -> str:
 
 
 class Settings(BaseSettings):
+    app_env: Literal["development", "test", "staging", "production"] = "development"
+    db_schema_bootstrap_mode: Literal["auto_apply", "validate_only"] = "auto_apply"
+    init_admin_enabled: bool = False
+    job_heartbeat_stale_seconds: int = 120
+    job_retention_days: int = 30
     postgres_jdbc_url: str = "jdbc:postgresql://127.0.0.1:5432/postgres"
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
@@ -236,6 +242,18 @@ class Settings(BaseSettings):
 
         return parsed_proxies
 
+    @property
+    def is_development_env(self) -> bool:
+        return self.app_env == "development"
+
+    @property
+    def should_auto_apply_schema(self) -> bool:
+        return self.is_development_env and self.db_schema_bootstrap_mode == "auto_apply"
+
+    @property
+    def should_validate_schema(self) -> bool:
+        return self.db_schema_bootstrap_mode == "validate_only"
+
     @model_validator(mode="after")
     def validate_analysis_event_quotas(self) -> "Settings":
         quota_sum = (
@@ -248,6 +266,18 @@ class Settings(BaseSettings):
                 "ANALYSIS_GENERATION_STOCK_QUOTA + ANALYSIS_GENERATION_POLICY_QUOTA + "
                 "ANALYSIS_GENERATION_HOT_QUOTA 不能大于 ANALYSIS_GENERATION_EVENT_LIMIT"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_runtime_mode_constraints(self) -> "Settings":
+        if self.db_schema_bootstrap_mode == "auto_apply" and not self.is_development_env:
+            raise ValueError(
+                "DB_SCHEMA_BOOTSTRAP_MODE=auto_apply 仅允许在 development 环境使用"
+            )
+        if self.job_heartbeat_stale_seconds < 30:
+            raise ValueError("JOB_HEARTBEAT_STALE_SECONDS 不能小于 30")
+        if self.job_retention_days < 1:
+            raise ValueError("JOB_RETENTION_DAYS 不能小于 1")
         return self
 
 

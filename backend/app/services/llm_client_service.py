@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app.core.settings import Settings, get_settings
 
@@ -86,6 +86,10 @@ class LlmTextResult:
     used_web_search: bool
     web_search_status: str
     web_sources: list[dict[str, object]]
+    model_name: str
+    reasoning_effort: str
+    token_usage_input: int | None
+    token_usage_output: int | None
 
 
 def build_openai_client(settings: Settings | None = None):
@@ -170,6 +174,22 @@ def _extract_web_sources(response: object) -> list[dict[str, object]]:
     return extracted_sources
 
 
+def _extract_token_usage(response: object | None) -> tuple[int | None, int | None]:
+    if response is None:
+        return None, None
+
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None, None
+
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    return (
+        int(input_tokens) if isinstance(input_tokens, int) else None,
+        int(output_tokens) if isinstance(output_tokens, int) else None,
+    )
+
+
 async def generate_llm_result(
     prompt: str,
     *,
@@ -191,12 +211,16 @@ async def generate_llm_result(
         )
 
     resolved_client = client or build_openai_client(resolved_settings)
+    resolved_model = model or resolved_settings.llm_model
+    resolved_reasoning_effort = (
+        reasoning_effort or resolved_settings.llm_reasoning_effort
+    )
     request_kwargs = _build_create_kwargs(
         prompt=prompt,
         system_instruction=system_instruction,
         resolved_settings=resolved_settings,
-        model=model,
-        reasoning_effort=reasoning_effort,
+        model=resolved_model,
+        reasoning_effort=resolved_reasoning_effort,
         max_output_tokens=max_output_tokens,
         use_web_search=use_web_search,
     )
@@ -208,11 +232,16 @@ async def generate_llm_result(
             resolved_client.responses.create,
             **request_kwargs,
         )
+        token_usage_input, token_usage_output = _extract_token_usage(response)
         return LlmTextResult(
             text=_extract_output_text(response),
             used_web_search=web_search_requested,
             web_search_status="used" if web_search_requested else "disabled",
             web_sources=_extract_web_sources(response),
+            model_name=resolved_model,
+            reasoning_effort=resolved_reasoning_effort,
+            token_usage_input=token_usage_input,
+            token_usage_output=token_usage_output,
         )
     except Exception as exc:
         if not web_search_requested or not _is_web_search_unsupported(exc):
@@ -223,8 +252,8 @@ async def generate_llm_result(
             prompt=prompt,
             system_instruction=system_instruction,
             resolved_settings=resolved_settings,
-            model=model,
-            reasoning_effort=reasoning_effort,
+            model=resolved_model,
+            reasoning_effort=resolved_reasoning_effort,
             max_output_tokens=max_output_tokens,
             use_web_search=False,
         )
@@ -232,11 +261,16 @@ async def generate_llm_result(
             resolved_client.responses.create,
             **fallback_kwargs,
         )
+        token_usage_input, token_usage_output = _extract_token_usage(response)
         return LlmTextResult(
             text=_extract_output_text(response),
             used_web_search=False,
             web_search_status="unsupported",
             web_sources=[],
+            model_name=resolved_model,
+            reasoning_effort=resolved_reasoning_effort,
+            token_usage_input=token_usage_input,
+            token_usage_output=token_usage_output,
         )
 
 
@@ -274,9 +308,14 @@ async def generate_streamed_llm_result(
     reasoning_effort: str | None = None,
     max_output_tokens: int = 512,
     use_web_search: bool = False,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> LlmTextResult:
     resolved_settings = settings or get_settings()
     resolved_client = client or build_openai_client(resolved_settings)
+    resolved_model = model or resolved_settings.llm_model
+    resolved_reasoning_effort = (
+        reasoning_effort or resolved_settings.llm_reasoning_effort
+    )
 
     if not resolved_settings.llm_stream_enabled:
         # 未开启流式时直接复用非流式逻辑，避免两套分支重复。
@@ -285,8 +324,8 @@ async def generate_streamed_llm_result(
             client=resolved_client,
             settings=resolved_settings,
             system_instruction=system_instruction,
-            model=model,
-            reasoning_effort=reasoning_effort,
+            model=resolved_model,
+            reasoning_effort=resolved_reasoning_effort,
             max_output_tokens=max_output_tokens,
             use_web_search=use_web_search,
         )
@@ -295,8 +334,8 @@ async def generate_streamed_llm_result(
         prompt=prompt,
         system_instruction=system_instruction,
         resolved_settings=resolved_settings,
-        model=model,
-        reasoning_effort=reasoning_effort,
+        model=resolved_model,
+        reasoning_effort=resolved_reasoning_effort,
         max_output_tokens=max_output_tokens,
         use_web_search=use_web_search,
     )
@@ -332,7 +371,11 @@ async def generate_streamed_llm_result(
         while True:
             kind, payload = await queue.get()
             if kind == "delta":
-                chunks.append(str(payload or ""))
+                delta_text = str(payload or "")
+                chunks.append(delta_text)
+                if on_delta is not None and delta_text:
+                    # 将实时增量回调交给上层，便于分析工作台同步渲染流式内容。
+                    await on_delta(delta_text)
                 continue
             if kind == "final":
                 final_response = payload
@@ -347,8 +390,8 @@ async def generate_streamed_llm_result(
                     client=resolved_client,
                     settings=resolved_settings,
                     system_instruction=system_instruction,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
+                    model=resolved_model,
+                    reasoning_effort=resolved_reasoning_effort,
                     max_output_tokens=max_output_tokens,
                     use_web_search=False,
                 )
@@ -357,6 +400,10 @@ async def generate_streamed_llm_result(
                     used_web_search=False,
                     web_search_status="unsupported",
                     web_sources=[],
+                    model_name=fallback_result.model_name,
+                    reasoning_effort=fallback_result.reasoning_effort,
+                    token_usage_input=fallback_result.token_usage_input,
+                    token_usage_output=fallback_result.token_usage_output,
                 )
             break
     finally:
@@ -366,11 +413,17 @@ async def generate_streamed_llm_result(
     if not resolved_text and final_response is not None:
         resolved_text = _extract_output_text(final_response)
 
+    token_usage_input, token_usage_output = _extract_token_usage(final_response)
+
     return LlmTextResult(
         text=resolved_text,
         used_web_search=web_search_requested,
         web_search_status="used" if web_search_requested else "disabled",
         web_sources=_extract_web_sources(final_response) if final_response is not None else [],
+        model_name=resolved_model,
+        reasoning_effort=resolved_reasoning_effort,
+        token_usage_input=token_usage_input,
+        token_usage_output=token_usage_output,
     )
 
 

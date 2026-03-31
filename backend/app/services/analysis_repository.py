@@ -220,6 +220,13 @@ async def create_analysis_report(
     content_format: str,
     structured_sources: list[dict[str, object]] | None,
     web_sources: list[dict[str, object]] | None,
+    prompt_version: str | None = None,
+    model_name: str | None = None,
+    reasoning_effort: str | None = None,
+    token_usage_input: int | None = None,
+    token_usage_output: int | None = None,
+    cost_estimate: float | None = None,
+    failure_type: str | None = None,
 ) -> AnalysisReport:
     report = AnalysisReport(
         ts_code=ts_code,
@@ -242,6 +249,13 @@ async def create_analysis_report(
         content_format=content_format,
         structured_sources=structured_sources,
         web_sources=web_sources,
+        prompt_version=prompt_version,
+        model_name=model_name,
+        reasoning_effort=reasoning_effort,
+        token_usage_input=token_usage_input,
+        token_usage_output=token_usage_output,
+        cost_estimate=cost_estimate,
+        failure_type=failure_type,
     )
     session.add(report)
     return report
@@ -384,6 +398,10 @@ async def create_analysis_session_record(
     anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
+    system_job_id: str | None = None,
+    prompt_version: str | None = None,
+    model_name: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> AnalysisGenerationSession:
     row = AnalysisGenerationSession(
         analysis_key=analysis_key,
@@ -394,6 +412,10 @@ async def create_analysis_session_record(
         trigger_source=trigger_source,
         trigger_source_group=build_trigger_source_group(trigger_source),
         status="queued",
+        system_job_id=system_job_id,
+        prompt_version=prompt_version,
+        model_name=model_name,
+        reasoning_effort=reasoning_effort,
     )
     session.add(row)
     return row

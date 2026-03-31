@@ -67,6 +67,8 @@ class MacroImpactCandidateResponse(BaseModel):
     source_breakdown: list[CandidateEvidenceSourceBreakdownResponse] = []
     freshness_score: int = 0
     candidate_confidence: str = "低"
+    theme_matches: list[str] = []
+    theme_evidence: list[str] = []
     # evidence_items 仅返回必要条目，避免列表过大。
     evidence_items: list[CandidateEvidenceItemResponse] = []
 

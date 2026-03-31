@@ -61,6 +61,15 @@ export type StockDetail = {
   latest_snapshot: StockDailySnapshot | null
 }
 
+export type StockTheme = {
+  theme_code: string
+  theme_name: string
+  theme_type: string
+  match_score: number
+  evidence_summary: string | null
+  theme_evidence: string[]
+}
+
 
 export type StockAdjFactor = {
   ts_code: string
@@ -126,6 +135,9 @@ export const stocksApi = {
   },
   async getStockDetail(tsCode: string) {
     return requestJson<StockDetail>(`/api/stocks/${encodeURIComponent(tsCode)}`)
+  },
+  async getStockThemes(tsCode: string) {
+    return requestJson<StockTheme[]>(`/api/stocks/${encodeURIComponent(tsCode)}/themes`)
   },
   async getStockDaily(tsCode: string, options?: StockDailyQueryOptions) {
     // 关键流程：默认 period=daily 且 limit=60，与详情页主图窗口保持一致；

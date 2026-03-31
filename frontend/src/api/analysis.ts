@@ -49,6 +49,13 @@ export type AnalysisReportResponse = {
   started_at?: string | null
   completed_at?: string | null
   content_format?: 'markdown'
+  prompt_version?: string | null
+  model_name?: string | null
+  reasoning_effort?: string | null
+  token_usage_input?: number | null
+  token_usage_output?: number | null
+  cost_estimate?: number | null
+  failure_type?: string | null
   web_sources?: Array<{
     title?: string
     url?: string
@@ -182,5 +189,18 @@ export const analysisApi = {
       completed: (payload) => handlers.onCompleted?.(payload as AnalysisSessionCompletedEvent),
       error: (payload) => handlers.onError?.(payload as AnalysisSessionErrorEvent),
     })
+  },
+
+  async exportReport(reportId: string, format: 'markdown' | 'html') {
+    const response = await fetch(
+      `/api/analysis/reports/${encodeURIComponent(reportId)}/export?format=${format}`,
+      {
+        method: 'GET',
+      },
+    )
+    if (!response.ok) {
+      throw new Error('导出报告失败')
+    }
+    return response.text()
   },
 }

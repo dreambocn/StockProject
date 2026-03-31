@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -51,6 +51,16 @@ class AnalysisReport(Base):
     web_sources: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON, nullable=True
     )
+    prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    token_usage_input: Mapped[int | None] = mapped_column(nullable=True)
+    token_usage_output: Mapped[int | None] = mapped_column(nullable=True)
+    cost_estimate: Mapped[float | None] = mapped_column(
+        Numeric(precision=12, scale=6),
+        nullable=True,
+    )
+    failure_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

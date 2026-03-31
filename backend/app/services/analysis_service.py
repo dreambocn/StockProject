@@ -12,6 +12,7 @@ from app.schemas.analysis import (
     AnalysisReportResponse,
     StockAnalysisSummaryResponse,
 )
+from app.models.system_job_run import SystemJobRun
 from app.schemas.stocks import (
     StockDailySnapshotResponse,
     StockInstrumentResponse,
@@ -37,6 +38,7 @@ from app.services.analysis_event_selection_service import (
     select_generation_analysis_events,
     select_summary_analysis_events,
 )
+from app.services.analysis_prompt_registry import get_analysis_prompt_version
 from app.services.analysis_runtime_service import (
     cache_active_session_id,
     cache_fresh_report_id,
@@ -46,6 +48,15 @@ from app.services.analysis_runtime_service import (
 )
 from app.services.event_link_service import build_event_link_result
 from app.services.factor_weight_service import calculate_factor_weights
+from app.services.job_service import (
+    JOB_STATUS_FAILED,
+    JOB_STATUS_PARTIAL,
+    JOB_STATUS_SUCCESS,
+    create_job_run,
+    finish_job_run,
+    mark_job_running,
+    touch_job_heartbeat,
+)
 from app.services.key_event_extraction_service import extract_key_event_types
 from app.services.llm_analysis_service import generate_stock_analysis_report
 from app.services.news_sentiment_service import analyze_news_sentiment
@@ -54,6 +65,14 @@ from app.services.web_source_metadata_service import enrich_web_sources
 
 class AnalysisNotFoundError(Exception):
     pass
+
+
+def _map_analysis_report_status_to_job_status(report_status: str) -> str:
+    if report_status == "ready":
+        return JOB_STATUS_SUCCESS
+    if report_status == "partial":
+        return JOB_STATUS_PARTIAL
+    return JOB_STATUS_FAILED
 
 
 def _derive_status(
@@ -257,6 +276,17 @@ def _serialize_report(
             "content_format": getattr(report_obj, "content_format", "markdown"),
             "structured_sources": getattr(report_obj, "structured_sources", None) or [],
             "web_sources": getattr(report_obj, "web_sources", None) or [],
+            "prompt_version": getattr(report_obj, "prompt_version", None),
+            "model_name": getattr(report_obj, "model_name", None),
+            "reasoning_effort": getattr(report_obj, "reasoning_effort", None),
+            "token_usage_input": getattr(report_obj, "token_usage_input", None),
+            "token_usage_output": getattr(report_obj, "token_usage_output", None),
+            "cost_estimate": (
+                float(getattr(report_obj, "cost_estimate"))
+                if getattr(report_obj, "cost_estimate", None) is not None
+                else None
+            ),
+            "failure_type": getattr(report_obj, "failure_type", None),
         }
     )
     return report.model_dump()
@@ -472,6 +502,22 @@ async def start_analysis_session(
                 "cached": False,
             }
 
+        analysis_job = await create_job_run(
+            session,
+            job_type="analysis_generate",
+            status="queued",
+            trigger_source=trigger_source,
+            resource_type="stock",
+            resource_key=normalized_ts_code,
+            idempotency_key=analysis_key,
+            summary="股票分析任务已入队",
+            payload_json={
+                "ts_code": normalized_ts_code,
+                "topic": topic,
+                "anchor_event_id": event_id,
+                "use_web_search": use_web_search,
+            },
+        )
         session_row = await create_analysis_session_record(
             session,
             analysis_key=analysis_key,
@@ -480,8 +526,15 @@ async def start_analysis_session(
             anchor_event_id=event_id,
             use_web_search=use_web_search,
             trigger_source=trigger_source,
+            system_job_id=analysis_job.id,
+            prompt_version=get_analysis_prompt_version(),
+            model_name=settings.llm_model,
+            reasoning_effort=settings.llm_reasoning_effort,
         )
+        analysis_job.linked_entity_type = "analysis_generation_session"
+        analysis_job.linked_entity_id = session_row.id
         await session.commit()
+        await session.refresh(analysis_job)
         await session.refresh(session_row)
         await cache_active_session_id(
             analysis_key,
@@ -509,10 +562,24 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             return
 
         analysis_key = session_row.analysis_key
+        analysis_job = (
+            await session.get(SystemJobRun, session_row.system_job_id)
+            if session_row.system_job_id
+            else None
+        )
         try:
             session_row.status = "running"
             session_row.started_at = session_row.started_at or datetime.now(UTC)
             session_row.error_message = None
+            session_row.failure_type = None
+            if analysis_job is not None:
+                await mark_job_running(
+                    session,
+                    job=analysis_job,
+                    summary="股票分析任务执行中",
+                    linked_entity_type="analysis_generation_session",
+                    linked_entity_id=session_row.id,
+                )
             await session.commit()
             await event_bus.publish(
                 session_id,
@@ -658,6 +725,12 @@ async def run_analysis_session_by_id(session_id: str) -> None:
 
             async def on_delta(delta: str) -> None:
                 session_row.summary_preview = f"{session_row.summary_preview or ''}{delta}"
+                if analysis_job is not None:
+                    await touch_job_heartbeat(
+                        session,
+                        job=analysis_job,
+                        summary="股票分析流式输出中",
+                    )
                 await session.commit()
                 await event_bus.publish(
                     session_id,
@@ -707,12 +780,48 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 content_format="markdown",
                 structured_sources=_build_structured_sources(event_payloads),
                 web_sources=report_result.web_sources,
+                prompt_version=report_result.prompt_version,
+                model_name=report_result.model_name or session_row.model_name,
+                reasoning_effort=(
+                    report_result.reasoning_effort or session_row.reasoning_effort
+                ),
+                token_usage_input=report_result.token_usage_input,
+                token_usage_output=report_result.token_usage_output,
+                cost_estimate=report_result.cost_estimate,
+                failure_type=report_result.failure_type,
             )
             await session.flush()
             session_row.summary_preview = report_result.summary
             session_row.report_id = report.id
             session_row.status = "completed"
             session_row.completed_at = report_result.generated_at
+            session_row.prompt_version = report_result.prompt_version
+            session_row.model_name = report_result.model_name or session_row.model_name
+            session_row.reasoning_effort = (
+                report_result.reasoning_effort or session_row.reasoning_effort
+            )
+            session_row.token_usage_input = report_result.token_usage_input
+            session_row.token_usage_output = report_result.token_usage_output
+            session_row.cost_estimate = report_result.cost_estimate
+            session_row.failure_type = report_result.failure_type
+            if analysis_job is not None:
+                await finish_job_run(
+                    session,
+                    job=analysis_job,
+                    status=_map_analysis_report_status_to_job_status(
+                        report_result.status
+                    ),
+                    summary="股票分析任务已完成",
+                    metrics_json={
+                        "event_count": len(event_payloads),
+                        "risk_point_count": len(report_result.risk_points),
+                        "used_web_search": report_result.used_web_search,
+                        "token_usage_input": report_result.token_usage_input,
+                        "token_usage_output": report_result.token_usage_output,
+                    },
+                    linked_entity_type="analysis_generation_session",
+                    linked_entity_id=session_row.id,
+                )
             await session.commit()
 
             settings = get_settings()
@@ -737,6 +846,23 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 session_row.status = "failed"
                 session_row.error_message = str(exc)
                 session_row.completed_at = datetime.now(UTC)
+                session_row.failure_type = type(exc).__name__
+                if analysis_job is None and session_row.system_job_id:
+                    analysis_job = await session.get(
+                        SystemJobRun,
+                        session_row.system_job_id,
+                    )
+                if analysis_job is not None:
+                    await finish_job_run(
+                        session,
+                        job=analysis_job,
+                        status=JOB_STATUS_FAILED,
+                        summary="股票分析任务执行失败",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                        linked_entity_type="analysis_generation_session",
+                        linked_entity_id=session_row.id,
+                    )
                 await session.commit()
                 await clear_cached_active_session_id(analysis_key, session_id)
             await event_bus.publish(

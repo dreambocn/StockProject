@@ -1289,4 +1289,73 @@ describe('StockDetailView', () => {
     expect(getWatchlistSpy).toHaveBeenCalledWith('token')
     expect(wrapper.text()).toContain('移出关注')
   })
+
+  it('renders stock themes from dedicated themes endpoint', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/stocks/600938.SH/themes')) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              theme_code: 'oil-chain',
+              theme_name: '油气产业链',
+              theme_type: 'concept',
+              match_score: 88,
+              evidence_summary: '受益于油价上行',
+              theme_evidence: ['受益于油价上行'],
+            },
+          ]),
+        )
+      }
+      if (url.includes('/api/stocks/600938.SH/news')) {
+        return Promise.resolve(jsonResponse([]))
+      }
+      if (url.includes('/api/stocks/600938.SH/adj-factor')) {
+        return Promise.resolve(jsonResponse([]))
+      }
+      if (url.includes('/api/stocks/600938.SH/daily')) {
+        return Promise.resolve(jsonResponse([]))
+      }
+      return Promise.resolve(
+        jsonResponse({
+          instrument: {
+            ts_code: '600938.SH',
+            symbol: '600938',
+            name: '中国海油',
+            fullname: '中国海洋石油有限公司',
+            area: '北京',
+            industry: '石油开采',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '2001-02-27',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/stocks/:tsCode', component: StockDetailView }],
+    })
+    await router.push('/stocks/600938.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="stock-theme-panel"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('油气产业链')
+    expect(wrapper.text()).toContain('受益于油价上行')
+  })
 })

@@ -11,6 +11,7 @@ import {
   type StockDailySnapshot,
   type StockDetail,
   type StockRelatedNewsItem,
+  type StockTheme,
 } from '../api/stocks'
 import { useAuthStore } from '../stores/auth'
 
@@ -44,6 +45,7 @@ const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
 const relatedNews = ref<StockRelatedNewsItem[]>([])
+const themes = ref<StockTheme[]>([])
 const showAllNews = ref(false)
 const adjFactors = ref<StockAdjFactor[]>([])
 const watchlistItem = ref<WatchlistItemResponse | null>(null)
@@ -652,6 +654,20 @@ const loadRelatedNews = async () => {
   }
 }
 
+const loadThemes = async () => {
+  if (!tsCode.value) {
+    themes.value = []
+    return
+  }
+
+  try {
+    themes.value = await stocksApi.getStockThemes(tsCode.value)
+  } catch {
+    // 降级分支：主题接口失败时只展示空态，不影响详情主链路。
+    themes.value = []
+  }
+}
+
 const loadWatchlistState = async () => {
   if (!authStore.accessToken || !tsCode.value) {
     watchlistItem.value = null
@@ -712,7 +728,7 @@ watch(
 const loadData = async () => {
   // 关键流程：先稳定主看板数据，再并发补资讯与关注状态，避免额外请求打乱主链路时序。
   await loadCoreData()
-  await Promise.all([loadRelatedNews(), loadWatchlistState()])
+  await Promise.all([loadRelatedNews(), loadThemes(), loadWatchlistState()])
 }
 
 const goBack = async () => {
@@ -822,9 +838,9 @@ onBeforeUnmount(() => {
       <div class="title-row">
         <div>
           <p class="panel-kicker">{{ t('stockDetail.kicker') }}</p>
-          <h1>{{ detail?.instrument.name ?? tsCode }}</h1>
+          <h1>{{ detail?.instrument?.name ?? tsCode }}</h1>
           <p data-testid="stock-fullname" class="fullname-line">
-            {{ detail?.instrument.fullname ?? '--' }}
+            {{ detail?.instrument?.fullname ?? '--' }}
           </p>
           <div v-if="showHotNewsContext" class="hot-context-bar">
             <span class="analysis-token">{{ t(`hotNews.topics.${topicContext || 'other'}`) }}</span>
@@ -857,7 +873,7 @@ onBeforeUnmount(() => {
 
       <el-alert v-if="errorMessage" class="detail-alert" :title="errorMessage" type="error" :closable="false" show-icon />
 
-      <div v-if="detail" class="metrics-grid">
+      <div v-if="detail?.instrument" class="metrics-grid">
         <div class="metric-item">
           <span class="metric-label">{{ t('stockDetail.latestClose') }}</span>
           <strong data-testid="latest-close-value">{{ formatNumber(activeClose) }}</strong>
@@ -873,6 +889,33 @@ onBeforeUnmount(() => {
         <div class="metric-item">
           <span class="metric-label">{{ t('stockDetail.exchange') }}</span>
           <strong>{{ detail.instrument.exchange ?? '--' }}</strong>
+        </div>
+      </div>
+      <div v-if="themes.length > 0" class="theme-panel" data-testid="stock-theme-panel">
+        <div class="theme-panel__header">
+          <h2>主题 / 概念</h2>
+        </div>
+        <div class="theme-list">
+          <article
+            v-for="theme in themes"
+            :key="theme.theme_code"
+            class="theme-item"
+          >
+            <div class="theme-item__head">
+              <strong>{{ theme.theme_name }}</strong>
+              <span class="analysis-token">{{ theme.match_score }}</span>
+            </div>
+            <p v-if="theme.evidence_summary" class="theme-item__summary">{{ theme.evidence_summary }}</p>
+            <div v-if="theme.theme_evidence?.length" class="theme-item__evidence">
+              <span
+                v-for="evidence in theme.theme_evidence"
+                :key="`${theme.theme_code}-${evidence}`"
+                class="analysis-token"
+              >
+                {{ evidence }}
+              </span>
+            </div>
+          </article>
         </div>
       </div>
     </el-card>
@@ -1229,6 +1272,61 @@ h1 {
   display: grid;
   gap: 0.7rem;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.theme-panel {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.theme-panel__header h2 {
+  margin: 0;
+}
+
+.theme-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.theme-item {
+  border: 1px solid var(--terminal-border);
+  border-radius: 12px;
+  padding: 0.75rem 0.8rem;
+  background: color-mix(in srgb, var(--terminal-surface, #10172a) 90%, transparent);
+}
+
+.theme-item__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.theme-item__summary {
+  margin: 0.35rem 0 0;
+  color: var(--terminal-muted);
+  font-size: 0.82rem;
+}
+
+.theme-item__evidence {
+  margin-top: 0.45rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.theme-item__evidence .analysis-token,
+.theme-item__head .analysis-token {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(123, 197, 255, 0.16);
+  background: rgba(8, 14, 25, 0.76);
+  color: color-mix(in srgb, var(--terminal-primary) 88%, white 12%);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
 }
 
 .metric-item {

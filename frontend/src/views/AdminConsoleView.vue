@@ -18,6 +18,13 @@ const adminEntries = [
     titleKey: 'adminConsole.entries.stocks.title',
     noteKey: 'adminConsole.entries.stocks.note',
   },
+  {
+    key: 'jobs',
+    to: '/admin/jobs',
+    icon: '🛰️',
+    titleKey: 'adminConsole.entries.jobs.title',
+    noteKey: 'adminConsole.entries.jobs.note',
+  },
 ]
 // 后台入口使用配置数组渲染，便于后续扩展时保持结构一致。
 </script>
