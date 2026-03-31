@@ -1,7 +1,11 @@
 from app.core.settings import Settings
 
 
-def test_settings_runtime_mode_defaults() -> None:
+def test_settings_runtime_mode_defaults(monkeypatch) -> None:
+    # 默认值测试必须忽略 CI 的 APP_ENV / bootstrap 配置，才能真正覆盖类内默认值。
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("DB_SCHEMA_BOOTSTRAP_MODE", raising=False)
+    monkeypatch.delenv("INIT_ADMIN_ENABLED", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.app_env == "development"

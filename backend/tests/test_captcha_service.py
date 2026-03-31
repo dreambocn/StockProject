@@ -33,3 +33,28 @@ def test_captcha_text_is_not_clustered_only_in_top_left(monkeypatch) -> None:
                 right_half_dark_pixels += 1
 
     assert right_half_dark_pixels > 40
+
+
+def test_captcha_fallback_font_still_covers_right_half(monkeypatch) -> None:
+    original_truetype = __import__("app.services.captcha_service", fromlist=["ImageFont"]).ImageFont.truetype
+
+    def fake_truetype(font, size, *args, **kwargs):
+        if font == "arial.ttf":
+            raise OSError("missing arial")
+        return original_truetype(font, size, *args, **kwargs)
+
+    monkeypatch.setattr("app.services.captcha_service.secrets.randbelow", lambda _: 0)
+    monkeypatch.setattr("app.services.captcha_service.ImageFont.truetype", fake_truetype)
+
+    image_bytes = _render_captcha_png("ABCD")
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    width, height = image.size
+    right_half_dark_pixels = 0
+    for x in range(width // 2, width):
+        for y in range(height):
+            r, g, b = image.getpixel((x, y))
+            if r < 120 and g < 120 and b < 120:
+                right_half_dark_pixels += 1
+
+    assert right_half_dark_pixels > 40

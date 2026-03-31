@@ -119,7 +119,9 @@ def test_settings_parse_trusted_proxy_ips_normalization() -> None:
     assert settings.trusted_proxy_ips_list == ["10.0.0.1", "10.0.0.2"]
 
 
-def test_settings_llm_defaults() -> None:
+def test_settings_llm_defaults(monkeypatch) -> None:
+    # 默认值测试必须主动清理 CI 注入的环境变量，避免 workflow 全局 env 污染断言。
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.llm_base_url == "https://aixj.vip"

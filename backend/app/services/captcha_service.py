@@ -21,15 +21,23 @@ def _build_answer(length: int) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def _load_captcha_font() -> tuple[ImageFont.FreeTypeFont | ImageFont.ImageFont, bool]:
+    for font_name in ("arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"):
+        try:
+            return ImageFont.truetype(font_name, 30), False
+        except OSError:
+            continue
+
+    # 关键降级：当运行环境缺少常见字体时，回退 Pillow 默认字体并启用加粗式多次描边，
+    # 避免 Linux CI 下字符过小导致验证码文本集中在左上角、可读性与测试稳定性下降。
+    return ImageFont.load_default(), True
+
+
 def _render_captcha_png(answer: str) -> bytes:
     width, height = 180, 64
     image = Image.new("RGB", (width, height), color=(244, 248, 255))
     draw = ImageDraw.Draw(image)
-    try:
-        font = ImageFont.truetype("arial.ttf", 30)
-    except OSError:
-        # 运行环境缺少字体时回退默认字体，确保验证码能力不中断。
-        font = ImageFont.load_default()
+    font, should_use_dense_fallback = _load_captcha_font()
 
     for _ in range(8):
         # 随机干扰线用于提高 OCR 识别成本。
@@ -65,7 +73,18 @@ def _render_captcha_png(answer: str) -> bytes:
             30 + secrets.randbelow(60),
             255,
         )
-        char_draw.text((28, 28), char, font=font, fill=char_color, anchor="mm")
+        if should_use_dense_fallback:
+            # 默认字体较小时，通过轻量描边提升字符存在感，避免不同平台字体缺失导致右半区字符过淡。
+            for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1), (-1, 0), (0, -1)):
+                char_draw.text(
+                    (28 + dx, 28 + dy),
+                    char,
+                    font=font,
+                    fill=char_color,
+                    anchor="mm",
+                )
+        else:
+            char_draw.text((28, 28), char, font=font, fill=char_color, anchor="mm")
 
         rotate_angle = secrets.randbelow(41) - 20
         rotated = char_layer.rotate(rotate_angle, expand=True)
