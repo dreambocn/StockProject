@@ -55,6 +55,7 @@ export type PolicyQuery = {
   category?: string
   macroTopic?: string
   keyword?: string
+  searchScope?: 'basic' | 'fulltext'
   page?: number
   pageSize?: number
 }
@@ -174,12 +175,13 @@ export const policyApi = {
       category: query.category || undefined,
       macro_topic: query.macroTopic || undefined,
       keyword: query.keyword || undefined,
+      search_scope: query.searchScope ?? 'basic',
       page: query.page ?? 1,
-      page_size: query.pageSize ?? 20,
+      page_size: query.pageSize ?? 12,
     })
     const payload = await requestJson<unknown>(`/api/policy/documents${search}`)
     if (!isRecord(payload)) {
-      return { items: [], total: 0, page: 1, page_size: 20 }
+      return { items: [], total: 0, page: 1, page_size: 12 }
     }
     return {
       items: Array.isArray(payload.items)
@@ -187,7 +189,7 @@ export const policyApi = {
         : [],
       total: asNumber(payload.total),
       page: asNumber(payload.page, 1),
-      page_size: asNumber(payload.page_size, 20),
+      page_size: asNumber(payload.page_size, 12),
     }
   },
 
@@ -216,10 +218,14 @@ export const policyApi = {
     }
   },
 
-  async syncDocuments(forceRefresh = false): Promise<PolicySyncResponse> {
+  async syncDocuments(
+    forceRefresh = false,
+    accessToken?: string | null,
+  ): Promise<PolicySyncResponse> {
     const payload = await requestJson<unknown>('/api/admin/policy/sync', {
       method: 'POST',
       body: { force_refresh: forceRefresh },
+      accessToken: accessToken ?? undefined,
     })
     if (!isRecord(payload)) {
       return {

@@ -20,7 +20,7 @@ afterEach(() => {
 
 
 describe('policyApi', () => {
-  it('requests policy documents with filters and normalizes the page payload', async () => {
+  it('requests policy documents with filters, search scope and normalizes the page payload', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       jsonResponse({
         items: [
@@ -42,8 +42,8 @@ describe('policyApi', () => {
           },
         ],
         total: 1,
-        page: 1,
-        page_size: 20,
+        page: 2,
+        page_size: 12,
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -51,8 +51,9 @@ describe('policyApi', () => {
     const payload = await policyApi.getDocuments({
       authority: '国务院',
       keyword: '科技',
-      page: 1,
-      pageSize: 20,
+      searchScope: 'basic',
+      page: 2,
+      pageSize: 12,
     })
 
     expect(payload.total).toBe(1)
@@ -60,5 +61,32 @@ describe('policyApi', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/policy/documents?')
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('authority=%E5%9B%BD%E5%8A%A1%E9%99%A2')
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('keyword=%E7%A7%91%E6%8A%80')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('search_scope=basic')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('page=2')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('page_size=12')
+  })
+
+  it('sends access token when admin sync is triggered', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        job_id: 'job-1',
+        job_type: 'policy_sync',
+        status: 'success',
+        provider_count: 6,
+        raw_count: 10,
+        normalized_count: 10,
+        inserted_count: 8,
+        updated_count: 2,
+        deduped_count: 0,
+        failed_provider_count: 0,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await policyApi.syncDocuments(true, 'token-123')
+
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: 'Bearer token-123',
+    })
   })
 })

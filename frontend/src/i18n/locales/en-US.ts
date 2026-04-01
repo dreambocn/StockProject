@@ -377,6 +377,7 @@ export default {
     viewDetail: 'View Detail',
     openSource: 'Open Source',
     attachments: 'Attachments',
+    fulltextToggle: 'Include Content',
   },
   adminStocks: {
     kicker: 'MARKET CONTROL',

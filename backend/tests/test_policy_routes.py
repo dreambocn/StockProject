@@ -35,7 +35,7 @@ def _cleanup_context(engine) -> None:
     asyncio.run(engine.dispose())
 
 
-def test_policy_documents_route_supports_authority_and_keyword_filters(tmp_path: Path) -> None:
+def test_policy_documents_route_supports_search_scope_and_pagination(tmp_path: Path) -> None:
     engine, session_maker, client = _create_context(tmp_path)
     try:
         async def _seed() -> None:
@@ -90,22 +90,62 @@ def test_policy_documents_route_supports_authority_and_keyword_filters(tmp_path:
                             metadata_status="ready",
                             projection_status="pending",
                         ),
+                        PolicyDocument(
+                            id="policy-doc-3",
+                            source="gov_cn",
+                            source_document_id="gov-003",
+                            url_hash="hash-003",
+                            title="国务院关于设备更新的专项通知",
+                            summary="聚焦重点行业设备升级。",
+                            document_no="国发〔2026〕3号",
+                            issuing_authority="国务院",
+                            policy_level="state_council",
+                            category="industry",
+                            macro_topic="industrial_policy",
+                            industry_tags_json=["advanced_manufacturing"],
+                            market_tags_json=["a_share"],
+                            published_at=datetime(2026, 3, 29, 1, 0, tzinfo=UTC),
+                            effective_at=None,
+                            expired_at=None,
+                            url="https://www.gov.cn/zhengce/content/2026-03/29/content_000004.htm",
+                            content_text="本通知明确提出加大科技创新专项资金支持力度。",
+                            content_html="<p>本通知明确提出加大科技创新专项资金支持力度。</p>",
+                            raw_payload_json={"id": "gov-003"},
+                            metadata_status="ready",
+                            projection_status="projected",
+                        ),
                     ]
                 )
                 await session.commit()
 
         asyncio.run(_seed())
 
-        response = client.get(
-            "/api/policy/documents?authority=%E5%9B%BD%E5%8A%A1%E9%99%A2&keyword=%E7%A7%91%E6%8A%80",
+        basic_response = client.get(
+            "/api/policy/documents?authority=%E5%9B%BD%E5%8A%A1%E9%99%A2&keyword=%E7%A7%91%E6%8A%80&search_scope=basic",
         )
+        assert basic_response.status_code == 200
+        basic_payload = basic_response.json()
+        assert basic_payload["total"] == 1
+        assert basic_payload["items"][0]["id"] == "policy-doc-1"
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["total"] == 1
-        assert payload["items"][0]["id"] == "policy-doc-1"
-        assert payload["items"][0]["issuing_authority"] == "国务院"
-        assert payload["items"][0]["macro_topic"] == "industrial_policy"
+        fulltext_response = client.get(
+            "/api/policy/documents?authority=%E5%9B%BD%E5%8A%A1%E9%99%A2&keyword=%E7%A7%91%E6%8A%80&search_scope=fulltext",
+        )
+        assert fulltext_response.status_code == 200
+        fulltext_payload = fulltext_response.json()
+        assert fulltext_payload["total"] == 2
+        assert [item["id"] for item in fulltext_payload["items"]] == [
+            "policy-doc-1",
+            "policy-doc-3",
+        ]
+
+        pagination_response = client.get("/api/policy/documents?page=2&page_size=1")
+        assert pagination_response.status_code == 200
+        pagination_payload = pagination_response.json()
+        assert pagination_payload["total"] == 3
+        assert pagination_payload["page"] == 2
+        assert pagination_payload["page_size"] == 1
+        assert pagination_payload["items"][0]["id"] == "policy-doc-2"
     finally:
         client.close()
         _cleanup_context(engine)

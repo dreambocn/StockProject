@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +48,7 @@ async def list_policy_documents(
     authority: str | None = Query(default=None),
     category: str | None = Query(default=None),
     macro_topic: str | None = Query(default=None),
+    search_scope: Literal["basic", "fulltext"] = Query(default="basic"),
     published_from: str | None = Query(default=None),
     published_to: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
@@ -53,42 +56,47 @@ async def list_policy_documents(
     page_size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db_session),
 ) -> PolicyDocumentPageResponse:
-    statement = select(PolicyDocument)
+    filters: list[object] = []
 
     normalized_authority = authority.strip() if authority else ""
     if normalized_authority:
-        statement = statement.where(PolicyDocument.issuing_authority == normalized_authority)
+        filters.append(PolicyDocument.issuing_authority == normalized_authority)
 
     normalized_category = category.strip() if category else ""
     if normalized_category:
-        statement = statement.where(PolicyDocument.category == normalized_category)
+        filters.append(PolicyDocument.category == normalized_category)
 
     normalized_macro_topic = macro_topic.strip() if macro_topic else ""
     if normalized_macro_topic:
-        statement = statement.where(PolicyDocument.macro_topic == normalized_macro_topic)
+        filters.append(PolicyDocument.macro_topic == normalized_macro_topic)
 
     if keyword and keyword.strip():
         wildcard = f"%{keyword.strip()}%"
-        # 关键流程：关键词同时覆盖标题、摘要、文号和正文，方便直接从政策中心检索。
-        statement = statement.where(
+        keyword_statement = (
             PolicyDocument.title.ilike(wildcard)
             | PolicyDocument.summary.ilike(wildcard)
             | PolicyDocument.document_no.ilike(wildcard)
-            | PolicyDocument.content_text.ilike(wildcard)
         )
+        # 关键流程：默认仅走轻量字段匹配，只有显式开启全文检索时才扫描正文，降低列表首屏等待时间。
+        if search_scope == "fulltext":
+            keyword_statement = keyword_statement | PolicyDocument.content_text.ilike(
+                wildcard
+            )
+        filters.append(keyword_statement)
 
     if published_from:
-        statement = statement.where(PolicyDocument.published_at >= published_from)
+        filters.append(PolicyDocument.published_at >= published_from)
     if published_to:
-        statement = statement.where(PolicyDocument.published_at <= published_to)
+        filters.append(PolicyDocument.published_at <= published_to)
 
-    total = int(
-        (
-            await session.execute(
-                select(func.count()).select_from(statement.subquery())
-            )
-        ).scalar_one()
-    )
+    statement = select(PolicyDocument)
+    count_statement = select(func.count(PolicyDocument.id))
+    if filters:
+        statement = statement.where(*filters)
+        count_statement = count_statement.where(*filters)
+
+    # 关键流程：总数统计改为直接 count 主键，避免为分页额外包一层子查询。
+    total = int((await session.execute(count_statement)).scalar_one())
     rows = (
         await session.execute(
             statement

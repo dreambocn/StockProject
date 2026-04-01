@@ -376,6 +376,7 @@ export default {
     viewDetail: '查看详情',
     openSource: '查看原文',
     attachments: '附件',
+    fulltextToggle: '包含正文',
   },
   adminStocks: {
     kicker: 'MARKET CONTROL',
