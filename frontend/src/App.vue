@@ -183,9 +183,12 @@ const handleAuthAction = async () => {
     </div>
 
     <header class="terminal-header">
-      <div>
+      <div class="brand-block">
+        <img class="brand-logo" src="/logo-mark.svg" alt="脉策图标" />
+        <div>
         <p class="brand-kicker">{{ t('app.brandKicker') }}</p>
         <p class="brand-title">{{ t('app.brandTitle') }}</p>
+        </div>
       </div>
 
       <nav class="terminal-nav">
@@ -275,6 +278,19 @@ const handleAuthAction = async () => {
   box-shadow: var(--terminal-shadow);
 }
 
+.brand-block {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.brand-logo {
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 0.95rem;
+  flex-shrink: 0;
+}
+
 .brand-kicker {
   margin: 0;
   font-size: 0.88rem;
@@ -287,12 +303,11 @@ const handleAuthAction = async () => {
 
 .brand-title {
   margin: 0.2rem 0 0;
-  font-weight: 500;
-  font-size: 0.82rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--terminal-muted);
-  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.06em;
+  color: var(--terminal-text);
+  font-family: 'IBM Plex Sans', 'Microsoft YaHei', sans-serif;
 }
 
 .terminal-nav {

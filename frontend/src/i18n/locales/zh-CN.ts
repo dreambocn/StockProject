@@ -12,8 +12,8 @@ export default {
     language: '语言',
   },
   app: {
-    brandKicker: 'AI STOCK LAB',
-    brandTitle: 'by DreamBo',
+    brandKicker: 'PULSE STRATEGY',
+    brandTitle: '脉策',
   },
   home: {
     kicker: 'AI x MARKET SIGNALS',

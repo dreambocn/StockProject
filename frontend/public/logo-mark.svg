@@ -1,0 +1,40 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="18" y1="14" x2="110" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="pulse" x1="28" y1="80" x2="98" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <filter id="glow" x="0" y="0" width="128" height="128" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="10" y="10" width="108" height="108" rx="28" fill="url(#bg)"/>
+  <rect x="10.5" y="10.5" width="107" height="107" rx="27.5" stroke="rgba(255,255,255,0.08)"/>
+
+  <g opacity="0.12">
+    <path d="M24 92C42 76 56 74 72 58C82 48 90 42 104 42" stroke="#38BDF8" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <rect x="34" y="48" width="10" height="34" rx="5" fill="#34D399"/>
+  <rect x="37.75" y="36" width="2.5" height="56" rx="1.25" fill="#A7F3D0"/>
+
+  <g filter="url(#glow)">
+    <path
+      d="M28 80L47 63L60 70L83 42L98 49"
+      stroke="url(#pulse)"
+      stroke-width="8"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <circle cx="83" cy="42" r="5" fill="#F59E0B"/>
+  </g>
+</svg>

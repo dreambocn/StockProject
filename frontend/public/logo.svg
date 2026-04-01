@@ -1,0 +1,45 @@
+<svg width="440" height="120" viewBox="0 0 440 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="14" y1="14" x2="94" y2="106" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="pulse" x1="24" y1="74" x2="82" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="12" width="92" height="92" rx="24" fill="url(#bg)"/>
+  <rect x="8.5" y="12.5" width="91" height="91" rx="23.5" stroke="rgba(255,255,255,0.08)"/>
+
+  <rect x="30" y="46" width="8" height="28" rx="4" fill="#34D399"/>
+  <rect x="33" y="36" width="2" height="46" rx="1" fill="#A7F3D0"/>
+
+  <path
+    d="M24 74L40 60L51 66L70 40L82 46"
+    stroke="url(#pulse)"
+    stroke-width="7"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="70" cy="40" r="4.5" fill="#F59E0B"/>
+
+  <text
+    x="122"
+    y="56"
+    fill="#0F172A"
+    font-size="34"
+    font-weight="700"
+    font-family="Inter, Microsoft YaHei, PingFang SC, Noto Sans SC, sans-serif"
+  >脉策</text>
+
+  <text
+    x="122"
+    y="84"
+    fill="#475569"
+    font-size="14"
+    font-weight="500"
+    font-family="Inter, Microsoft YaHei, PingFang SC, Noto Sans SC, sans-serif"
+  >事件驱动股票研究工作台</text>
+</svg>
