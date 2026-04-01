@@ -56,6 +56,8 @@ export type AnalysisReportResponse = {
   token_usage_output?: number | null
   cost_estimate?: number | null
   failure_type?: string | null
+  evidence_event_count?: number
+  evidence_events?: AnalysisEventResponse[]
   web_sources?: Array<{
     title?: string
     url?: string
@@ -88,12 +90,34 @@ export type AnalysisReportArchiveListResponse = {
   items: AnalysisReportResponse[]
 }
 
+export type AnalysisReportEvidenceResponse = {
+  report_id: string
+  ts_code: string
+  event_count: number
+  events: AnalysisEventResponse[]
+}
+
 export type AnalysisSessionCreateResponse = {
   session_id: string | null
   report_id: string | null
   status: string
   reused: boolean
   cached: boolean
+}
+
+export type AnalysisSessionStatusResponse = {
+  session_id: string
+  status: string
+  current_stage: string | null
+  stage_message: string | null
+  summary_preview: string | null
+  progress_current: number | null
+  progress_total: number | null
+  report_id: string | null
+  error_message: string | null
+  started_at: string | null
+  completed_at: string | null
+  heartbeat_at: string | null
 }
 
 export type AnalysisSessionStatusEvent = {
@@ -149,6 +173,12 @@ export const analysisApi = {
     )
   },
 
+  async getAnalysisReportEvidence(reportId: string) {
+    return requestJson<AnalysisReportEvidenceResponse>(
+      `/api/analysis/reports/${encodeURIComponent(reportId)}/evidence`,
+    )
+  },
+
   async createAnalysisSession(
     tsCode: string,
     payload: {
@@ -189,6 +219,12 @@ export const analysisApi = {
       completed: (payload) => handlers.onCompleted?.(payload as AnalysisSessionCompletedEvent),
       error: (payload) => handlers.onError?.(payload as AnalysisSessionErrorEvent),
     })
+  },
+
+  async getAnalysisSessionStatus(sessionId: string) {
+    return requestJson<AnalysisSessionStatusResponse>(
+      `/api/analysis/sessions/${encodeURIComponent(sessionId)}`,
+    )
   },
 
   async exportReport(reportId: string, format: 'markdown' | 'html') {

@@ -50,6 +50,7 @@ from app.services.stock_sync_service import (
 )
 from app.services.stock_list_status import parse_stock_list_status_filter
 from app.services.stock_listing_service import list_stock_items_with_quote_completion
+from app.services.stock_quote_service import load_resolved_latest_snapshot
 from app.services.stock_tushare_mapper import (
     map_tushare_daily_row_to_snapshot_response,
 )
@@ -242,7 +243,6 @@ async def _fetch_latest_daily_quotes_from_tushare(
 
     end_date = date.today()
     start_date = end_date - timedelta(days=45)
-    # 拉取最近约 45 天，确保覆盖最新交易日与节假日空窗。
     try:
         rows = await gateway.fetch_daily_by_range(
             ts_code=",".join(ts_codes),
@@ -252,7 +252,6 @@ async def _fetch_latest_daily_quotes_from_tushare(
     except Exception:
         return {}
 
-    # 关键流程：首页列表补全必须以“最近可用交易日”为准，按 ts_code 选取最新 trade_date 的行情。
     latest_by_code: dict[str, StockDailySnapshotResponse] = {}
     for row in rows:
         raw_ts_code = str(row.get("ts_code") or "").strip().upper()
@@ -272,7 +271,6 @@ async def _fetch_latest_daily_quotes_from_tushare(
     if not latest_by_code:
         return {}
 
-    # 关键状态流转：回源成功后立即落库，后续列表请求优先命中数据库，避免重复访问三方接口。
     try:
         for ts_code, quote in latest_by_code.items():
             await repo_upsert_kline_rows(
@@ -491,14 +489,13 @@ async def get_stock_detail(
             detail="stock not found",
         )
 
-    latest_snapshot = await _fetch_latest_snapshot(session, normalized_ts_code)
+    latest_snapshot = await load_resolved_latest_snapshot(
+        session,
+        ts_code=normalized_ts_code,
+    )
     return StockDetailResponse(
         instrument=StockInstrumentResponse.model_validate(instrument),
-        latest_snapshot=(
-            _to_daily_snapshot_response(latest_snapshot)
-            if latest_snapshot is not None
-            else None
-        ),
+        latest_snapshot=latest_snapshot,
     )
 
 

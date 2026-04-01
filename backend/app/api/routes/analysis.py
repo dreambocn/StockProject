@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,14 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db_session
 from app.schemas.analysis import (
     AnalysisReportArchiveListResponse,
+    AnalysisReportEvidenceResponse,
     AnalysisSessionCreateRequest,
     AnalysisSessionCreateResponse,
+    AnalysisSessionStatusResponse,
     StockAnalysisSummaryResponse,
 )
 from app.services.analysis_repository import load_analysis_session
 from app.services.analysis_runtime_service import event_bus
 from app.services.analysis_service import (
     AnalysisNotFoundError,
+    AnalysisReportNotFoundError,
+    get_analysis_report_evidence,
     get_stock_analysis_summary,
     list_stock_analysis_report_archives,
     start_analysis_session,
@@ -28,6 +32,14 @@ from app.services.analysis_export_service import (
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+
+
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @router.get("/stocks/{ts_code}/summary", response_model=StockAnalysisSummaryResponse)
@@ -75,6 +87,36 @@ async def create_analysis_session_route(
     except AnalysisNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return AnalysisSessionCreateResponse.model_validate(payload)
+
+
+@router.get(
+    "/sessions/{session_id}",
+    response_model=AnalysisSessionStatusResponse,
+)
+async def get_analysis_session_status_route(
+    session_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisSessionStatusResponse:
+    session_row = await load_analysis_session(session, session_id)
+    if session_row is None:
+        raise HTTPException(status_code=404, detail="analysis session not found")
+
+    return AnalysisSessionStatusResponse.model_validate(
+        {
+            "session_id": session_row.id,
+            "status": session_row.status,
+            "current_stage": session_row.current_stage,
+            "stage_message": session_row.stage_message,
+            "summary_preview": session_row.summary_preview,
+            "progress_current": session_row.progress_current,
+            "progress_total": session_row.progress_total,
+            "report_id": session_row.report_id,
+            "error_message": session_row.error_message,
+            "started_at": _normalize_utc_datetime(session_row.started_at),
+            "completed_at": _normalize_utc_datetime(session_row.completed_at),
+            "heartbeat_at": _normalize_utc_datetime(session_row.heartbeat_at),
+        }
+    )
 
 
 @router.get(
@@ -135,6 +177,21 @@ async def export_analysis_report_route(
             )
         },
     )
+
+
+@router.get(
+    "/reports/{report_id}/evidence",
+    response_model=AnalysisReportEvidenceResponse,
+)
+async def get_analysis_report_evidence_route(
+    report_id: str,
+    session: AsyncSession = Depends(get_db_session),
+) -> AnalysisReportEvidenceResponse:
+    try:
+        payload = await get_analysis_report_evidence(session, report_id)
+    except AnalysisReportNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return AnalysisReportEvidenceResponse.model_validate(payload)
 
 
 def _to_sse_payload(event: str, payload: dict[str, object]) -> str:

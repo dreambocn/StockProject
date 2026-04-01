@@ -82,6 +82,9 @@ async def load_recent_news_events(
         scope_conditions.append(
             and_(NewsEvent.scope == "hot", NewsEvent.macro_topic == topic)
         )
+    else:
+        # 默认分析必须混入热点上下文，避免只剩个股与政策事件。
+        scope_conditions.append(NewsEvent.scope == "hot")
 
     base_statement = select(NewsEvent).where(or_(*scope_conditions))
     if topic:
@@ -219,6 +222,8 @@ async def create_analysis_report(
     completed_at: datetime | None,
     content_format: str,
     structured_sources: list[dict[str, object]] | None,
+    evidence_event_count: int | None,
+    evidence_events: list[dict[str, object]] | None,
     web_sources: list[dict[str, object]] | None,
     prompt_version: str | None = None,
     model_name: str | None = None,
@@ -248,6 +253,8 @@ async def create_analysis_report(
         completed_at=completed_at,
         content_format=content_format,
         structured_sources=structured_sources,
+        evidence_event_count=evidence_event_count,
+        evidence_events=evidence_events,
         web_sources=web_sources,
         prompt_version=prompt_version,
         model_name=model_name,
@@ -333,6 +340,13 @@ async def load_latest_report(
     return (await session.execute(statement)).scalar_one_or_none()
 
 
+async def load_analysis_report_by_id(
+    session: AsyncSession,
+    report_id: str,
+) -> AnalysisReport | None:
+    return await session.get(AnalysisReport, report_id)
+
+
 async def load_latest_fresh_report(
     session: AsyncSession,
     *,
@@ -412,6 +426,10 @@ async def create_analysis_session_record(
         trigger_source=trigger_source,
         trigger_source_group=build_trigger_source_group(trigger_source),
         status="queued",
+        current_stage="queued",
+        stage_message="等待分析任务执行",
+        progress_current=0,
+        progress_total=0,
         system_job_id=system_job_id,
         prompt_version=prompt_version,
         model_name=model_name,

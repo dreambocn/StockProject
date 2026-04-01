@@ -7,6 +7,7 @@ import MarkdownContent from '../components/MarkdownContent.vue'
 import {
   analysisApi,
   type AnalysisReportResponse,
+  type AnalysisEventResponse,
   type StockAnalysisSummaryResponse,
 } from '../api/analysis'
 import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
@@ -14,6 +15,10 @@ import { useAuthStore } from '../stores/auth'
 
 type EventFilterKey = 'all' | 'high-related' | 'policy' | 'announcement' | 'news' | 'pending'
 type SourceKind = 'hot_news' | 'stock_detail' | 'direct'
+type ReportEvidencePayload = {
+  event_count: number
+  events: AnalysisEventResponse[]
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -29,6 +34,9 @@ const showAllFactors = ref(false)
 const selectedReportId = ref<string | null>(null)
 const streamingMarkdown = ref('')
 const streaming = ref(false)
+const streamingStageMessage = ref('')
+const lastHeartbeatValue = ref('')
+const lastHeartbeatObservedAt = ref<number | null>(null)
 const exportLoading = ref(false)
 const useWebSearch = ref(false)
 const webSearchInherited = ref(false)
@@ -37,12 +45,26 @@ const watchlistLoading = ref(false)
 const watchlistItem = ref<WatchlistItemResponse | null>(null)
 // 通过递增版本号标识“本轮加载”，用于拦截并发返回的过期数据。
 const workbenchLoadVersion = ref(0)
+const reportEvidenceCache = ref<Record<string, ReportEvidencePayload>>({})
+const activeEvidenceEvents = ref<AnalysisEventResponse[]>([])
+const activeEvidenceTotal = ref(0)
 
 let stopSessionStream: (() => void) | null = null
+let sessionPollTimer: ReturnType<typeof window.setTimeout> | null = null
+let activePollingToken = 0
+let activeEvidenceLoadToken = 0
 
 const stopStreaming = () => {
   stopSessionStream?.()
   stopSessionStream = null
+  if (sessionPollTimer !== null) {
+    window.clearTimeout(sessionPollTimer)
+    sessionPollTimer = null
+  }
+  activePollingToken += 1
+  streamingStageMessage.value = ''
+  lastHeartbeatValue.value = ''
+  lastHeartbeatObservedAt.value = null
 }
 
 // 仅允许最新请求写回界面，避免路由切换后的旧响应覆盖新状态。
@@ -137,6 +159,24 @@ const getCorrelationPercent = (value: number | null | undefined) => {
   return Math.max(0, Math.min(100, Math.round(value * 100)))
 }
 
+const hasCorrelationMetric = (value: number | null | undefined) => typeof value === 'number'
+
+const resolveRoundedMetricSignature = (value: number, fractionDigits = 2) => value.toFixed(fractionDigits)
+
+const hasUsefulMetricDifference = (
+  events: AnalysisEventResponse[],
+  selector: (event: AnalysisEventResponse) => number | null | undefined,
+  fractionDigits = 2,
+) => {
+  const values = events
+    .map(selector)
+    .filter((value): value is number => typeof value === 'number' && !Number.isNaN(value))
+  if (values.length < 2) {
+    return false
+  }
+  return new Set(values.map((value) => resolveRoundedMetricSignature(value, fractionDigits))).size > 1
+}
+
 const translateStatus = (value: StockAnalysisSummaryResponse['status'] | string | null | undefined) => {
   if (!value) {
     return t('analysisWorkbench.pendingStatus')
@@ -210,7 +250,7 @@ const sourceLabel = computed(() => t(`analysisWorkbench.sourceText.${sourceKind.
 const displayName = computed(() => summary.value?.instrument?.name ?? tsCode.value)
 const displayStatus = computed(() => translateStatus(summary.value?.status))
 const generatedAtLabel = computed(() =>
-  formatDateTime(summary.value?.report?.generated_at ?? summary.value?.generated_at),
+  formatDateTime(selectedReport.value?.generated_at ?? summary.value?.generated_at),
 )
 const selectedReport = computed(() => {
   if (selectedReportId.value) {
@@ -221,9 +261,11 @@ const selectedReport = computed(() => {
   }
   return summary.value?.report ?? reportArchives.value[0] ?? null
 })
+const displayedReportId = computed(() => selectedReport.value?.id ?? null)
 const activeSummaryMarkdown = computed(() => streamingMarkdown.value || selectedReport.value?.summary || '')
 const reportAvailable = computed(() => Boolean(activeSummaryMarkdown.value))
 const withoutReport = computed(() => Boolean(summary.value && !summary.value.report && !streamingMarkdown.value))
+const streamingHint = computed(() => streamingStageMessage.value || t('analysisWorkbench.streamHint'))
 const needsFallbackHint = computed(
   () => Boolean(selectedReport.value) && (selectedReport.value?.status ?? summary.value?.status) === 'partial',
 )
@@ -274,7 +316,7 @@ const visibleFactors = computed(() =>
 const hasMoreFactors = computed(() => sortedFactors.value.length > 3)
 
 const sortedEvents = computed(() => {
-  const events = summary.value?.events ?? []
+  const events = activeEvidenceEvents.value
   return [...events].sort((left, right) => {
     if (left.event_id === eventId.value && right.event_id !== eventId.value) {
       return -1
@@ -322,10 +364,46 @@ const filteredEvents = computed(() => {
   })
 })
 
+const visibleEvidenceMetricFlags = computed(() => ({
+  windowReturn: hasUsefulMetricDifference(filteredEvents.value, (event) => event.window_return_pct),
+  windowVolatility: hasUsefulMetricDifference(filteredEvents.value, (event) => event.window_volatility),
+  abnormalVolume: hasUsefulMetricDifference(filteredEvents.value, (event) => event.abnormal_volume_ratio),
+}))
+
+const hasVisibleEvidenceMetricGroup = computed(() =>
+  Object.values(visibleEvidenceMetricFlags.value).some((value) => value),
+)
+
+const hasVisibleEvidenceMetrics = (event: AnalysisEventResponse) => {
+  const metricFlags = visibleEvidenceMetricFlags.value
+  return (
+    (metricFlags.windowReturn && typeof event.window_return_pct === 'number')
+    || (metricFlags.windowVolatility && typeof event.window_volatility === 'number')
+    || (metricFlags.abnormalVolume && typeof event.abnormal_volume_ratio === 'number')
+  )
+}
+
+const emptyEventMessage = computed(() => {
+  switch (selectedEventFilter.value) {
+    case 'high-related':
+      return t('analysisWorkbench.noEventsByFilter.highRelated')
+    case 'policy':
+      return t('analysisWorkbench.noEventsByFilter.policy')
+    case 'announcement':
+      return t('analysisWorkbench.noEventsByFilter.announcement')
+    case 'news':
+      return t('analysisWorkbench.noEventsByFilter.news')
+    case 'pending':
+      return t('analysisWorkbench.noEventsByFilter.pending')
+    default:
+      return t('analysisWorkbench.noEvents')
+  }
+})
+
 const hotNewsAnchorEvent = computed(() => {
   const matchedEvent =
     (eventId.value
-      ? summary.value?.events?.find((item) => item.event_id === eventId.value)
+      ? activeEvidenceEvents.value.find((item) => item.event_id === eventId.value)
       : null)
     ?? filteredEvents.value[0]
     ?? sortedEvents.value[0]
@@ -357,7 +435,7 @@ const overviewItems = computed(() => [
   {
     key: 'events',
     label: t('analysisWorkbench.metricEvents'),
-    value: String(summary.value?.event_count ?? 0),
+    value: String(activeEvidenceTotal.value),
   },
   {
     key: 'factor',
@@ -485,6 +563,82 @@ const loadReports = async (requestVersion: number) => {
     if (isLatestWorkbenchRequest(requestVersion)) {
       reportArchives.value = []
     }
+  }
+}
+
+const applyActiveEvidence = (events: AnalysisEventResponse[], total: number) => {
+  activeEvidenceEvents.value = events
+  activeEvidenceTotal.value = Math.max(total, events.length)
+}
+
+const resolveInlineEvidence = (report: AnalysisReportResponse | null) => {
+  if (!report) {
+    return null
+  }
+
+  if (report.evidence_events?.length) {
+    return {
+      event_count: report.evidence_event_count ?? report.evidence_events.length,
+      events: report.evidence_events,
+    } satisfies ReportEvidencePayload
+  }
+
+  const summaryReport = summary.value?.report
+  if (summaryReport?.id && report.id === summaryReport.id) {
+    return {
+      event_count: summary.value?.event_count ?? summary.value?.events.length ?? 0,
+      events: summary.value?.events ?? [],
+    } satisfies ReportEvidencePayload
+  }
+
+  return null
+}
+
+const syncActiveEvidence = async () => {
+  const currentReport = selectedReport.value
+  const inlineEvidence = resolveInlineEvidence(currentReport)
+  if (inlineEvidence) {
+    applyActiveEvidence(inlineEvidence.events, inlineEvidence.event_count)
+    return
+  }
+
+  if (!currentReport?.id) {
+    const summaryEvents = summary.value?.events ?? []
+    applyActiveEvidence(summaryEvents, summary.value?.event_count ?? summaryEvents.length)
+    return
+  }
+
+  const cachedEvidence = reportEvidenceCache.value[currentReport.id]
+  if (cachedEvidence) {
+    applyActiveEvidence(cachedEvidence.events, cachedEvidence.event_count)
+    return
+  }
+
+  const currentLoadToken = activeEvidenceLoadToken + 1
+  activeEvidenceLoadToken = currentLoadToken
+  // 关键流程：历史报告切换时先清空旧证据，避免上一份报告的证据在异步请求返回前残留。
+  applyActiveEvidence([], currentReport.evidence_event_count ?? 0)
+  try {
+    const payload = await analysisApi.getAnalysisReportEvidence(currentReport.id)
+    if (
+      currentLoadToken !== activeEvidenceLoadToken
+      || displayedReportId.value !== currentReport.id
+    ) {
+      return
+    }
+    reportEvidenceCache.value = {
+      ...reportEvidenceCache.value,
+      [currentReport.id]: payload,
+    }
+    applyActiveEvidence(payload.events, payload.event_count)
+  } catch {
+    if (
+      currentLoadToken !== activeEvidenceLoadToken
+      || displayedReportId.value !== currentReport.id
+    ) {
+      return
+    }
+    applyActiveEvidence([], currentReport.evidence_event_count ?? 0)
   }
 }
 
@@ -648,6 +802,70 @@ const updateUseWebSearch = (value: boolean) => {
   webSearchInherited.value = false
 }
 
+const scheduleSessionPoll = (sessionId: string, pollingToken: number) => {
+  if (pollingToken !== activePollingToken) {
+    return
+  }
+  sessionPollTimer = window.setTimeout(() => {
+    void pollAnalysisSession(sessionId, pollingToken)
+  }, 1000)
+}
+
+const pollAnalysisSession = async (sessionId: string, pollingToken: number) => {
+  if (pollingToken !== activePollingToken) {
+    return
+  }
+
+  try {
+    const payload = await analysisApi.getAnalysisSessionStatus(sessionId)
+    if (pollingToken !== activePollingToken) {
+      return
+    }
+
+    if (payload.summary_preview) {
+      streamingMarkdown.value = payload.summary_preview
+    }
+    streamingStageMessage.value = payload.stage_message || ''
+
+    if (payload.heartbeat_at) {
+      if (payload.heartbeat_at !== lastHeartbeatValue.value) {
+        lastHeartbeatValue.value = payload.heartbeat_at
+        lastHeartbeatObservedAt.value = Date.now()
+      }
+    }
+    const heartbeatExpired =
+      payload.status !== 'completed'
+      && payload.status !== 'failed'
+      && lastHeartbeatObservedAt.value !== null
+      && Date.now() - lastHeartbeatObservedAt.value > 45_000
+
+    if (payload.status === 'completed') {
+      streaming.value = false
+      stopStreaming()
+      await loadWorkbench()
+      return
+    }
+
+    if (payload.status === 'failed' || heartbeatExpired) {
+      streaming.value = false
+      errorMessage.value = heartbeatExpired
+        ? '分析任务长时间未更新，请稍后重试'
+        : String(payload.error_message || t('analysisWorkbench.error'))
+      stopStreaming()
+      return
+    }
+
+    scheduleSessionPoll(sessionId, pollingToken)
+  } catch {
+    if (pollingToken !== activePollingToken) {
+      return
+    }
+    streaming.value = false
+    errorMessage.value = t('analysisWorkbench.error')
+    stopStreaming()
+  }
+}
+
 const refreshAnalysis = async () => {
   if (!tsCode.value) {
     return
@@ -656,6 +874,7 @@ const refreshAnalysis = async () => {
   stopStreaming()
   streaming.value = true
   streamingMarkdown.value = ''
+  streamingStageMessage.value = ''
 
   try {
     const session = await analysisApi.createAnalysisSession(tsCode.value, {
@@ -672,27 +891,9 @@ const refreshAnalysis = async () => {
       return
     }
 
-    stopSessionStream = analysisApi.openAnalysisSessionEvents(
-      session.session_id,
-      {
-        onDelta: (payload) => {
-          // 流式增量只更新摘要区文本，避免打断其他卡片渲染。
-          streamingMarkdown.value = String(payload.content ?? '')
-        },
-        onCompleted: async () => {
-          streaming.value = false
-          stopStreaming()
-          await loadWorkbench()
-        },
-        onError: (payload) => {
-          streaming.value = false
-          // 服务端错误时保留已有内容，并给出统一错误提示。
-          errorMessage.value = String(payload.detail ?? t('analysisWorkbench.error'))
-          stopStreaming()
-        },
-      },
-      { reused: session.reused },
-    )
+    activePollingToken += 1
+    const pollingToken = activePollingToken
+    await pollAnalysisSession(session.session_id, pollingToken)
   } catch {
     streaming.value = false
     errorMessage.value = t('analysisWorkbench.error')
@@ -703,13 +904,26 @@ const triggerReportDownload = (content: string, fileName: string, mimeType: stri
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     return
   }
-  const blob = new Blob([content], { type: mimeType })
+  const normalizedContent = mimeType.includes('text/markdown') ? `\uFEFF${content}` : content
+  const blob = new Blob([normalizedContent], { type: mimeType })
   const objectUrl = window.URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = objectUrl
   anchor.download = fileName
+  try {
+    document.body.appendChild(anchor)
+  } catch {
+    // 测试环境中的锚点桩对象不是原生节点时，允许跳过真实挂载。
+  }
   anchor.click()
-  window.URL.revokeObjectURL(objectUrl)
+  try {
+    document.body.removeChild(anchor)
+  } catch {
+    // 同上：测试桩对象可能无法作为真实节点移除。
+  }
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(objectUrl)
+  }, 0)
 }
 
 const exportSelectedReport = async (format: 'markdown' | 'html') => {
@@ -719,6 +933,9 @@ const exportSelectedReport = async (format: 'markdown' | 'html') => {
   exportLoading.value = true
   try {
     const content = await analysisApi.exportReport(selectedReport.value.id, format)
+    if (!content.trim()) {
+      throw new Error('empty_export_content')
+    }
     const suffix = format === 'html' ? 'html' : 'md'
     triggerReportDownload(
       content,
@@ -731,6 +948,14 @@ const exportSelectedReport = async (format: 'markdown' | 'html') => {
     exportLoading.value = false
   }
 }
+
+watch(
+  [selectedReport, summary, reportArchives],
+  () => {
+    void syncActiveEvidence()
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
   void loadWorkbench()
@@ -765,6 +990,10 @@ watch(
     streaming.value = false
     selectedReportId.value = null
     streamingMarkdown.value = ''
+    reportEvidenceCache.value = {}
+    activeEvidenceEvents.value = []
+    activeEvidenceTotal.value = 0
+    activeEvidenceLoadToken += 1
     // 路由上下文变化时重置继承状态，避免旧股票影响新分析。
     useWebSearch.value = false
     webSearchInherited.value = false
@@ -974,7 +1203,7 @@ watch(
 
               <template v-if="reportAvailable">
                 <p v-if="streaming" class="analysis-summary__hint">
-                  {{ t('analysisWorkbench.streamHint') }}
+                  {{ streamingHint }}
                 </p>
                 <p v-if="needsFallbackHint" class="analysis-summary__hint">
                   {{ t('analysisWorkbench.partialHint') }}
@@ -986,6 +1215,9 @@ watch(
                   v-if="selectedReport?.structured_sources?.length"
                   class="analysis-source-evidence"
                 >
+                  <span class="analysis-source-evidence__label">
+                    {{ t('analysisWorkbench.inputSourcesLabel') }}
+                  </span>
                   <span
                     v-for="sourceItem in selectedReport.structured_sources"
                     :key="`${sourceItem.provider}-${sourceItem.count}`"
@@ -1035,11 +1267,13 @@ watch(
               </template>
 
               <template v-else-if="withoutReport">
+                <p v-if="streaming" class="analysis-summary__hint">{{ streamingHint }}</p>
                 <p class="analysis-summary__pending-title">{{ t('analysisWorkbench.pendingTitle') }}</p>
                 <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
               </template>
 
               <template v-else>
+                <p v-if="streaming" class="analysis-summary__hint">{{ streamingHint }}</p>
                 <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
               </template>
             </el-card>
@@ -1145,7 +1379,7 @@ watch(
                   <h2 class="analysis-panel__title">{{ t('analysisWorkbench.eventsSubtitle') }}</h2>
                 </div>
                 <span class="analysis-panel__meta">
-                  {{ filteredEvents.length }} / {{ summary?.event_count ?? 0 }}
+                  {{ filteredEvents.length }} / {{ activeEvidenceTotal }}
                 </span>
               </div>
 
@@ -1195,7 +1429,7 @@ watch(
                     </span>
                   </div>
 
-                  <div class="analysis-event-card__score">
+                  <div v-if="hasCorrelationMetric(event.correlation_score)" class="analysis-event-card__score">
                     <div class="analysis-event-card__score-head">
                       <span>{{ t('analysisWorkbench.correlation') }}</span>
                       <strong>{{ getCorrelationPercent(event.correlation_score) }}/100</strong>
@@ -1205,23 +1439,30 @@ watch(
                     </div>
                   </div>
 
-                  <div class="analysis-event-card__stats">
-                    <div>
+                  <div
+                    v-if="hasVisibleEvidenceMetricGroup && hasVisibleEvidenceMetrics(event)"
+                    class="analysis-event-card__stats"
+                  >
+                    <div v-if="visibleEvidenceMetricFlags.windowReturn && typeof event.window_return_pct === 'number'">
                       <span>{{ t('analysisWorkbench.windowReturn') }}</span>
                       <strong>{{ formatPercent(event.window_return_pct) }}</strong>
                     </div>
-                    <div>
+                    <div
+                      v-if="visibleEvidenceMetricFlags.windowVolatility && typeof event.window_volatility === 'number'"
+                    >
                       <span>{{ t('analysisWorkbench.windowVolatility') }}</span>
                       <strong>{{ formatMetricNumber(event.window_volatility) }}</strong>
                     </div>
-                    <div>
+                    <div
+                      v-if="visibleEvidenceMetricFlags.abnormalVolume && typeof event.abnormal_volume_ratio === 'number'"
+                    >
                       <span>{{ t('analysisWorkbench.abnormalVolume') }}</span>
                       <strong>{{ formatMetricNumber(event.abnormal_volume_ratio) }}</strong>
                     </div>
                   </div>
                 </article>
               </div>
-              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noEvents') }}</p>
+              <p v-else class="analysis-empty-note">{{ emptyEventMessage }}</p>
             </el-card>
           </div>
         </div>
@@ -1619,6 +1860,11 @@ watch(
   display: flex;
   gap: 0.45rem;
   flex-wrap: wrap;
+}
+
+.analysis-source-evidence__label {
+  color: var(--terminal-text-soft);
+  font-size: 0.82rem;
 }
 
 .analysis-runtime-meta {

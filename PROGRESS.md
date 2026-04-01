@@ -1,9 +1,14 @@
 # Project Progress
 
-Last update: 2026-03-31
+Last update: 2026-04-01
 
 ## Completed
 
+- Improved local dev shutdown behavior:
+  - FastAPI lifespan now disposes the global SQLAlchemy engine on shutdown
+  - Analysis worker and watchlist worker now release the database connection pool in `finally`
+  - Added root `stop-dev.ps1` to stop services launched by `start-dev.ps1` via recorded PID metadata
+  - `start-dev.ps1` now records launched service PIDs and blocks duplicate startup when the previous dev session is still running
 - Extended policy data consumption into user-facing pages:
   - Hot News impact panel now renders related policy documents for the selected macro topic
   - Analysis workbench now labels policy sources as readable "policy source" evidence instead of raw provider keys

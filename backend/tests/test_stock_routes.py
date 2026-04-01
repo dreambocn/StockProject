@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.deps.auth import get_current_user
@@ -14,6 +15,7 @@ from app.db.session import get_db_session
 from app.main import app
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
+from app.models.stock_kline_bar import StockKlineBar
 from app.models.user import User
 
 
@@ -221,6 +223,47 @@ def test_stock_detail_returns_latest_snapshot(stock_client: TestClient) -> None:
     assert payload["instrument"]["ts_code"] == "600000.SH"
     assert payload["latest_snapshot"]["trade_date"] == "2026-03-03"
     assert payload["latest_snapshot"]["close"] == 8.25
+
+
+def test_stock_detail_backfills_latest_snapshot_from_daily_kline_db(
+    stock_client: TestClient,
+) -> None:
+    async def _prepare_backfill_rows() -> None:
+        override_session = app.dependency_overrides[get_db_session]
+        async for session in override_session():
+            await session.execute(
+                delete(StockDailySnapshot).where(
+                    StockDailySnapshot.ts_code == '000001.SZ',
+                )
+            )
+            session.add(
+                StockKlineBar(
+                    ts_code='000001.SZ',
+                    period='daily',
+                    trade_date=date(2026, 3, 2),
+                    end_date=None,
+                    open=Decimal('12.00'),
+                    high=Decimal('12.30'),
+                    low=Decimal('11.80'),
+                    close=Decimal('12.10'),
+                    pre_close=Decimal('11.95'),
+                    change=Decimal('0.15'),
+                    pct_chg=Decimal('1.26'),
+                    vol=Decimal('456789.00'),
+                    amount=Decimal('654321.00'),
+                )
+            )
+            await session.commit()
+            break
+
+    asyncio.run(_prepare_backfill_rows())
+    response = stock_client.get('/api/stocks/000001.SZ')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['instrument']['ts_code'] == '000001.SZ'
+    assert payload['latest_snapshot']['trade_date'] == '2026-03-02'
+    assert payload['latest_snapshot']['close'] == 12.1
 
 
 def test_stocks_list_backfills_price_and_date_from_kline_db(

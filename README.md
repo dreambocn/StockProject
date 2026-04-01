@@ -171,6 +171,30 @@ Set-Location 'E:\Development\Project\StockProject'
 pwsh -File .\start-dev.ps1 -DryRun
 ```
 
+### 6. 停止开发环境（推荐）
+
+> 不要只关闭启动脚本窗口。`start-dev.ps1` 会拉起独立终端，单独关掉启动器窗口不会停止后端与 Worker。
+
+推荐使用统一停服脚本：
+
+```powershell
+Set-Location 'E:\Development\Project\StockProject'
+pwsh -File .\stop-dev.ps1
+```
+
+如果只想查看将被停止的进程，可先执行：
+
+```powershell
+Set-Location 'E:\Development\Project\StockProject'
+pwsh -File .\stop-dev.ps1 -DryRun
+```
+
+说明：
+
+- `stop-dev.ps1` 会读取 `start-dev.ps1` 记录的开发服务 PID。
+- 脚本会优先请求窗口正常关闭，让 API / Worker 触发优雅退出并释放数据库连接池。
+- 若超时未退出，脚本会自动回退到强制停止。
+
 ## 单独运行
 
 ### 后端 API

@@ -38,3 +38,8 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     # 会话生命周期与请求绑定，保证事务边界清晰且连接可回收。
     async with SessionLocal() as session:
         yield session
+
+
+async def dispose_engine() -> None:
+    # 统一关闭连接池，供 API 生命周期与后台 Worker 退出时复用。
+    await engine.dispose()

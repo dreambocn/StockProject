@@ -222,6 +222,82 @@ def test_load_recent_news_events_candidate_limit_returns_larger_candidate_pool(
         asyncio.run(engine.dispose())
 
 
+def test_load_recent_news_events_includes_hot_context_when_topic_missing(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            base_time = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+            session.add_all(
+                [
+                    NewsEvent(
+                        id='stock-1',
+                        scope='stock',
+                        cache_variant='with_announcements',
+                        ts_code='000001.SZ',
+                        symbol='000001',
+                        title='个股事件',
+                        summary='个股摘要',
+                        published_at=base_time - timedelta(minutes=3),
+                        url='https://example.com/stock-1',
+                        publisher='测试源',
+                        source='eastmoney_stock',
+                        fetched_at=base_time - timedelta(minutes=3),
+                    ),
+                    NewsEvent(
+                        id='policy-1',
+                        scope='policy',
+                        cache_variant='policy_source',
+                        ts_code=None,
+                        symbol=None,
+                        title='政策事件',
+                        summary='政策摘要',
+                        published_at=base_time - timedelta(minutes=2),
+                        url='https://example.com/policy-1',
+                        publisher='政策源',
+                        source='miit',
+                        macro_topic='industrial_policy',
+                        fetched_at=base_time - timedelta(minutes=2),
+                    ),
+                    NewsEvent(
+                        id='hot-1',
+                        scope='hot',
+                        cache_variant='global',
+                        ts_code=None,
+                        symbol=None,
+                        title='热点事件',
+                        summary='热点摘要',
+                        published_at=base_time - timedelta(minutes=1),
+                        url='https://example.com/hot-1',
+                        publisher='热点源',
+                        source='eastmoney_global',
+                        macro_topic='commodity_supply',
+                        fetched_at=base_time,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            rows = await load_recent_news_events(
+                session,
+                '000001.SZ',
+                topic=None,
+                anchor_event_id=None,
+                published_from=None,
+                published_to=None,
+                limit=10,
+            )
+
+            assert {row.scope for row in rows} == {'stock', 'policy', 'hot'}
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
 def test_load_analysis_events_candidate_limit_supports_summary_oversampling(
     tmp_path: Path,
 ) -> None:

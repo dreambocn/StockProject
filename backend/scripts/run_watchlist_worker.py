@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from app.core.logging import get_logger, setup_logging, should_emit_periodic_log
 from app.db.init_db import ensure_database_schema
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, dispose_engine
 from app.services.watchlist_worker_service import (
     refresh_candidate_evidence_caches,
     is_trade_day,
@@ -78,45 +78,52 @@ async def _run_once(
 async def main() -> None:
     setup_logging()
     LOGGER.info("event=watchlist_worker_starting timezone=%s", HONG_KONG_TZ.key)
-    await ensure_database_schema()
+    try:
+        await ensure_database_schema()
 
-    hourly_marker: str | None = None
-    daily_marker: str | None = None
-    last_idle_log_at: datetime | None = None
+        hourly_marker: str | None = None
+        daily_marker: str | None = None
+        last_idle_log_at: datetime | None = None
 
-    while True:
-        try:
-            now = datetime.now(HONG_KONG_TZ).replace(second=0, microsecond=0)
-            previous_hourly_marker = hourly_marker
-            previous_daily_marker = daily_marker
-            hourly_marker, daily_marker = await _run_once(
-                now=now,
-                hourly_marker=hourly_marker,
-                daily_marker=daily_marker,
-            )
-            if (
-                previous_hourly_marker == hourly_marker
-                and previous_daily_marker == daily_marker
-            ):
-                if should_emit_periodic_log(
-                    last_idle_log_at,
+        while True:
+            try:
+                now = datetime.now(HONG_KONG_TZ).replace(second=0, microsecond=0)
+                previous_hourly_marker = hourly_marker
+                previous_daily_marker = daily_marker
+                hourly_marker, daily_marker = await _run_once(
                     now=now,
-                    interval_seconds=IDLE_LOG_INTERVAL_SECONDS,
+                    hourly_marker=hourly_marker,
+                    daily_marker=daily_marker,
+                )
+                if (
+                    previous_hourly_marker == hourly_marker
+                    and previous_daily_marker == daily_marker
                 ):
-                    LOGGER.info(
-                        "event=watchlist_worker_idle poll_interval_seconds=%s idle_interval_seconds=%s now=%s message=当前无到期自选任务，Worker继续轮询",
-                        POLL_INTERVAL_SECONDS,
-                        IDLE_LOG_INTERVAL_SECONDS,
-                        now.isoformat(),
-                    )
-                    last_idle_log_at = now
-            else:
-                last_idle_log_at = None
-        except Exception:
-            LOGGER.exception("event=watchlist_worker_iteration_failed")
+                    if should_emit_periodic_log(
+                        last_idle_log_at,
+                        now=now,
+                        interval_seconds=IDLE_LOG_INTERVAL_SECONDS,
+                    ):
+                        LOGGER.info(
+                            "event=watchlist_worker_idle poll_interval_seconds=%s idle_interval_seconds=%s now=%s message=当前无到期自选任务，Worker继续轮询",
+                            POLL_INTERVAL_SECONDS,
+                            IDLE_LOG_INTERVAL_SECONDS,
+                            now.isoformat(),
+                        )
+                        last_idle_log_at = now
+                else:
+                    last_idle_log_at = None
+            except Exception:
+                LOGGER.exception("event=watchlist_worker_iteration_failed")
 
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+    finally:
+        LOGGER.info("event=watchlist_worker_stopping message=关注列表Worker正在释放数据库连接池")
+        await dispose_engine()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        LOGGER.info("event=watchlist_worker_stopped message=关注列表Worker收到中断信号并退出")

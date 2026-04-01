@@ -11,7 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.core.logging import get_logger, setup_logging, should_emit_periodic_log
 from app.core.settings import get_settings
 from app.db.init_db import ensure_database_schema
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, dispose_engine
 from app.services.analysis_repository import claim_next_analysis_session_for_worker
 from app.services.analysis_service import run_analysis_session_by_id
 
@@ -55,31 +55,38 @@ async def main() -> None:
         poll_interval_seconds,
         settings.analysis_running_stale_seconds,
     )
-    await ensure_database_schema()
+    try:
+        await ensure_database_schema()
 
-    while True:
-        try:
-            claimed_session_id = await run_analysis_worker_iteration()
-            if claimed_session_id is None:
-                current_time = datetime.now(UTC)
-                if should_emit_periodic_log(
-                    last_idle_log_at,
-                    now=current_time,
-                    interval_seconds=IDLE_LOG_INTERVAL_SECONDS,
-                ):
-                    LOGGER.info(
-                        "event=analysis_worker_idle poll_interval_seconds=%s idle_interval_seconds=%s message=当前无可执行分析会话，Worker继续轮询",
-                        poll_interval_seconds,
-                        IDLE_LOG_INTERVAL_SECONDS,
-                    )
-                    last_idle_log_at = current_time
-            else:
-                last_idle_log_at = None
-        except Exception:
-            LOGGER.exception("event=analysis_worker_iteration_failed message=分析Worker轮询失败")
+        while True:
+            try:
+                claimed_session_id = await run_analysis_worker_iteration()
+                if claimed_session_id is None:
+                    current_time = datetime.now(UTC)
+                    if should_emit_periodic_log(
+                        last_idle_log_at,
+                        now=current_time,
+                        interval_seconds=IDLE_LOG_INTERVAL_SECONDS,
+                    ):
+                        LOGGER.info(
+                            "event=analysis_worker_idle poll_interval_seconds=%s idle_interval_seconds=%s message=当前无可执行分析会话，Worker继续轮询",
+                            poll_interval_seconds,
+                            IDLE_LOG_INTERVAL_SECONDS,
+                        )
+                        last_idle_log_at = current_time
+                else:
+                    last_idle_log_at = None
+            except Exception:
+                LOGGER.exception("event=analysis_worker_iteration_failed message=分析Worker轮询失败")
 
-        await asyncio.sleep(poll_interval_seconds)
+            await asyncio.sleep(poll_interval_seconds)
+    finally:
+        LOGGER.info("event=analysis_worker_stopping message=分析Worker正在释放数据库连接池")
+        await dispose_engine()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        LOGGER.info("event=analysis_worker_stopped message=分析Worker收到中断信号并退出")

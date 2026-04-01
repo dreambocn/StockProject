@@ -17,6 +17,7 @@ from app.core.logging import (
     setup_logging,
 )
 from app.core.settings import get_settings
+from app.db.session import dispose_engine
 from app.db.init_db import ensure_database_schema
 
 
@@ -28,12 +29,16 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     is_pytest = "pytest" in sys.modules
-    # 测试环境跳过 schema 检查，避免用例对真实基础设施产生副作用；
-    # 其余环境统一走迁移模式判断，确保 API 与 Worker 对数据库状态的理解一致。
-    if not is_pytest:
-        await ensure_database_schema()
+    try:
+        # 测试环境跳过 schema 检查，避免用例对真实基础设施产生副作用；
+        # 其余环境统一走迁移模式判断，确保 API 与 Worker 对数据库状态的理解一致。
+        if not is_pytest:
+            await ensure_database_schema()
 
-    yield
+        yield
+    finally:
+        # 生命周期结束时主动释放连接池，避免开发环境关闭服务后数据库残留空闲连接。
+        await dispose_engine()
 
 
 app = FastAPI(title="Stock Project API", lifespan=lifespan)

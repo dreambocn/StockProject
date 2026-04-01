@@ -31,6 +31,10 @@ class AnalysisGenerationSession(Base):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="queued", index=True
     )
+    current_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stage_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_current: Mapped[int | None] = mapped_column(nullable=True)
+    progress_total: Mapped[int | None] = mapped_column(nullable=True)
     system_job_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("system_job_runs.id"),
@@ -64,5 +68,8 @@ class AnalysisGenerationSession(Base):
         DateTime(timezone=True), nullable=True
     )
     completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

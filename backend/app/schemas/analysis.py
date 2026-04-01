@@ -63,6 +63,8 @@ class AnalysisReportResponse(BaseModel):
     anchor_event_title: str | None = None
     # structured_sources/web_sources 用于前端来源展示，允许为空数组。
     structured_sources: list[dict[str, object]] = []
+    evidence_event_count: int = 0
+    evidence_events: list[AnalysisEventLinkResponse] = []
     web_sources: list[dict[str, object]] = []
     prompt_version: str | None = None
     model_name: str | None = None
@@ -82,6 +84,13 @@ class AnalysisReportArchiveListResponse(BaseModel):
     items: list[AnalysisReportArchiveItemResponse]
 
 
+class AnalysisReportEvidenceResponse(BaseModel):
+    report_id: str
+    ts_code: str
+    event_count: int
+    events: list[AnalysisEventLinkResponse]
+
+
 class AnalysisSessionCreateRequest(BaseModel):
     topic: str | None = None
     event_id: str | None = None
@@ -97,6 +106,21 @@ class AnalysisSessionCreateResponse(BaseModel):
     status: str
     reused: bool = False
     cached: bool = False
+
+
+class AnalysisSessionStatusResponse(BaseModel):
+    session_id: str
+    status: str
+    current_stage: str | None = None
+    stage_message: str | None = None
+    summary_preview: str | None = None
+    progress_current: int | None = None
+    progress_total: int | None = None
+    report_id: str | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    heartbeat_at: datetime | None = None
 
 
 class StockAnalysisSummaryResponse(BaseModel):

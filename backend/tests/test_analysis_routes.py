@@ -9,8 +9,10 @@ from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
 from app.models.analysis_event_link import AnalysisEventLink
+from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
+from app.models.stock_kline_bar import StockKlineBar
 from app.models.stock_instrument import StockInstrument
 
 
@@ -128,6 +130,268 @@ def test_analysis_summary_route_supports_event_id_and_returns_anchor_fields(
     assert payload["report"]["anchor_event_id"] == "evt-hot-1"
     assert payload["report"]["anchor_event_title"] == "国际油价高位震荡"
     assert payload["report"]["structured_sources"] == [{"provider": "akshare", "count": 1}]
+
+
+def test_analysis_summary_route_backfills_latest_snapshot_from_daily_kline(
+    tmp_path: Path,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code='000001.SZ',
+                        symbol='000001',
+                        name='平安银行',
+                        fullname='平安银行股份有限公司',
+                        list_status='L',
+                    )
+                )
+                session.add(
+                    StockKlineBar(
+                        ts_code='000001.SZ',
+                        period='daily',
+                        trade_date=datetime(2026, 3, 31, tzinfo=timezone.utc).date(),
+                        end_date=None,
+                        open=11.00,
+                        high=11.18,
+                        low=10.96,
+                        close=11.08,
+                        pre_close=10.99,
+                        change=0.09,
+                        pct_chg=0.8189,
+                        vol=100000,
+                        amount=200000,
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get('/api/analysis/stocks/000001.SZ/summary')
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['latest_snapshot']['trade_date'] == '2026-03-31'
+    assert payload['latest_snapshot']['close'] == 11.08
+    assert payload['latest_snapshot']['pct_chg'] == 0.8189
+
+
+def test_analysis_summary_route_prefers_full_report_evidence_snapshot(
+    tmp_path: Path,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code='000001.SZ',
+                        symbol='000001',
+                        name='平安银行',
+                        fullname='平安银行股份有限公司',
+                        list_status='L',
+                    )
+                )
+                session.add(
+                    AnalysisReport(
+                        id='report-full-evidence',
+                        ts_code='000001.SZ',
+                        status='ready',
+                        summary='完整证据报告',
+                        risk_points=[],
+                        factor_breakdown=[],
+                        structured_sources=[
+                            {'provider': 'akshare', 'count': 23},
+                            {'provider': 'tushare', 'count': 7},
+                        ],
+                        evidence_event_count=25,
+                        evidence_events=[
+                            {
+                                'event_id': f'evt-{index}',
+                                'scope': 'policy' if index % 5 == 0 else 'hot',
+                                'title': f'证据事件 {index}',
+                                'published_at': '2026-03-23T08:00:00Z',
+                                'source': 'policy_document' if index % 5 == 0 else 'eastmoney_global',
+                                'macro_topic': 'regulation_policy' if index % 5 == 0 else 'industry',
+                                'event_type': 'policy' if index % 5 == 0 else 'news',
+                                'event_tags': ['政策'] if index % 5 == 0 else ['行业'],
+                                'sentiment_label': 'positive',
+                                'sentiment_score': 0.7,
+                                'anchor_trade_date': '2026-03-24',
+                                'window_return_pct': 1.5 + index,
+                                'window_volatility': 0.8 + index,
+                                'abnormal_volume_ratio': 1.1 + index,
+                                'correlation_score': 0.85 if index % 4 == 0 else 0.45,
+                                'confidence': 'high',
+                                'link_status': 'linked',
+                            }
+                            for index in range(25)
+                        ],
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get('/api/analysis/stocks/000001.SZ/summary')
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['event_count'] == 25
+    assert len(payload['events']) == 25
+    assert payload['events'][0]['event_id'] == 'evt-0'
+    assert payload['report']['evidence_event_count'] == 25
+    assert len(payload['report']['evidence_events']) == 25
+
+
+def test_analysis_report_evidence_route_returns_report_snapshot(
+    tmp_path: Path,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    AnalysisReport(
+                        id='report-evidence-1',
+                        ts_code='600519.SH',
+                        status='ready',
+                        summary='测试报告',
+                        risk_points=[],
+                        factor_breakdown=[],
+                        evidence_event_count=2,
+                        evidence_events=[
+                            {
+                                'event_id': 'evt-policy-1',
+                                'scope': 'policy',
+                                'title': '政策事件',
+                                'published_at': '2026-03-23T08:00:00Z',
+                                'source': 'policy_document',
+                                'macro_topic': 'regulation_policy',
+                                'event_type': 'policy',
+                                'event_tags': ['政策'],
+                                'sentiment_label': 'positive',
+                                'sentiment_score': 0.9,
+                                'anchor_trade_date': '2026-03-24',
+                                'window_return_pct': 2.5,
+                                'window_volatility': 1.2,
+                                'abnormal_volume_ratio': 1.9,
+                                'correlation_score': 0.91,
+                                'confidence': 'high',
+                                'link_status': 'linked',
+                            },
+                            {
+                                'event_id': 'evt-news-1',
+                                'scope': 'hot',
+                                'title': '热点事件',
+                                'published_at': '2026-03-23T09:00:00Z',
+                                'source': 'eastmoney_global',
+                                'macro_topic': 'industry',
+                                'event_type': 'news',
+                                'event_tags': ['行业'],
+                                'sentiment_label': 'neutral',
+                                'sentiment_score': 0.1,
+                                'anchor_trade_date': '2026-03-24',
+                                'window_return_pct': 1.3,
+                                'window_volatility': 0.7,
+                                'abnormal_volume_ratio': 1.4,
+                                'correlation_score': 0.72,
+                                'confidence': 'medium',
+                                'link_status': 'linked',
+                            },
+                        ],
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get('/api/analysis/reports/report-evidence-1/evidence')
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['report_id'] == 'report-evidence-1'
+    assert payload['ts_code'] == '600519.SH'
+    assert payload['event_count'] == 2
+    assert [item['event_id'] for item in payload['events']] == ['evt-policy-1', 'evt-news-1']
+
+
+def test_analysis_report_evidence_route_falls_back_when_snapshot_missing(
+    tmp_path: Path,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    NewsEvent(
+                        id='evt-fallback-1',
+                        scope='policy',
+                        cache_variant='policy_source',
+                        title='存量政策事件',
+                        summary='政策摘要',
+                        published_at=datetime(2026, 3, 22, 10, 0, tzinfo=timezone.utc),
+                        url='https://example.com/policy',
+                        publisher='政策源',
+                        source='policy_document',
+                        macro_topic='regulation_policy',
+                        event_type='policy',
+                        fetched_at=datetime(2026, 3, 22, 10, 5, tzinfo=timezone.utc),
+                    )
+                )
+                session.add(
+                    AnalysisEventLink(
+                        event_id='evt-fallback-1',
+                        ts_code='600519.SH',
+                        anchor_trade_date=datetime(2026, 3, 24, tzinfo=timezone.utc).date(),
+                        window_return_pct=1.8,
+                        window_volatility=0.9,
+                        abnormal_volume_ratio=1.5,
+                        correlation_score=0.88,
+                        confidence='high',
+                        link_status='linked',
+                    )
+                )
+                session.add(
+                    AnalysisReport(
+                        id='report-fallback-1',
+                        ts_code='600519.SH',
+                        status='ready',
+                        summary='旧报告',
+                        risk_points=[],
+                        factor_breakdown=[],
+                        evidence_event_count=None,
+                        evidence_events=None,
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get('/api/analysis/reports/report-fallback-1/evidence')
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['report_id'] == 'report-fallback-1'
+    assert payload['event_count'] == 1
+    assert payload['events'][0]['event_id'] == 'evt-fallback-1'
 
 
 def test_analysis_reports_route_backfills_web_source_metadata_on_read(

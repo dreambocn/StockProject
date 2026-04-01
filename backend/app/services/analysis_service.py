@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.core.settings import get_settings
 from app.db.session import SessionLocal
+from app.integrations.policy_gateway import list_policy_source_documents
 from app.schemas.analysis import (
     AnalysisEventLinkResponse,
     AnalysisReportArchiveItemResponse,
@@ -24,11 +25,10 @@ from app.services.analysis_repository import (
     create_analysis_session_record,
     load_active_session_by_key,
     load_analysis_events,
+    load_analysis_report_by_id,
     load_analysis_session,
     load_latest_report,
-    load_latest_snapshot,
     load_latest_fresh_report,
-    load_price_window_rows,
     load_recent_news_events,
     load_stock_instrument,
     list_analysis_reports,
@@ -61,6 +61,13 @@ from app.services.job_service import (
 from app.services.key_event_extraction_service import extract_key_event_types
 from app.services.llm_analysis_service import generate_stock_analysis_report
 from app.services.news_sentiment_service import analyze_news_sentiment
+from app.services.policy_projection_service import (
+    project_policy_documents_to_news_events,
+)
+from app.services.stock_quote_service import (
+    load_price_window_with_completion,
+    load_resolved_latest_snapshot,
+)
 from app.services.web_source_metadata_service import enrich_web_sources
 
 
@@ -75,6 +82,48 @@ def _analysis_logger():
 
 class AnalysisNotFoundError(Exception):
     pass
+
+
+class AnalysisReportNotFoundError(Exception):
+    pass
+
+
+async def _update_session_progress(
+    session: AsyncSession,
+    *,
+    session_row: object,
+    status: str | None = None,
+    current_stage: str | None = None,
+    stage_message: str | None = None,
+    progress_current: int | None = None,
+    progress_total: int | None = None,
+    summary_preview: str | None = None,
+    completed_at: datetime | None = None,
+    error_message: str | None = None,
+    failure_type: str | None = None,
+) -> None:
+    # 关键流程：轮询依赖数据库中的运行态字段，这里统一写库并刷新 heartbeat。
+    now = datetime.now(UTC)
+    if status is not None:
+        session_row.status = status
+    if current_stage is not None:
+        session_row.current_stage = current_stage
+    if stage_message is not None:
+        session_row.stage_message = stage_message
+    if progress_current is not None:
+        session_row.progress_current = progress_current
+    if progress_total is not None:
+        session_row.progress_total = progress_total
+    if summary_preview is not None:
+        session_row.summary_preview = summary_preview
+    if completed_at is not None:
+        session_row.completed_at = completed_at
+    if error_message is not None:
+        session_row.error_message = error_message
+    if failure_type is not None:
+        session_row.failure_type = failure_type
+    session_row.heartbeat_at = now
+    await session.commit()
 
 
 def _map_analysis_report_status_to_job_status(report_status: str) -> str:
@@ -270,8 +319,51 @@ async def _backfill_report_web_sources(
     return next_sources, remaining_budget - len(target_indexes)
 
 
+def _normalize_evidence_event_payloads(
+    events: list[dict[str, object | None]] | list[dict[str, object]],
+) -> list[dict[str, object]]:
+    normalized_events = [
+        AnalysisEventLinkResponse.model_validate(item).model_dump(mode="json")
+        for item in events
+    ]
+    return normalized_events
+
+
+async def _resolve_report_evidence_payloads(
+    session: AsyncSession,
+    *,
+    report_obj: object | None,
+    fallback_limit: int,
+    anchor_event_id: str | None,
+) -> list[dict[str, object]]:
+    if report_obj is None:
+        return []
+
+    inline_events = getattr(report_obj, "evidence_events", None) or []
+    if inline_events:
+        return _normalize_evidence_event_payloads(
+            [dict(item) for item in inline_events if isinstance(item, dict)]
+        )
+
+    fallback_events = await load_analysis_events(
+        session,
+        str(getattr(report_obj, "ts_code", "") or ""),
+        limit=fallback_limit,
+        anchor_event_id=anchor_event_id,
+        candidate_limit=fallback_limit,
+    )
+    fallback_events = select_summary_analysis_events(
+        fallback_events,
+        anchor_event_id=anchor_event_id,
+        total_limit=fallback_limit,
+    )
+    return _normalize_evidence_event_payloads(fallback_events)
+
+
 def _serialize_report(
     report_obj: object | None,
+    *,
+    evidence_payloads: list[dict[str, object]] | None = None,
 ) -> dict[str, object] | None:
     if report_obj is None:
         return None
@@ -298,6 +390,12 @@ def _serialize_report(
             "completed_at": getattr(report_obj, "completed_at", None),
             "content_format": getattr(report_obj, "content_format", "markdown"),
             "structured_sources": getattr(report_obj, "structured_sources", None) or [],
+            "evidence_event_count": (
+                int(getattr(report_obj, "evidence_event_count"))
+                if getattr(report_obj, "evidence_event_count", None) is not None
+                else len(evidence_payloads or [])
+            ),
+            "evidence_events": evidence_payloads or [],
             "web_sources": getattr(report_obj, "web_sources", None) or [],
             "prompt_version": getattr(report_obj, "prompt_version", None),
             "model_name": getattr(report_obj, "model_name", None),
@@ -334,24 +432,16 @@ async def get_stock_analysis_summary(
     settings = get_settings()
     normalized_ts_code = ts_code.strip().upper()
     instrument = await load_stock_instrument(session, normalized_ts_code)
-    snapshot = await load_latest_snapshot(session, normalized_ts_code)
+    snapshot = await load_resolved_latest_snapshot(
+        session,
+        ts_code=normalized_ts_code,
+    )
     resolved_event_limit = event_limit or settings.analysis_summary_event_limit
-    candidate_pool_limit = max(
+    summary_candidate_pool_limit = max(
         resolved_event_limit * settings.analysis_summary_candidate_pool_multiplier,
         resolved_event_limit + 20,
     )
-    persisted_events = await load_analysis_events(
-        session,
-        normalized_ts_code,
-        limit=resolved_event_limit,
-        anchor_event_id=event_id,
-        candidate_limit=candidate_pool_limit,
-    )
-    persisted_events = select_summary_analysis_events(
-        persisted_events,
-        anchor_event_id=event_id,
-        total_limit=resolved_event_limit,
-    )
+    generation_event_limit = settings.analysis_generation_event_limit
     persisted_report = await load_latest_report(
         session,
         normalized_ts_code,
@@ -381,6 +471,28 @@ async def get_stock_analysis_summary(
         )
         persisted_report.web_sources = enriched_web_sources
 
+    if persisted_report is not None:
+        event_payloads = await _resolve_report_evidence_payloads(
+            session,
+            report_obj=persisted_report,
+            fallback_limit=max(resolved_event_limit, generation_event_limit),
+            anchor_event_id=event_id or persisted_report.anchor_event_id,
+        )
+    else:
+        persisted_events = await load_analysis_events(
+            session,
+            normalized_ts_code,
+            limit=resolved_event_limit,
+            anchor_event_id=event_id,
+            candidate_limit=summary_candidate_pool_limit,
+        )
+        persisted_events = select_summary_analysis_events(
+            persisted_events,
+            anchor_event_id=event_id,
+            total_limit=resolved_event_limit,
+        )
+        event_payloads = _normalize_evidence_event_payloads(persisted_events)
+
     instrument_obj = (
         StockInstrumentResponse.model_validate(instrument) if instrument else None
     )
@@ -389,11 +501,10 @@ async def get_stock_analysis_summary(
     )
     instrument_payload = instrument_obj.model_dump() if instrument_obj else None
     snapshot_payload = snapshot_obj.model_dump() if snapshot_obj else None
-    validated_events = [
-        AnalysisEventLinkResponse.model_validate(item) for item in persisted_events
-    ]
-    event_payloads = [event.model_dump() for event in validated_events]
-    report_payload = _serialize_report(persisted_report)
+    report_payload = _serialize_report(
+        persisted_report,
+        evidence_payloads=event_payloads if persisted_report is not None else None,
+    )
     status = _derive_status(
         getattr(persisted_report, "status", None) if persisted_report else None,
         len(event_payloads),
@@ -435,6 +546,7 @@ async def list_stock_analysis_report_archives(
     session: AsyncSession, ts_code: str, *, topic: str | None = None, event_id: str | None = None, limit: int
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
+    settings = get_settings()
     reports = await list_analysis_reports(
         session,
         ts_code=normalized_ts_code,
@@ -453,9 +565,44 @@ async def list_stock_analysis_report_archives(
             remaining_budget=remaining_budget,
         )
         report.web_sources = enriched_web_sources
+    serialized_items: list[dict[str, object]] = []
+    for report in reports:
+        evidence_payloads = await _resolve_report_evidence_payloads(
+            session,
+            report_obj=report,
+            fallback_limit=settings.analysis_generation_event_limit,
+            anchor_event_id=report.anchor_event_id,
+        )
+        serialized_items.append(
+            AnalysisReportArchiveItemResponse.model_validate(
+                _serialize_report(report, evidence_payloads=evidence_payloads)
+            ).model_dump()
+        )
     return {
         "ts_code": normalized_ts_code,
-        "items": [serialize_report_archive_item(report) for report in reports],
+        "items": serialized_items,
+    }
+
+
+async def get_analysis_report_evidence(
+    session: AsyncSession,
+    report_id: str,
+) -> dict[str, object]:
+    report = await load_analysis_report_by_id(session, report_id)
+    if report is None:
+        raise AnalysisReportNotFoundError("analysis report not found")
+
+    evidence_payloads = await _resolve_report_evidence_payloads(
+        session,
+        report_obj=report,
+        fallback_limit=get_settings().analysis_generation_event_limit,
+        anchor_event_id=report.anchor_event_id,
+    )
+    return {
+        "report_id": report.id,
+        "ts_code": report.ts_code,
+        "event_count": len(evidence_payloads),
+        "events": evidence_payloads,
     }
 
 
@@ -595,10 +742,10 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             else None
         )
         try:
-            session_row.status = "running"
             session_row.started_at = session_row.started_at or datetime.now(UTC)
             session_row.error_message = None
             session_row.failure_type = None
+            session_row.summary_preview = None
             if analysis_job is not None:
                 await mark_job_running(
                     session,
@@ -607,7 +754,18 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     linked_entity_type="analysis_generation_session",
                     linked_entity_id=session_row.id,
                 )
-            await session.commit()
+            await _update_session_progress(
+                session,
+                session_row=session_row,
+                status="running",
+                current_stage="selecting_events",
+                stage_message="正在准备分析上下文",
+                progress_current=0,
+                progress_total=0,
+                summary_preview="",
+                error_message=None,
+                failure_type=None,
+            )
             _analysis_logger().info(
                 "event=analysis_session_started session_id=%s ts_code=%s topic=%s use_web_search=%s trigger_source=%s",
                 session_id,
@@ -633,6 +791,20 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 * settings.analysis_generation_candidate_pool_multiplier,
                 generation_limit + 20,
             )
+            if session_row.topic is None:
+                policy_documents = await list_policy_source_documents(
+                    session,
+                    limit=candidate_pool_limit,
+                )
+                if policy_documents:
+                    # 默认分析在本地先完成政策投影，避免依赖用户先打开政策页。
+                    await project_policy_documents_to_news_events(
+                        session,
+                        documents=policy_documents,
+                        fetched_at=datetime.now(UTC),
+                        batch_id=None,
+                    )
+                    await session.commit()
             candidate_events = await load_recent_news_events(
                 session,
                 session_row.ts_code,
@@ -652,9 +824,18 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 hot_quota=settings.analysis_generation_hot_quota,
             )
             event_payloads: list[dict[str, object | None]] = []
+            total_progress = max(len(raw_events), 1)
+            await _update_session_progress(
+                session,
+                session_row=session_row,
+                current_stage="linking_events",
+                stage_message="正在计算事件关联指标",
+                progress_current=0,
+                progress_total=total_progress,
+            )
 
             # 关键流程：事件增强只在生成会话里执行，避免 summary 只读查询产生副作用。
-            for raw_event in raw_events:
+            for index, raw_event in enumerate(raw_events, start=1):
                 sentiment = analyze_news_sentiment(raw_event.title, raw_event.summary)
                 event_tags = extract_key_event_types(raw_event.title, raw_event.summary)
                 event_type = _resolve_event_type(
@@ -662,9 +843,9 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     source=raw_event.source,
                     event_tags=event_tags,
                 )
-                price_window = await load_price_window_rows(
+                price_window = await load_price_window_with_completion(
                     session,
-                    session_row.ts_code,
+                    ts_code=session_row.ts_code,
                     anchor_from=(
                         raw_event.published_at.date() if raw_event.published_at else None
                     ),
@@ -716,7 +897,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                                 "confidence": link_result.confidence,
                                 "link_status": link_result.link_status,
                             }
-                        ).model_dump()
+                        ).model_dump(mode="json")
                     )
                 else:
                     await upsert_analysis_event_link(
@@ -752,28 +933,53 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                                 "confidence": "low",
                                 "link_status": "pending",
                             }
-                        ).model_dump()
+                        ).model_dump(mode="json")
                     )
 
-            await session.commit()
+                await _update_session_progress(
+                    session,
+                    session_row=session_row,
+                    current_stage="linking_events",
+                    stage_message="正在计算事件关联指标",
+                    progress_current=index,
+                    progress_total=total_progress,
+                )
+
             factor_weights = calculate_factor_weights(event_payloads)
+            await _update_session_progress(
+                session,
+                session_row=session_row,
+                current_stage="generating_report",
+                stage_message="正在生成分析摘要",
+                progress_current=total_progress,
+                progress_total=total_progress,
+            )
 
             async def on_delta(delta: str) -> None:
-                session_row.summary_preview = f"{session_row.summary_preview or ''}{delta}"
+                next_preview = f"{session_row.summary_preview or ''}{delta}"
+                session_row.summary_preview = next_preview
                 if analysis_job is not None:
                     await touch_job_heartbeat(
                         session,
                         job=analysis_job,
                         summary="股票分析流式输出中",
                     )
-                await session.commit()
+                await _update_session_progress(
+                    session,
+                    session_row=session_row,
+                    current_stage="generating_report",
+                    stage_message="正在生成分析摘要",
+                    progress_current=total_progress,
+                    progress_total=total_progress,
+                    summary_preview=next_preview,
+                )
                 await event_bus.publish(
                     session_id,
                     "delta",
                     {
                         "session_id": session_id,
                         "delta": delta,
-                        "content": session_row.summary_preview or "",
+                        "content": next_preview,
                     },
                 )
 
@@ -785,6 +991,14 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 session=session,
                 use_web_search=session_row.use_web_search,
                 on_delta=on_delta,
+            )
+            await _update_session_progress(
+                session,
+                session_row=session_row,
+                current_stage="finalizing",
+                stage_message="正在落库并整理分析结果",
+                progress_current=total_progress,
+                progress_total=total_progress,
             )
             report = await create_analysis_report(
                 session,
@@ -814,6 +1028,8 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 completed_at=report_result.generated_at,
                 content_format="markdown",
                 structured_sources=_build_structured_sources(event_payloads),
+                evidence_event_count=len(event_payloads),
+                evidence_events=event_payloads,
                 web_sources=report_result.web_sources,
                 prompt_version=report_result.prompt_version,
                 model_name=report_result.model_name or session_row.model_name,
@@ -839,6 +1055,11 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             session_row.token_usage_output = report_result.token_usage_output
             session_row.cost_estimate = report_result.cost_estimate
             session_row.failure_type = report_result.failure_type
+            session_row.current_stage = "completed"
+            session_row.stage_message = "分析已完成"
+            session_row.progress_current = total_progress
+            session_row.progress_total = total_progress
+            session_row.heartbeat_at = report_result.generated_at
             if analysis_job is not None:
                 await finish_job_run(
                     session,
@@ -887,8 +1108,11 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             session_row = await load_analysis_session(session, session_id)
             if session_row is not None:
                 session_row.status = "failed"
+                session_row.current_stage = "failed"
+                session_row.stage_message = "分析生成失败"
                 session_row.error_message = str(exc)
                 session_row.completed_at = datetime.now(UTC)
+                session_row.heartbeat_at = datetime.now(UTC)
                 session_row.failure_type = type(exc).__name__
                 if analysis_job is None and session_row.system_job_id:
                     analysis_job = await session.get(

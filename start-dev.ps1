@@ -81,6 +81,77 @@ function Get-EnvFileValues {
     return $values
 }
 
+function Get-ProcessRegistryPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath
+    )
+
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($RootPath.ToLowerInvariant())
+    $hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).Substring(0, 16)
+    $registryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) 'StockProject'
+    if (-not (Test-Path -LiteralPath $registryDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $registryDirectory -Force | Out-Null
+    }
+
+    return Join-Path $registryDirectory ("dev-processes-{0}.json" -f $hash)
+}
+
+function Read-ProcessRegistry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @()
+    }
+
+    $rawContent = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($rawContent)) {
+        return @()
+    }
+
+    $decoded = ConvertFrom-Json -InputObject $rawContent
+    if ($decoded -is [System.Array]) {
+        return @($decoded)
+    }
+
+    return @($decoded)
+}
+
+function Get-LiveRecordedProcesses {
+    param(
+        [object[]]$Entries
+    )
+
+    if ($null -eq $Entries) {
+        return @()
+    }
+
+    $liveProcesses = @()
+    foreach ($entry in $Entries) {
+        $processId = 0
+        if (-not [int]::TryParse([string]$entry.pid, [ref]$processId)) {
+            continue
+        }
+
+        $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            continue
+        }
+
+        $liveProcesses += [pscustomobject]@{
+            Title = [string]$entry.title
+            Pid = $processId
+            Command = [string]$entry.command
+            Process = $process
+        }
+    }
+
+    return $liveProcesses
+}
+
 function Test-RequiredEnvValue {
     param(
         [Parameter(Mandatory = $true)]
@@ -129,6 +200,15 @@ Test-RequiredEnvValue -Values $envValues -Keys @(
 
 $appEnv = [string]$envValues['APP_ENV']
 $bootstrapMode = [string]$envValues['DB_SCHEMA_BOOTSTRAP_MODE']
+$processRegistryPath = Get-ProcessRegistryPath -RootPath $rootPath
+$existingRecordedProcesses = @(Get-LiveRecordedProcesses -Entries @(Read-ProcessRegistry -Path $processRegistryPath))
+$runningTitles = if ($existingRecordedProcesses.Count -gt 0) {
+    ($existingRecordedProcesses | ForEach-Object { "{0}(PID={1})" -f $_.Title, $_.Pid }) -join ', '
+}
+else {
+    ''
+}
+
 if ($appEnv -ne 'development') {
     throw "start-dev.ps1 仅支持开发模式启动，当前 APP_ENV=$appEnv。非开发环境请先执行迁移后按部署方式启动。"
 }
@@ -170,24 +250,49 @@ if ($DryRun) {
     Write-Host ("- 环境文件：{0}" -f $envFilePath)
     Write-Host ("- APP_ENV：{0}" -f $appEnv)
     Write-Host ("- DB_SCHEMA_BOOTSTRAP_MODE：{0}" -f $bootstrapMode)
+    Write-Host ("- 进程记录文件：{0}" -f $processRegistryPath)
+    if ($existingRecordedProcesses.Count -gt 0) {
+        Write-Warning ("检测到已有开发服务仍在运行：{0}" -f $runningTitles)
+        Write-Host ("- 建议先执行：pwsh -File '{0}\\stop-dev.ps1'" -f $rootPath)
+    }
     foreach ($item in $launchItems) {
         Write-Host ("- {0} | 目录：{1} | 命令：{2}" -f $item.Title, $item.WorkingDirectory, $item.Command)
     }
     exit 0
 }
 
+if ($existingRecordedProcesses.Count -gt 0) {
+    throw "检测到已有开发服务仍在运行：$runningTitles`n请先执行：pwsh -File '$rootPath\\stop-dev.ps1'"
+}
+
+if (Test-Path -LiteralPath $processRegistryPath -PathType Leaf) {
+    Remove-Item -LiteralPath $processRegistryPath -Force
+}
+
+$launchedProcesses = @()
 foreach ($item in $launchItems) {
     $commandText = New-ProcessCommand -Title $item.Title -Command $item.Command
-    Start-Process -FilePath 'pwsh' -WorkingDirectory $item.WorkingDirectory -ArgumentList @(
+    $process = Start-Process -FilePath 'pwsh' -WorkingDirectory $item.WorkingDirectory -ArgumentList @(
         '-NoLogo',
         '-NoExit',
         '-Command',
         $commandText
-    ) | Out-Null
+    ) -PassThru
+
+    $launchedProcesses += [pscustomobject]@{
+        title = $item.Title
+        pid = $process.Id
+        workingDirectory = $item.WorkingDirectory
+        command = $item.Command
+        startedAt = (Get-Date).ToString('o')
+    }
 }
+
+$launchedProcesses | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $processRegistryPath -Encoding UTF8
 
 Write-Host '已在独立终端中启动开发服务。' -ForegroundColor Green
 Write-Host 'Backend API:      http://127.0.0.1:8000'
 Write-Host 'Watchlist Worker: 已启动后台轮询'
 Write-Host 'Analysis Worker:  已启动分析会话队列轮询'
 Write-Host 'Frontend Web:     http://127.0.0.1:5173'
+Write-Host ("进程记录文件：{0}" -f $processRegistryPath)

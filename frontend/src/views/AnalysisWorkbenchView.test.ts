@@ -100,6 +100,15 @@ const mountWorkbench = async (router: ReturnType<typeof createRouter>) => {
   const authStore = useAuthStore()
   authStore.initialized = true
 
+  if (!vi.isMockFunction(analysisApi.getAnalysisReportEvidence)) {
+    vi.spyOn(analysisApi, 'getAnalysisReportEvidence').mockResolvedValue({
+      report_id: 'report-default',
+      ts_code: '000000.SH',
+      event_count: 0,
+      events: [],
+    })
+  }
+
   const wrapper = mount(AnalysisWorkbenchView, {
     global: {
       plugins: [pinia, router, i18n, MotionPlugin],
@@ -163,6 +172,7 @@ const createMinimalSummary = (tsCode: string, reportSummary: string): StockAnaly
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -884,7 +894,8 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).toContain('政策原文 × 1')
   })
 
-  it('creates analysis session and applies streaming delta content', async () => {
+  it('creates analysis session and applies polled preview content', async () => {
+    vi.useFakeTimers()
     setAppLocale('zh-CN')
     const router = createRouterWithQuery()
     await router.push({
@@ -960,21 +971,34 @@ describe('AnalysisWorkbenchView', () => {
       reused: false,
       cached: false,
     })
-    const openSpy = vi
-      .spyOn(analysisApi, 'openAnalysisSessionEvents')
-      .mockImplementation((_sessionId, handlers) => {
-        handlers.onStatus?.({ session_id: 'session-1', status: 'running' })
-        handlers.onDelta?.({
-          session_id: 'session-1',
-          delta: '## 实时更新\n\n- 第一条',
-          content: '## 实时更新\n\n- 第一条',
-        })
-        handlers.onCompleted?.({
-          session_id: 'session-1',
-          report_id: 'report-latest',
-          status: 'ready',
-        })
-        return () => undefined
+    const statusSpy = vi.spyOn(analysisApi, 'getAnalysisSessionStatus')
+      .mockResolvedValueOnce({
+        session_id: 'session-1',
+        status: 'running',
+        current_stage: 'generating_report',
+        stage_message: '正在生成分析摘要',
+        summary_preview: '## 实时更新\n\n- 第一条',
+        progress_current: 5,
+        progress_total: 9,
+        report_id: null,
+        error_message: null,
+        started_at: '2026-03-23T08:00:00Z',
+        completed_at: null,
+        heartbeat_at: '2026-03-23T08:00:05Z',
+      })
+      .mockResolvedValueOnce({
+        session_id: 'session-1',
+        status: 'completed',
+        current_stage: 'completed',
+        stage_message: '分析已完成',
+        summary_preview: '## 实时更新\n\n- 第一条',
+        progress_current: 9,
+        progress_total: 9,
+        report_id: 'report-latest',
+        error_message: null,
+        started_at: '2026-03-23T08:00:00Z',
+        completed_at: '2026-03-23T08:10:00Z',
+        heartbeat_at: '2026-03-23T08:10:00Z',
       })
 
     const { wrapper } = await mountWorkbench(router)
@@ -985,13 +1009,18 @@ describe('AnalysisWorkbenchView', () => {
     expect(refreshButton).toBeDefined()
     await refreshButton!.trigger('click')
     await flushPromises()
+    await vi.runOnlyPendingTimersAsync()
+    await flushPromises()
+    await vi.runOnlyPendingTimersAsync()
+    await flushPromises()
 
-    expect(openSpy).toHaveBeenCalled()
+    expect(statusSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('实时更新')
     expect(wrapper.text()).toContain('第一条')
   })
 
-  it('stops active stream and clears streaming markdown before loading next ts_code', async () => {
+  it('stops active polling and clears preview markdown before loading next ts_code', async () => {
+    vi.useFakeTimers()
     setAppLocale('zh-CN')
     const router = createRouterWithQuery()
     await router.push({
@@ -1031,14 +1060,19 @@ describe('AnalysisWorkbenchView', () => {
       cached: false,
     })
 
-    const stopStreamingSpy = vi.fn()
-    vi.spyOn(analysisApi, 'openAnalysisSessionEvents').mockImplementation((_sessionId, handlers) => {
-      handlers.onDelta?.({
-        session_id: 'session-still-streaming',
-        delta: '## 旧流式内容',
-        content: '## 旧流式内容',
-      })
-      return stopStreamingSpy
+    vi.spyOn(analysisApi, 'getAnalysisSessionStatus').mockResolvedValue({
+      session_id: 'session-still-streaming',
+      status: 'running',
+      current_stage: 'generating_report',
+      stage_message: '正在生成分析摘要',
+      summary_preview: '## 旧流式内容',
+      progress_current: 1,
+      progress_total: 9,
+      report_id: null,
+      error_message: null,
+      started_at: '2026-03-23T08:00:00Z',
+      completed_at: null,
+      heartbeat_at: '2026-03-23T08:00:05Z',
     })
 
     const { wrapper } = await mountWorkbench(router)
@@ -1049,6 +1083,8 @@ describe('AnalysisWorkbenchView', () => {
     expect(refreshButton).toBeDefined()
     await refreshButton!.trigger('click')
     await flushPromises()
+    await vi.runOnlyPendingTimersAsync()
+    await flushPromises()
 
     expect(wrapper.text()).toContain('旧流式内容')
 
@@ -1058,9 +1094,76 @@ describe('AnalysisWorkbenchView', () => {
     })
     await flushPromises()
 
-    expect(stopStreamingSpy).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).not.toContain('旧流式内容')
     expect(wrapper.text()).toContain('新股票报告')
+  })
+
+  it('hides correlation and empty metric stats when event link metrics are missing', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'partial',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 1,
+      events: [
+        {
+          event_id: 'evt-empty',
+          scope: 'stock',
+          title: '测试事件',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'eastmoney_stock',
+          macro_topic: null,
+          event_type: 'news',
+          event_tags: ['news'],
+          sentiment_label: 'neutral',
+          sentiment_score: 0,
+          anchor_trade_date: null,
+          window_return_pct: null,
+          window_volatility: null,
+          abnormal_volume_ratio: null,
+          correlation_score: null,
+          confidence: 'low',
+          link_status: 'pending',
+        },
+      ],
+      report: {
+        id: 'report-missing-metrics',
+        status: 'partial',
+        summary: '## 摘要',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).not.toContain('关联评分')
+    expect(wrapper.text()).not.toContain('窗口收益')
+    expect(wrapper.text()).not.toContain('窗口波动')
+    expect(wrapper.text()).not.toContain('异常量比')
+    expect(wrapper.text()).not.toContain('/100')
   })
 
   it('inherits watchlist web-search default but only applies it to the current manual session', async () => {
@@ -1338,5 +1441,323 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).toContain('Reuters')
     expect(wrapper.text()).toContain('finance.example.com')
     expect(wrapper.text()).toContain('市场继续关注供给端扰动。')
+  })
+
+  it('switches event evidence with the selected history report', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 1,
+      events: [
+        {
+          event_id: 'evt-current-1',
+          scope: 'hot',
+          title: '当前报告事件',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.4,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.1,
+          window_volatility: 0.7,
+          abnormal_volume_ratio: 1.3,
+          correlation_score: 0.66,
+          confidence: 'medium',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        id: 'report-current',
+        status: 'ready',
+        summary: '## 当前报告',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:00:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+        evidence_event_count: 1,
+        evidence_events: [
+          {
+            event_id: 'evt-current-1',
+            scope: 'hot',
+            title: '当前报告事件',
+            published_at: '2026-03-23T08:00:00Z',
+            source: 'eastmoney_global',
+            macro_topic: 'industry',
+            event_type: 'news',
+            event_tags: ['行业'],
+            sentiment_label: 'positive',
+            sentiment_score: 0.4,
+            anchor_trade_date: '2026-03-24',
+            window_return_pct: 1.1,
+            window_volatility: 0.7,
+            abnormal_volume_ratio: 1.3,
+            correlation_score: 0.66,
+            confidence: 'medium',
+            link_status: 'linked',
+          },
+        ],
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [
+        {
+          id: 'report-current',
+          status: 'ready',
+          summary: '## 当前报告',
+          risk_points: [],
+          factor_breakdown: [],
+          generated_at: '2026-03-23T08:00:00Z',
+          trigger_source: 'manual',
+          used_web_search: false,
+          web_search_status: 'disabled',
+          content_format: 'markdown',
+          evidence_event_count: 1,
+          evidence_events: [
+            {
+              event_id: 'evt-current-1',
+              scope: 'hot',
+              title: '当前报告事件',
+              published_at: '2026-03-23T08:00:00Z',
+              source: 'eastmoney_global',
+              macro_topic: 'industry',
+              event_type: 'news',
+              event_tags: ['行业'],
+              sentiment_label: 'positive',
+              sentiment_score: 0.4,
+              anchor_trade_date: '2026-03-24',
+              window_return_pct: 1.1,
+              window_volatility: 0.7,
+              abnormal_volume_ratio: 1.3,
+              correlation_score: 0.66,
+              confidence: 'medium',
+              link_status: 'linked',
+            },
+          ],
+        },
+        {
+          id: 'report-history-2',
+          status: 'ready',
+          summary: '## 历史报告',
+          risk_points: [],
+          factor_breakdown: [],
+          generated_at: '2026-03-22T08:00:00Z',
+          trigger_source: 'manual',
+          used_web_search: false,
+          web_search_status: 'disabled',
+          content_format: 'markdown',
+          structured_sources: [{ provider: 'akshare', count: 2 }],
+          evidence_event_count: 2,
+        },
+      ],
+    })
+    const evidenceSpy = vi.spyOn(analysisApi, 'getAnalysisReportEvidence').mockResolvedValue({
+      report_id: 'report-history-2',
+      ts_code: '600519.SH',
+      event_count: 2,
+      events: [
+        {
+          event_id: 'evt-policy-1',
+          scope: 'policy',
+          title: '历史政策事件',
+          published_at: '2026-03-22T08:00:00Z',
+          source: 'policy_document',
+          macro_topic: 'regulation_policy',
+          event_type: 'policy',
+          event_tags: ['政策'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.8,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 2.3,
+          window_volatility: 1.2,
+          abnormal_volume_ratio: 1.8,
+          correlation_score: 0.92,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-hot-2',
+          scope: 'hot',
+          title: '历史热点事件',
+          published_at: '2026-03-22T09:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'neutral',
+          sentiment_score: 0.1,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.4,
+          window_volatility: 0.8,
+          abnormal_volume_ratio: 1.2,
+          correlation_score: 0.74,
+          confidence: 'medium',
+          link_status: 'linked',
+        },
+      ],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).toContain('当前报告事件')
+    expect(wrapper.text()).toContain('1 / 1')
+
+    const historyButtons = wrapper.findAll('.analysis-history-item')
+    expect(historyButtons).toHaveLength(2)
+    await historyButtons[1]!.trigger('click')
+    await flushPromises()
+
+    expect(evidenceSpy).toHaveBeenCalledWith('report-history-2')
+    expect(wrapper.text()).toContain('历史政策事件')
+    expect(wrapper.text()).toContain('历史热点事件')
+    expect(wrapper.text()).toContain('2 / 2')
+  })
+
+  it('hides quantitative metrics when visible evidence has no useful difference', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 2,
+      events: [
+        {
+          event_id: 'evt-1',
+          scope: 'hot',
+          title: '事件一',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.4,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.23,
+          window_volatility: 0.88,
+          abnormal_volume_ratio: 1.55,
+          correlation_score: 0.81,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-2',
+          scope: 'policy',
+          title: '事件二',
+          published_at: '2026-03-23T09:00:00Z',
+          source: 'policy_document',
+          macro_topic: 'regulation_policy',
+          event_type: 'policy',
+          event_tags: ['政策'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.7,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.23,
+          window_volatility: 0.88,
+          abnormal_volume_ratio: 1.55,
+          correlation_score: 0.93,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        id: 'report-same-metrics',
+        status: 'ready',
+        summary: '## 摘要',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+        evidence_event_count: 2,
+        evidence_events: [
+          {
+            event_id: 'evt-1',
+            scope: 'hot',
+            title: '事件一',
+            published_at: '2026-03-23T08:00:00Z',
+            source: 'eastmoney_global',
+            macro_topic: 'industry',
+            event_type: 'news',
+            event_tags: ['行业'],
+            sentiment_label: 'positive',
+            sentiment_score: 0.4,
+            anchor_trade_date: '2026-03-24',
+            window_return_pct: 1.23,
+            window_volatility: 0.88,
+            abnormal_volume_ratio: 1.55,
+            correlation_score: 0.81,
+            confidence: 'high',
+            link_status: 'linked',
+          },
+          {
+            event_id: 'evt-2',
+            scope: 'policy',
+            title: '事件二',
+            published_at: '2026-03-23T09:00:00Z',
+            source: 'policy_document',
+            macro_topic: 'regulation_policy',
+            event_type: 'policy',
+            event_tags: ['政策'],
+            sentiment_label: 'positive',
+            sentiment_score: 0.7,
+            anchor_trade_date: '2026-03-24',
+            window_return_pct: 1.23,
+            window_volatility: 0.88,
+            abnormal_volume_ratio: 1.55,
+            correlation_score: 0.93,
+            confidence: 'high',
+            link_status: 'linked',
+          },
+        ],
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).not.toContain('窗口收益')
+    expect(wrapper.text()).not.toContain('窗口波动')
+    expect(wrapper.text()).not.toContain('异常量比')
+    expect(wrapper.text()).toContain('关联评分')
   })
 })

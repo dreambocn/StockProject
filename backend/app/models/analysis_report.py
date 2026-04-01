@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, JSON, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -46,6 +46,10 @@ class AnalysisReport(Base):
         String(255), nullable=True
     )
     structured_sources: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    evidence_event_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_events: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON, nullable=True
     )
     web_sources: Mapped[list[dict[str, object]] | None] = mapped_column(

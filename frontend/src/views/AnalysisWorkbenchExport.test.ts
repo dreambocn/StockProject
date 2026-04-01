@@ -51,8 +51,11 @@ describe('AnalysisWorkbench export', () => {
       ],
     } as never)
     vi.spyOn(analysisApi, 'exportReport').mockResolvedValue('# 测试导出')
+    vi.useFakeTimers()
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test')
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const appendSpy = vi.spyOn(document.body, 'appendChild')
+    const removeSpy = vi.spyOn(document.body, 'removeChild')
 
     const clickSpy = vi.fn()
     const originalCreateElement = document.createElement.bind(document)
@@ -89,8 +92,12 @@ describe('AnalysisWorkbench export', () => {
     expect(exportButton).toBeDefined()
     await exportButton!.trigger('click')
     await flushPromises()
+    await vi.runAllTimersAsync()
 
     expect(analysisApi.exportReport).toHaveBeenCalledWith('report-1', 'markdown')
     expect(clickSpy).toHaveBeenCalled()
+    expect(appendSpy).toHaveBeenCalled()
+    expect(removeSpy).toHaveBeenCalled()
+    expect(revokeSpy).toHaveBeenCalledWith('blob:test')
   })
 })
