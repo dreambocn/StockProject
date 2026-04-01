@@ -10,6 +10,7 @@ import {
   type MacroImpactProfile,
 } from '../api/news'
 import { ApiError } from '../api/http'
+import { policyApi, type PolicyDocumentListItem } from '../api/policy'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -18,12 +19,15 @@ const HOT_NEWS_ANCHOR_STORAGE_KEY = 'hot-news-anchor-event-selections'
 
 const loading = ref(false)
 const impactLoading = ref(false)
+const policyLoading = ref(false)
 const errorMessage = ref('')
 const items = ref<HotNewsItem[]>([])
 const impactProfiles = ref<MacroImpactProfile[]>([])
+const relatedPolicies = ref<PolicyDocumentListItem[]>([])
 const selectedAnchorEventIds = ref<Record<string, string>>({})
 const hotNewsLoadVersion = ref(0)
 const impactLoadVersion = ref(0)
+const policyLoadVersion = ref(0)
 const topicOptions = [
   'all',
   'geopolitical_conflict',
@@ -42,6 +46,9 @@ const isLatestHotNewsRequest = (requestVersion: number) =>
 
 const isLatestImpactRequest = (requestVersion: number) =>
   requestVersion === impactLoadVersion.value
+
+const isLatestPolicyRequest = (requestVersion: number) =>
+  requestVersion === policyLoadVersion.value
 
 const formatTime = (value: string | null) => {
   if (!value) {
@@ -130,6 +137,40 @@ const loadImpactProfiles = async () => {
   }
 }
 
+const loadRelatedPolicies = async () => {
+  policyLoadVersion.value += 1
+  const requestVersion = policyLoadVersion.value
+
+  if (selectedTopic.value === 'all') {
+    relatedPolicies.value = []
+    policyLoading.value = false
+    return
+  }
+
+  policyLoading.value = true
+  try {
+    // 关键流程：热点页政策原文直接跟随当前主题筛选，保证“影响说明”和“政策依据”在同一语义范围内。
+    const payload = await policyApi.getDocuments({
+      macroTopic: selectedTopic.value,
+      pageSize: 3,
+    })
+    if (!isLatestPolicyRequest(requestVersion)) {
+      return
+    }
+    relatedPolicies.value = payload.items
+  } catch {
+    if (!isLatestPolicyRequest(requestVersion)) {
+      return
+    }
+    // 降级分支：政策接口失败时只隐藏政策依据，不影响热点页主链路继续浏览。
+    relatedPolicies.value = []
+  } finally {
+    if (isLatestPolicyRequest(requestVersion)) {
+      policyLoading.value = false
+    }
+  }
+}
+
 const getTopicEvents = (topic: string) =>
   items.value.filter((item) => item.macro_topic === topic)
 
@@ -194,11 +235,11 @@ const selectTopic = async (topic: string) => {
     path: '/news/hot',
     query: topic === 'all' ? {} : { topic },
   })
-  await Promise.all([loadHotNews(), loadImpactProfiles()])
+  await Promise.all([loadHotNews(), loadImpactProfiles(), loadRelatedPolicies()])
 }
 
 onMounted(async () => {
-  await Promise.all([loadHotNews(), loadImpactProfiles()])
+  await Promise.all([loadHotNews(), loadImpactProfiles(), loadRelatedPolicies()])
   syncAnchorEventSelection()
 })
 
@@ -210,7 +251,7 @@ watch(
       return
     }
     selectedTopic.value = normalized
-    await Promise.all([loadHotNews(), loadImpactProfiles()])
+    await Promise.all([loadHotNews(), loadImpactProfiles(), loadRelatedPolicies()])
     syncAnchorEventSelection()
   },
 )
@@ -284,8 +325,11 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
       <header class="impact-header">
         <h2>{{ t('hotNews.impactPanel.title') }}</h2>
       </header>
-      <el-skeleton v-if="impactLoading" :rows="2" animated />
-      <el-empty v-else-if="impactProfiles.length === 0" :description="t('hotNews.impactPanel.empty')" />
+      <el-skeleton v-if="impactLoading || policyLoading" :rows="2" animated />
+      <el-empty
+        v-else-if="impactProfiles.length === 0 && relatedPolicies.length === 0"
+        :description="t('hotNews.impactPanel.empty')"
+      />
       <div v-else class="impact-list">
         <article v-for="profile in impactProfiles" :key="profile.topic" class="impact-item">
           <p class="impact-topic">{{ t(`hotNews.topics.${profile.topic}`) }}</p>
@@ -390,6 +434,33 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
               </article>
             </div>
             <span v-else>--</span>
+          </div>
+        </article>
+        <article v-if="relatedPolicies.length > 0" class="impact-item">
+          <p class="impact-topic">{{ t('hotNews.relatedPolicies') }}</p>
+          <div class="impact-policy-list">
+            <article
+              v-for="policyItem in relatedPolicies"
+              :key="policyItem.id"
+              class="impact-policy-item"
+            >
+              <p class="impact-policy-meta">
+                {{ policyItem.issuing_authority ?? policyItem.source }}
+                ·
+                {{ formatTime(policyItem.published_at) }}
+              </p>
+              <a
+                class="impact-policy-link"
+                :href="policyItem.url"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {{ policyItem.title }}
+              </a>
+              <p v-if="policyItem.summary" class="impact-row">
+                {{ policyItem.summary }}
+              </p>
+            </article>
           </div>
         </article>
       </div>
@@ -516,6 +587,34 @@ h1 {
   border-radius: 10px;
   padding: 0.55rem;
   background: rgba(12, 20, 34, 0.72);
+}
+
+.impact-policy-list {
+  display: grid;
+  gap: 0.42rem;
+  margin-top: 0.42rem;
+}
+
+.impact-policy-item {
+  border: 1px solid rgba(123, 197, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.55rem;
+  background: rgba(12, 20, 34, 0.72);
+}
+
+.impact-policy-meta {
+  margin: 0;
+  color: var(--terminal-muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.74rem;
+}
+
+.impact-policy-link {
+  display: inline-block;
+  margin-top: 0.3rem;
+  color: var(--terminal-primary);
+  text-decoration: none;
+  line-height: 1.35;
 }
 
 .impact-candidate-head {

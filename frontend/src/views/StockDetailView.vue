@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { ApiError } from '../api/http'
+import { policyApi, type PolicyDocumentListItem } from '../api/policy'
 import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
 import {
   stocksApi,
@@ -40,11 +41,13 @@ const authStore = useAuthStore()
 
 const loading = ref(false)
 const relatedNewsLoading = ref(false)
+const relatedPoliciesLoading = ref(false)
 const watchlistLoading = ref(false)
 const errorMessage = ref('')
 const detail = ref<StockDetail | null>(null)
 const dailyRows = ref<StockDailySnapshot[]>([])
 const relatedNews = ref<StockRelatedNewsItem[]>([])
+const relatedPolicies = ref<PolicyDocumentListItem[]>([])
 const themes = ref<StockTheme[]>([])
 const showAllNews = ref(false)
 const adjFactors = ref<StockAdjFactor[]>([])
@@ -668,6 +671,41 @@ const loadThemes = async () => {
   }
 }
 
+const loadRelatedPolicies = async () => {
+  if (!tsCode.value) {
+    relatedPolicies.value = []
+    return
+  }
+
+  const topic = topicContext.value || undefined
+  const keyword = topic
+    ? undefined
+    : detail.value?.instrument?.industry?.trim()
+      || detail.value?.instrument?.name?.trim()
+      || undefined
+
+  if (!topic && !keyword) {
+    relatedPolicies.value = []
+    return
+  }
+
+  relatedPoliciesLoading.value = true
+  try {
+    // 关键流程：个股页优先复用热点 topic，其次退化到行业/股票名关键词，先补上可直接查看的政策依据入口。
+    const payload = await policyApi.getDocuments({
+      macroTopic: topic,
+      keyword,
+      pageSize: 6,
+    })
+    relatedPolicies.value = payload.items
+  } catch {
+    // 降级分支：政策接口失败时不影响主看板、K 线和相关新闻继续可用。
+    relatedPolicies.value = []
+  } finally {
+    relatedPoliciesLoading.value = false
+  }
+}
+
 const loadWatchlistState = async () => {
   if (!authStore.accessToken || !tsCode.value) {
     watchlistItem.value = null
@@ -728,7 +766,7 @@ watch(
 const loadData = async () => {
   // 关键流程：先稳定主看板数据，再并发补资讯与关注状态，避免额外请求打乱主链路时序。
   await loadCoreData()
-  await Promise.all([loadRelatedNews(), loadThemes(), loadWatchlistState()])
+  await Promise.all([loadRelatedNews(), loadThemes(), loadWatchlistState(), loadRelatedPolicies()])
 }
 
 const goBack = async () => {
@@ -1188,6 +1226,41 @@ onBeforeUnmount(() => {
         </el-scrollbar>
       </el-card>
     </section>
+
+    <el-card
+      v-if="relatedPoliciesLoading || relatedPolicies.length > 0"
+      class="detail-card"
+      shadow="never"
+    >
+      <div class="related-news-header">
+        <h2>{{ t('stockDetail.relatedPolicies') }}</h2>
+      </div>
+      <el-skeleton v-if="relatedPoliciesLoading" :rows="3" animated />
+      <div v-else class="related-news-list related-policy-list">
+        <article
+          v-for="policyItem in relatedPolicies"
+          :key="policyItem.id"
+          class="related-news-item"
+        >
+          <p class="related-news-meta">
+            {{ policyItem.issuing_authority ?? policyItem.source }}
+            ·
+            {{ policyItem.published_at ?? '--' }}
+          </p>
+          <a
+            class="related-news-link"
+            :href="policyItem.url"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {{ policyItem.title }}
+          </a>
+          <p v-if="policyItem.summary" class="related-news-summary">
+            {{ policyItem.summary }}
+          </p>
+        </article>
+      </div>
+    </el-card>
   </section>
 </template>
 

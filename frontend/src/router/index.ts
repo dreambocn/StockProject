@@ -85,6 +85,11 @@ export const router = createRouter({
       component: () => import('../views/HotNewsView.vue'),
     },
     {
+      path: '/policy/documents',
+      name: 'policy-documents',
+      component: () => import('../views/PolicyDocumentsView.vue'),
+    },
+    {
       path: '/analysis',
       name: 'analysis-workbench',
       component: () => import('../views/AnalysisWorkbenchView.vue'),

@@ -25,6 +25,13 @@ const adminEntries = [
     titleKey: 'adminConsole.entries.jobs.title',
     noteKey: 'adminConsole.entries.jobs.note',
   },
+  {
+    key: 'policy',
+    to: '/policy/documents',
+    icon: '📜',
+    titleKey: 'adminConsole.entries.policy.title',
+    noteKey: 'adminConsole.entries.policy.note',
+  },
 ]
 // 后台入口使用配置数组渲染，便于后续扩展时保持结构一致。
 </script>

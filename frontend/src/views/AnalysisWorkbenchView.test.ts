@@ -819,6 +819,71 @@ describe('AnalysisWorkbenchView', () => {
     expect(citationLink.exists()).toBe(true)
   })
 
+  it('renders policy document source tokens separately from normal news sources', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', topic: 'regulation_policy' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: 'regulation_policy',
+      published_from: null,
+      published_to: null,
+      event_count: 1,
+      events: [
+        {
+          event_id: 'evt-policy-doc',
+          scope: 'policy',
+          title: '国务院关于优化科技监管环境的若干政策措施',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'gov_cn',
+          macro_topic: 'regulation_policy',
+          event_type: 'policy',
+          event_tags: ['政策原文'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.7,
+          anchor_trade_date: null,
+          window_return_pct: 1.2,
+          window_volatility: 0.8,
+          abnormal_volume_ratio: 1.1,
+          correlation_score: 0.85,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        id: 'report-policy-source',
+        status: 'ready',
+        summary: '政策原文显示监管边际改善。',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+        structured_sources: [{ provider: 'policy_document', count: 1 }],
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).toContain('政策原文 × 1')
+  })
+
   it('creates analysis session and applies streaming delta content', async () => {
     setAppLocale('zh-CN')
     const router = createRouterWithQuery()

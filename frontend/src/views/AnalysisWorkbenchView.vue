@@ -83,6 +83,21 @@ const formatDateTime = (value: string | null | undefined) => {
   }).format(parsed)
 }
 
+const formatStructuredSourceProvider = (provider: string | null | undefined) => {
+  const normalized = String(provider ?? '').trim().toLowerCase()
+  if (!normalized) {
+    return t('analysisWorkbench.sourceProviders.default')
+  }
+
+  // 关键流程：把内部 provider 标识转换为前端文案，避免把实现细节直接暴露给用户。
+  const providerLabelMap: Record<string, string> = {
+    akshare: t('analysisWorkbench.sourceProviders.akshare'),
+    tushare: t('analysisWorkbench.sourceProviders.tushare'),
+    policy_document: t('analysisWorkbench.sourceProviders.policyDocument'),
+  }
+  return providerLabelMap[normalized] ?? provider
+}
+
 const formatPrice = (value: number | null | undefined) => {
   if (typeof value !== 'number') {
     return t('analysisWorkbench.dataMissing')
@@ -976,7 +991,7 @@ watch(
                     :key="`${sourceItem.provider}-${sourceItem.count}`"
                     class="analysis-token"
                   >
-                    {{ `${sourceItem.provider ?? 'source'} × ${sourceItem.count ?? 0}` }}
+                    {{ `${formatStructuredSourceProvider(sourceItem.provider) ?? 'source'} × ${sourceItem.count ?? 0}` }}
                   </span>
                 </div>
                 <div

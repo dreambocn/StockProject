@@ -306,6 +306,78 @@ describe('StockDetailView', () => {
     expect(newsRequests).toHaveLength(1)
   })
 
+  it('renders related policy documents section for stock detail', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          instrument: {
+            ts_code: '600000.SH',
+            symbol: '600000',
+            name: '浦发银行',
+            fullname: '上海浦东发展银行股份有限公司',
+            area: '上海',
+            industry: '银行',
+            market: '主板',
+            exchange: 'SSE',
+            list_status: 'L',
+            list_date: '1999-11-10',
+            delist_date: null,
+            is_hs: 'H',
+          },
+          latest_snapshot: null,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            {
+              id: 'policy-doc-1',
+              source: 'pbc',
+              title: '中国人民银行关于优化科技金融服务的通知',
+              summary: '支持科技企业融资。',
+              document_no: '银发〔2026〕8号',
+              issuing_authority: '中国人民银行',
+              policy_level: 'department',
+              category: 'monetary',
+              macro_topic: 'monetary_policy',
+              published_at: '2026-03-31T01:00:00Z',
+              effective_at: null,
+              url: 'https://www.pbc.gov.cn/policy/notice.html',
+              metadata_status: 'ready',
+              projection_status: 'projected',
+            },
+          ],
+          total: 1,
+          page: 1,
+          page_size: 6,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/stocks/:tsCode', component: StockDetailView }],
+    })
+    await router.push('/stocks/600000.SH')
+    await router.isReady()
+
+    const wrapper = mount(StockDetailView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('相关政策')
+    expect(wrapper.text()).toContain('中国人民银行关于优化科技金融服务的通知')
+  })
+
   it('renders kline panel before related news section', async () => {
     const fetchMock = vi
       .fn()

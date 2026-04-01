@@ -191,6 +191,7 @@ const handleAuthAction = async () => {
       <nav class="terminal-nav">
         <router-link to="/">{{ t('nav.dashboard') }}</router-link>
         <router-link to="/news/hot">{{ t('nav.hotNews') }}</router-link>
+        <router-link to="/policy/documents">{{ t('nav.policy') }}</router-link>
         <router-link :to="analysisNavTarget">{{ t('nav.analysis') }}</router-link>
         <router-link to="/watchlist">{{ t('nav.watchlist') }}</router-link>
         <router-link v-if="showAdminNav" to="/admin">{{ t('nav.admin') }}</router-link>
