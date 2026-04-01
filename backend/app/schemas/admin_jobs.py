@@ -55,3 +55,11 @@ class AdminJobDetailResponse(AdminJobListItemResponse):
     metrics_json: dict[str, object] | list[object] | None = None
     error_type: str | None = None
     error_message: str | None = None
+
+
+class AdminNewsImpactRefreshResponse(BaseModel):
+    job_id: str | None = None
+    job_type: str = "news_impact_refresh"
+    status: str
+    source_version: str
+    refreshed_topic_count: int

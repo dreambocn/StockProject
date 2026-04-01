@@ -455,6 +455,49 @@ def test_candidate_evidence_service_uses_db_latest_batch_when_remote_fetch_disab
     asyncio.run(_run())
 
 
+def test_candidate_evidence_service_passes_target_ts_codes_to_db_lookup_when_remote_fetch_disabled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    session_maker = _build_session_factory(tmp_path)
+    redis_client = FakeRedisClient()
+    captured_calls: list[tuple[str, list[str] | None]] = []
+
+    async def fake_load_stock_candidate_evidence_rows_from_db(
+        *,
+        session,
+        evidence_kind: str,
+        ts_codes: list[str] | None = None,
+    ):
+        _ = session
+        captured_calls.append((evidence_kind, ts_codes))
+        return []
+
+    monkeypatch.setattr(
+        "app.services.candidate_evidence_service.load_stock_candidate_evidence_rows_from_db",
+        fake_load_stock_candidate_evidence_rows_from_db,
+    )
+
+    async def _run() -> None:
+        async with session_maker() as session:
+            await get_candidate_evidence_snapshots(
+                session=session,
+                ts_codes=["600938.SH", "600547.SH"],
+                now=datetime(2026, 3, 26, 12, 0, tzinfo=UTC),
+                redis_client_getter=lambda: redis_client,
+                allow_remote_fetch=False,
+                hot_search_refresh_window_seconds=3600,
+                research_report_refresh_window_seconds=3600,
+            )
+
+    asyncio.run(_run())
+
+    assert captured_calls == [
+        ("hot_search", ["600938.SH", "600547.SH"]),
+        ("research_report", ["600938.SH", "600547.SH"]),
+    ]
+
+
 async def _async_value(value):
     return value
 

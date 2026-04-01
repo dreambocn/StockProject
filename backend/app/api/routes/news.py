@@ -35,13 +35,16 @@ from app.services.news_fetch_batch_service import (
     finalize_news_fetch_batch,
 )
 from app.services.news_mapper_service import (
-    attach_dynamic_a_share_candidates,
-    list_macro_impact_profiles,
     map_hot_news_rows,
     map_policy_news_rows,
     map_tushare_major_news_rows,
 )
-from app.services.market_theme_service import attach_theme_matches_to_profiles
+from app.services.news_impact_service import (
+    DEFAULT_IMPACT_CANDIDATE_EVIDENCE_LIMIT,
+    DEFAULT_IMPACT_CANDIDATE_LIMIT,
+    build_news_impact_profiles,
+    get_cached_news_impact_profiles,
+)
 from app.services.news_repository import (
     load_hot_news_rows_from_db,
     load_latest_hot_news_fetch_at,
@@ -449,8 +452,8 @@ async def get_news_events(
 @router.get("/news/impact-map", response_model=list[MacroImpactProfileResponse])
 async def get_macro_impact_map(
     topic: str = Query(default="all"),
-    candidate_limit: int = Query(default=6, ge=1, le=20),
-    candidate_evidence_limit: int = Query(default=3, ge=1, le=5),
+    candidate_limit: int = Query(default=DEFAULT_IMPACT_CANDIDATE_LIMIT, ge=1, le=20),
+    candidate_evidence_limit: int = Query(default=DEFAULT_IMPACT_CANDIDATE_EVIDENCE_LIMIT, ge=1, le=5),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[MacroImpactProfileResponse]:
     normalized_topic = topic.strip().lower() or "all"
@@ -460,29 +463,22 @@ async def get_macro_impact_map(
             detail="invalid topic filter",
         )
 
-    # 关键流程：影响面板先返回稳定的规则映射，再补充数据库动态候选标的，保证可解释与可扩展兼容。
-    profiles = list_macro_impact_profiles(normalized_topic)
-    # 易误用边界：动态候选补充失败时要保留基础候选结果，避免路由层把已有候选误清空。
-    try:
-        if session is not None:
-            profiles = await attach_dynamic_a_share_candidates(
-                session=session,
-                profiles=profiles,
-                per_topic_limit=candidate_limit,
-                evidence_item_limit=candidate_evidence_limit,
-            )
-            profiles = await attach_theme_matches_to_profiles(
-                session,
-                profiles=profiles,
-            )
-    except Exception as exc:
-        # 候选增强失败时保留基础结果，避免接口因为附加信息缺失而整体失败。
-        logger.warning(
-            "event=impact_map_dynamic_candidates_degraded error_type=%s message=候选增强失败，保留基础结果",
-            type(exc).__name__,
+    if (
+        candidate_limit == DEFAULT_IMPACT_CANDIDATE_LIMIT
+        and candidate_evidence_limit == DEFAULT_IMPACT_CANDIDATE_EVIDENCE_LIMIT
+    ):
+        cached_profiles, _source_version = await get_cached_news_impact_profiles(
+            session=session,
+            topic=normalized_topic,
         )
+        return cached_profiles
 
-    return [MacroImpactProfileResponse.model_validate(item) for item in profiles]
+    return await build_news_impact_profiles(
+        session=session,
+        topic=normalized_topic,
+        candidate_limit=candidate_limit,
+        candidate_evidence_limit=candidate_evidence_limit,
+    )
 
 
 @router.get("/news/policy", response_model=list[NewsEventResponse])

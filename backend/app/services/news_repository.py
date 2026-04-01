@@ -538,6 +538,7 @@ async def load_stock_candidate_evidence_rows_from_db(
     *,
     session: AsyncSession,
     evidence_kind: str,
+    ts_codes: list[str] | None = None,
 ) -> list[CandidateEvidenceItemResponse]:
     latest_fetched_at = await load_latest_candidate_evidence_fetch_at(
         session=session,
@@ -555,6 +556,9 @@ async def load_stock_candidate_evidence_rows_from_db(
             StockCandidateEvidenceCache.created_at.desc(),
         )
     )
+    if ts_codes:
+        # 只读场景只需要目标股票的最新证据，避免把整批候选证据读入内存后再做 Python 过滤。
+        statement = statement.where(StockCandidateEvidenceCache.ts_code.in_(ts_codes))
     rows = (await session.execute(statement)).scalars().all()
     return [
         CandidateEvidenceItemResponse(

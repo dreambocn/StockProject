@@ -17,6 +17,7 @@ from app.schemas.admin import AdminCreateUserRequest, AdminUserResponse
 from app.schemas.admin_jobs import (
     AdminJobDetailResponse,
     AdminJobFailureSummaryResponse,
+    AdminNewsImpactRefreshResponse,
     AdminJobLinkedEntityResponse,
     AdminJobListItemResponse,
     AdminJobPageResponse,
@@ -35,6 +36,7 @@ from app.services.stock_list_status import (
 )
 from app.services.stock_sync_service import sync_stock_basic_full
 from app.services.policy_sync_service import sync_policy_documents
+from app.services.news_impact_service import refresh_news_impact_snapshots
 from app.services.job_query_service import (
     get_job_status_counts,
     get_job_type_counts,
@@ -181,6 +183,28 @@ async def sync_policy_documents_route(
         updated_count=int(result["updated_count"]),
         deduped_count=int(result["deduped_count"]),
         failed_provider_count=int(result["failed_provider_count"]),
+    )
+
+
+@router.post(
+    "/news/impact/refresh",
+    response_model=AdminNewsImpactRefreshResponse,
+)
+async def refresh_news_impact_route(
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AdminNewsImpactRefreshResponse:
+    # 关键流程：管理员手动预热热点影响快照，避免用户首屏承担默认影响面板的重建成本。
+    result = await refresh_news_impact_snapshots(
+        session,
+        trigger_source="admin.news.impact.refresh",
+    )
+    return AdminNewsImpactRefreshResponse(
+        job_id=str(result.get("job_id") or ""),
+        job_type=str(result["job_type"]),
+        status=str(result["status"]),
+        source_version=str(result["source_version"]),
+        refreshed_topic_count=int(result["refreshed_topic_count"]),
     )
 
 

@@ -3,8 +3,9 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import re
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.models.news_event import NewsEvent
 from app.models.policy_document import PolicyDocument
@@ -17,6 +18,7 @@ from app.schemas.news import (
     StockRelatedNewsItemResponse,
 )
 from app.services.candidate_evidence_service import get_candidate_evidence_snapshots
+from app.services.news_fetch_batch_service import load_latest_news_fetch_batch
 
 
 MACRO_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -83,6 +85,64 @@ SOURCE_COVERAGE_MAP: dict[str, str] = {
 
 CANDIDATE_POOL_MULTIPLIER = 4
 MAX_CANDIDATE_POOL_SIZE = 24
+
+
+async def _load_relevant_candidate_instruments(
+    *,
+    session: AsyncSession,
+    target_names: set[str],
+    keywords: set[str],
+    recent_event_ts_codes: set[str],
+) -> list[StockInstrument]:
+    normalized_target_names = sorted(
+        {
+            str(name).strip()
+            for name in target_names
+            if str(name).strip() and str(name).strip() != "待人工研判"
+        }
+    )
+    normalized_keywords = sorted(
+        {str(keyword).strip() for keyword in keywords if str(keyword).strip()}
+    )
+    normalized_recent_event_ts_codes = sorted(
+        {str(ts_code).strip().upper() for ts_code in recent_event_ts_codes if str(ts_code).strip()}
+    )
+
+    filters = []
+    if normalized_target_names:
+        filters.append(StockInstrument.name.in_(normalized_target_names))
+    for keyword in normalized_keywords:
+        wildcard = f"%{keyword}%"
+        filters.extend(
+            [
+                StockInstrument.industry.ilike(wildcard),
+                StockInstrument.name.ilike(wildcard),
+                StockInstrument.fullname.ilike(wildcard),
+            ]
+        )
+    if normalized_recent_event_ts_codes:
+        filters.append(StockInstrument.ts_code.in_(normalized_recent_event_ts_codes))
+
+    if not filters:
+        return []
+
+    statement = (
+        select(StockInstrument)
+        .options(
+            load_only(
+                StockInstrument.ts_code,
+                StockInstrument.symbol,
+                StockInstrument.name,
+                StockInstrument.fullname,
+                StockInstrument.industry,
+            )
+        )
+        .where(StockInstrument.list_status == "L")
+        .where(or_(*filters))
+    )
+    # 候选增强只依赖少数字段和相关股票集合，先在 SQL 层预筛掉无关标的，
+    # 再配合 load_only 缩小行宽，避免每次构建影响面板都全量搬运上市公司主表。
+    return (await session.execute(statement)).scalars().all()
 
 
 def detect_macro_topic(*, title: str, summary: str | None) -> str:
@@ -305,18 +365,38 @@ async def _load_anchor_events_by_topic(
     if not topics:
         return {}
 
-    statement = (
-        select(NewsEvent)
-        .where(
-            NewsEvent.scope == "hot",
-            NewsEvent.macro_topic.in_(topics),
-        )
-        .order_by(
-            NewsEvent.macro_topic.asc(),
-            NewsEvent.source_priority.desc(),
-            NewsEvent.published_at.desc(),
-            NewsEvent.created_at.desc(),
-        )
+    statement = select(NewsEvent).where(
+        NewsEvent.scope == "hot",
+        NewsEvent.cache_variant == "global",
+        NewsEvent.macro_topic.in_(topics),
+    )
+    latest_batch = await load_latest_news_fetch_batch(
+        session,
+        scope="hot",
+        cache_variant="global",
+    )
+    if latest_batch is not None:
+        # 锚点事件只应来自最新热点批次，避免旧批次里“发布时间更晚”的历史数据拖慢查询并覆盖当前语义。
+        statement = statement.where(NewsEvent.batch_id == latest_batch.id)
+    else:
+        latest_fetched_at = (
+            await session.execute(
+                select(func.max(NewsEvent.fetched_at)).where(
+                    NewsEvent.scope == "hot",
+                    NewsEvent.cache_variant == "global",
+                )
+            )
+        ).scalar_one_or_none()
+        if latest_fetched_at is None:
+            return {}
+        # 兼容旧数据：未写批次时退回最新 fetched_at 窗口，而不是扫描全部历史热点。
+        statement = statement.where(NewsEvent.fetched_at == latest_fetched_at)
+
+    statement = statement.order_by(
+        NewsEvent.macro_topic.asc(),
+        NewsEvent.source_priority.desc(),
+        NewsEvent.published_at.desc(),
+        NewsEvent.created_at.desc(),
     )
     rows = (await session.execute(statement)).scalars().all()
 
@@ -559,8 +639,6 @@ async def attach_dynamic_a_share_candidates(
     per_topic_limit: int = 6,
     evidence_item_limit: int = 3,
 ) -> list[dict[str, object]]:
-    statement = select(StockInstrument).where(StockInstrument.list_status == "L")
-    instruments = (await session.execute(statement)).scalars().all()
     recent_since = datetime.now(UTC) - timedelta(days=7)
     stock_event_counts = await _load_recent_stock_event_counts(
         session=session,
@@ -570,6 +648,25 @@ async def attach_dynamic_a_share_candidates(
     anchor_events_by_topic = await _load_anchor_events_by_topic(
         session=session,
         topics=topics,
+    )
+    instruments = await _load_relevant_candidate_instruments(
+        session=session,
+        target_names={
+            str(name).strip()
+            for profile in profiles
+            for name in (profile.get("a_share_targets") or [])
+            if str(name).strip()
+        },
+        keywords={
+            keyword
+            for profile in profiles
+            for keyword in MACRO_TOPIC_INDUSTRY_KEYWORDS.get(
+                str(profile.get("topic") or "other"),
+                (),
+            )
+            if str(keyword).strip()
+        },
+        recent_event_ts_codes=set(stock_event_counts.keys()),
     )
     candidate_pool_limit = min(
         MAX_CANDIDATE_POOL_SIZE,

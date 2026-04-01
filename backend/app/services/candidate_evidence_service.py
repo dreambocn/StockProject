@@ -283,6 +283,7 @@ async def _get_evidence_rows(
     | Callable[[list[dict[str, object]], dict[str, StockInstrument], dict[str, StockInstrument]], list[CandidateEvidenceItemResponse]],
     redis_client_getter: RedisClientGetter,
     allow_remote_fetch: bool = True,
+    target_ts_codes: list[str] | None = None,
 ) -> list[CandidateEvidenceItemResponse]:
     async def read_cache(key: str) -> list[CandidateEvidenceItemResponse] | None:
         return await read_cached_model_rows(
@@ -345,6 +346,19 @@ async def _get_evidence_rows(
         )
         await session.commit()
         return await load_from_db()
+
+    if not allow_remote_fetch:
+        cached_rows = await read_cache(cache_key)
+        if cached_rows is not None:
+            return cached_rows
+
+        # 影响面板默认是“只读最新快照”路径：缓存失效时只查目标股票的数据库行，
+        # 不再经过通用新闻缓存流程，避免重复全表读取以及把局部结果误写回全局缓存键。
+        return await load_stock_candidate_evidence_rows_from_db(
+            session=session,
+            evidence_kind=evidence_kind,
+            ts_codes=target_ts_codes,
+        )
 
     return await get_news_rows(
         cache_key=cache_key,
@@ -467,6 +481,7 @@ async def get_candidate_evidence_snapshots(
             mapper=_map_hot_search_rows,
             redis_client_getter=resolved_redis_getter,
             allow_remote_fetch=allow_remote_fetch,
+            target_ts_codes=normalized_ts_codes,
         )
     except Exception:
         # 热搜抓取失败不影响研报与页面整体渲染，直接降级为空列表。
@@ -486,6 +501,7 @@ async def get_candidate_evidence_snapshots(
             mapper=_map_research_report_rows,
             redis_client_getter=resolved_redis_getter,
             allow_remote_fetch=allow_remote_fetch,
+            target_ts_codes=normalized_ts_codes,
         )
     except Exception:
         # 研报抓取失败同样降级为无数据，避免阻塞其余证据展示。

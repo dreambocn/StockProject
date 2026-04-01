@@ -13,6 +13,9 @@ from app.db.session import get_db_session
 from app.main import app
 import app.api.routes.news as news_routes
 import app.api.routes.stocks as stocks_routes
+import app.services.news_cache_version_service as news_cache_version_service
+import app.services.news_mapper_service as news_mapper_service
+import app.services.stock_cache_service as stock_cache_service
 from app.models.news_fetch_batch import NewsFetchBatch
 from app.models.news_event import NewsEvent
 from app.models.policy_document import PolicyDocument
@@ -193,11 +196,13 @@ def news_client(tmp_path: Path) -> TestClient:
     fake_redis = FakeRedisClient()
     original_get_redis_client = news_routes.get_redis_client
     original_stock_get_redis_client = stocks_routes.get_redis_client
+    original_stock_cache_get_redis_client = stock_cache_service.get_redis_client
+    original_news_cache_version_get_redis_client = (
+        news_cache_version_service.get_redis_client
+    )
     original_fetch_major_news = news_routes.TushareGateway.fetch_major_news
     original_get_candidate_evidence_snapshots = (
-        news_routes.attach_dynamic_a_share_candidates.__globals__.get(
-            "get_candidate_evidence_snapshots"
-        )
+        news_mapper_service.get_candidate_evidence_snapshots
     )
 
     asyncio.run(_create_tables())
@@ -210,6 +215,8 @@ def news_client(tmp_path: Path) -> TestClient:
     app.dependency_overrides[get_db_session] = _override_session
     news_routes.get_redis_client = lambda: fake_redis
     stocks_routes.get_redis_client = lambda: fake_redis
+    stock_cache_service.get_redis_client = lambda: fake_redis
+    news_cache_version_service.get_redis_client = lambda: fake_redis
 
     async def _fake_fetch_major_news(self) -> list[dict[str, object]]:
         return []
@@ -220,9 +227,9 @@ def news_client(tmp_path: Path) -> TestClient:
         return {}
 
     news_routes.TushareGateway.fetch_major_news = _fake_fetch_major_news
-    news_routes.attach_dynamic_a_share_candidates.__globals__[
-        "get_candidate_evidence_snapshots"
-    ] = _fake_candidate_evidence_snapshots
+    news_mapper_service.get_candidate_evidence_snapshots = (
+        _fake_candidate_evidence_snapshots
+    )
 
     with TestClient(app) as client:
         client.session_maker = session_maker
@@ -232,11 +239,14 @@ def news_client(tmp_path: Path) -> TestClient:
     app.dependency_overrides.pop(get_db_session, None)
     news_routes.get_redis_client = original_get_redis_client
     stocks_routes.get_redis_client = original_stock_get_redis_client
+    stock_cache_service.get_redis_client = original_stock_cache_get_redis_client
+    news_cache_version_service.get_redis_client = (
+        original_news_cache_version_get_redis_client
+    )
     news_routes.TushareGateway.fetch_major_news = original_fetch_major_news
-    if original_get_candidate_evidence_snapshots is not None:
-        news_routes.attach_dynamic_a_share_candidates.__globals__[
-            "get_candidate_evidence_snapshots"
-        ] = original_get_candidate_evidence_snapshots
+    news_mapper_service.get_candidate_evidence_snapshots = (
+        original_get_candidate_evidence_snapshots
+    )
     asyncio.run(engine.dispose())
 
 
@@ -535,6 +545,195 @@ def test_impact_map_endpoint_supports_topic_filter(news_client: TestClient) -> N
     assert payload[0]["topic"] == "commodity_supply"
 
 
+def test_impact_map_default_request_reuses_cached_snapshot(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    dynamic_calls = {"count": 0}
+
+    async def fake_attach_dynamic_a_share_candidates(*args, **kwargs):
+        _ = args
+        dynamic_calls["count"] += 1
+        return [
+            {
+                "topic": "commodity_supply",
+                "affected_assets": ["原油"],
+                "beneficiary_sectors": ["油气开采"],
+                "pressure_sectors": ["航空运输"],
+                "a_share_targets": ["中国海油"],
+                "anchor_event": {
+                    "event_id": "evt-hot-1",
+                    "title": "国际油价高位震荡",
+                    "published_at": datetime(2026, 3, 3, 10, 0, tzinfo=UTC),
+                    "providers": ["akshare"],
+                    "source_coverage": "AK",
+                },
+                "a_share_candidates": [
+                    {
+                        "ts_code": "600938.SH",
+                        "symbol": "600938",
+                        "name": "中国海油",
+                        "industry": "石油开采",
+                        "relevance_score": 45,
+                        "match_reasons": ["命中主题目标股"],
+                        "evidence_summary": "命中主题目标股",
+                        "source_hit_count": 1,
+                        "source_breakdown": [],
+                        "freshness_score": 0,
+                        "candidate_confidence": "中",
+                        "evidence_items": [],
+                    }
+                ],
+            }
+        ]
+
+    async def fake_attach_theme_matches_to_profiles(session, *, profiles):
+        _ = session
+        return profiles
+
+    monkeypatch.setattr(
+        "app.services.news_impact_service.attach_dynamic_a_share_candidates",
+        fake_attach_dynamic_a_share_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.news_impact_service.attach_theme_matches_to_profiles",
+        fake_attach_theme_matches_to_profiles,
+    )
+
+    first = news_client.get("/api/news/impact-map", params={"topic": "commodity_supply"})
+    second = news_client.get("/api/news/impact-map", params={"topic": "commodity_supply"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert dynamic_calls["count"] == 1
+
+
+def test_impact_map_non_default_request_keeps_dynamic_path(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    dynamic_calls = {"count": 0}
+
+    async def fake_attach_dynamic_a_share_candidates(*args, **kwargs):
+        _ = args
+        dynamic_calls["count"] += 1
+        return [
+            {
+                "topic": "commodity_supply",
+                "affected_assets": ["原油"],
+                "beneficiary_sectors": ["油气开采"],
+                "pressure_sectors": ["航空运输"],
+                "a_share_targets": ["中国海油"],
+                "anchor_event": None,
+                "a_share_candidates": [],
+            }
+        ]
+
+    async def fake_attach_theme_matches_to_profiles(session, *, profiles):
+        _ = session
+        return profiles
+
+    monkeypatch.setattr(
+        "app.services.news_impact_service.attach_dynamic_a_share_candidates",
+        fake_attach_dynamic_a_share_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.news_impact_service.attach_theme_matches_to_profiles",
+        fake_attach_theme_matches_to_profiles,
+    )
+
+    first = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply", "candidate_limit": 1},
+    )
+    second = news_client.get(
+        "/api/news/impact-map",
+        params={"topic": "commodity_supply", "candidate_limit": 1},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert dynamic_calls["count"] == 2
+
+
+def test_impact_map_reuses_previous_snapshot_when_rebuild_fails(
+    news_client: TestClient,
+    monkeypatch,
+) -> None:
+    dynamic_calls = {"count": 0}
+    source_versions = iter(
+        [
+            "hot=20260303100500|evidence=none|theme=none",
+            "hot=20260303110500|evidence=none|theme=none",
+        ]
+    )
+
+    async def fake_build_source_version(session) -> str:
+        _ = session
+        try:
+            return next(source_versions)
+        except StopIteration:
+            return "hot=20260303110500|evidence=none|theme=none"
+
+    async def fake_attach_dynamic_a_share_candidates(*args, **kwargs):
+        _ = args
+        dynamic_calls["count"] += 1
+        if dynamic_calls["count"] == 1:
+            return [
+                {
+                    "topic": "commodity_supply",
+                    "affected_assets": ["原油"],
+                    "beneficiary_sectors": ["油气开采"],
+                    "pressure_sectors": ["航空运输"],
+                    "a_share_targets": ["中国海油"],
+                    "anchor_event": None,
+                    "a_share_candidates": [
+                        {
+                            "ts_code": "600938.SH",
+                            "symbol": "600938",
+                            "name": "中国海油",
+                            "industry": "石油开采",
+                            "relevance_score": 45,
+                            "match_reasons": ["命中主题目标股"],
+                            "evidence_summary": "命中主题目标股",
+                            "source_hit_count": 1,
+                            "source_breakdown": [],
+                            "freshness_score": 0,
+                            "candidate_confidence": "中",
+                            "evidence_items": [],
+                        }
+                    ],
+                }
+            ]
+        raise RuntimeError("impact rebuild failed")
+
+    async def fake_attach_theme_matches_to_profiles(session, *, profiles):
+        _ = session
+        return profiles
+
+    monkeypatch.setattr(
+        "app.services.news_impact_service.build_news_impact_source_version",
+        fake_build_source_version,
+    )
+    monkeypatch.setattr(
+        "app.services.news_impact_service.attach_dynamic_a_share_candidates",
+        fake_attach_dynamic_a_share_candidates,
+    )
+    monkeypatch.setattr(
+        "app.services.news_impact_service.attach_theme_matches_to_profiles",
+        fake_attach_theme_matches_to_profiles,
+    )
+
+    first = news_client.get("/api/news/impact-map", params={"topic": "commodity_supply"})
+    second = news_client.get("/api/news/impact-map", params={"topic": "commodity_supply"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert dynamic_calls["count"] == 2
+    assert first.json()[0]["a_share_candidates"][0]["name"] == "中国海油"
+    assert second.json()[0]["a_share_candidates"][0]["name"] == "中国海油"
+
+
 def test_impact_map_returns_dynamic_a_share_candidates(
     news_client: TestClient,
 ) -> None:
@@ -809,12 +1008,12 @@ def test_impact_map_route_keeps_existing_candidates_when_attach_raises(
         _ = kwargs
         warning_calls.append((message, args))
 
-    monkeypatch.setattr("app.api.routes.news.list_macro_impact_profiles", fake_profiles)
+    monkeypatch.setattr("app.services.news_impact_service.list_macro_impact_profiles", fake_profiles)
     monkeypatch.setattr(
-        "app.api.routes.news.attach_dynamic_a_share_candidates",
+        "app.services.news_impact_service.attach_dynamic_a_share_candidates",
         fake_attach_dynamic_a_share_candidates,
     )
-    monkeypatch.setattr("app.api.routes.news.logger.warning", fake_warning)
+    monkeypatch.setattr("app.services.news_impact_service.LOGGER.warning", fake_warning)
 
     response = news_client.get("/api/news/impact-map", params={"topic": "commodity_supply"})
 

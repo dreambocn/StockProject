@@ -325,9 +325,9 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
       <header class="impact-header">
         <h2>{{ t('hotNews.impactPanel.title') }}</h2>
       </header>
-      <el-skeleton v-if="impactLoading || policyLoading" :rows="2" animated />
+      <el-skeleton v-if="impactLoading" :rows="2" animated />
       <el-empty
-        v-else-if="impactProfiles.length === 0 && relatedPolicies.length === 0"
+        v-else-if="impactProfiles.length === 0 && relatedPolicies.length === 0 && !policyLoading"
         :description="t('hotNews.impactPanel.empty')"
       />
       <div v-else class="impact-list">
@@ -435,6 +435,10 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
             </div>
             <span v-else>--</span>
           </div>
+        </article>
+        <article v-if="policyLoading" class="impact-item impact-policy-loading">
+          <p class="impact-topic">{{ t('hotNews.relatedPolicies') }}</p>
+          <el-skeleton :rows="2" animated />
         </article>
         <article v-if="relatedPolicies.length > 0" class="impact-item">
           <p class="impact-topic">{{ t('hotNews.relatedPolicies') }}</p>

@@ -375,6 +375,74 @@ describe('HotNewsView', () => {
     expect(firstCall[0]).toContain('/api/news/hot')
   })
 
+  it('keeps impact panel visible while related policies are still loading', async () => {
+    const policyDeferred = createDeferred<{
+      items: never[]
+      total: number
+      page: number
+      page_size: number
+    }>()
+
+    vi.spyOn(newsApi, 'getHotNews').mockResolvedValue([
+      {
+        event_id: 'evt-hot-1',
+        cluster_key: 'cluster-1',
+        providers: ['akshare'],
+        source_coverage: 'AK',
+        title: '国际油价高位震荡',
+        summary: '原油供需偏紧',
+        published_at: '2026-03-03T09:00:00',
+        url: 'https://finance.example.com/a/1',
+        source: 'eastmoney_global',
+        macro_topic: 'commodity_supply',
+      },
+    ])
+    vi.spyOn(newsApi, 'getImpactMap').mockResolvedValue([
+      {
+        topic: 'commodity_supply',
+        affected_assets: ['原油'],
+        beneficiary_sectors: ['油气开采'],
+        pressure_sectors: ['航空运输'],
+        a_share_targets: ['中国海油'],
+        anchor_event: {
+          event_id: 'evt-hot-1',
+          title: '国际油价高位震荡',
+          published_at: '2026-03-03T09:00:00',
+          providers: ['akshare'],
+          source_coverage: 'AK',
+        },
+        a_share_candidates: [],
+      },
+    ])
+    vi.spyOn(policyApi, 'getDocuments').mockReturnValue(policyDeferred.promise)
+
+    setAppLocale('zh-CN')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/news/hot', component: HotNewsView }],
+    })
+    await router.push({ path: '/news/hot', query: { topic: 'commodity_supply' } })
+    await router.isReady()
+
+    const wrapper = mount(HotNewsView, {
+      global: {
+        plugins: [createPinia(), router, i18n, ElementPlus, MotionPlugin],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('油气开采')
+
+    policyDeferred.resolve({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 3,
+    })
+    await flushPromises()
+  })
+
   it('reads topic from route query and requests filtered hot news on first load', async () => {
     const fetchMock = vi
       .fn()
