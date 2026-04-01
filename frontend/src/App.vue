@@ -10,6 +10,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+const brandLogoUrl = '/logo-mark.svg'
 const LAST_ANALYSIS_CONTEXT_KEY = 'app.last-analysis-context'
 
 type AnalysisNavContext = {
@@ -184,7 +185,7 @@ const handleAuthAction = async () => {
 
     <header class="terminal-header">
       <div class="brand-block">
-        <img class="brand-logo" src="/logo-mark.svg" alt="脉策图标" />
+        <img class="brand-logo" :src="brandLogoUrl" alt="脉策图标" />
         <div>
         <p class="brand-kicker">{{ t('app.brandKicker') }}</p>
         <p class="brand-title">{{ t('app.brandTitle') }}</p>

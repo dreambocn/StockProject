@@ -47,6 +47,7 @@ describe('App', () => {
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/policy/documents', component: HomeView },
         { path: '/news/hot', component: HomeView },
       ],
     })
@@ -59,8 +60,8 @@ describe('App', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('AI STOCK LAB')
-    expect(wrapper.text()).toContain('by DreamBo')
+    expect(wrapper.text()).toContain('PULSE STRATEGY')
+    expect(wrapper.text()).toContain('脉策')
     expect(wrapper.text()).toContain('股票仪表盘')
     expect(wrapper.text()).toContain('中文')
     expect(wrapper.text()).toContain('EN')
@@ -98,6 +99,7 @@ describe('App', () => {
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/policy/documents', component: HomeView },
         { path: '/news/hot', component: HomeView },
       ],
     })
@@ -173,6 +175,7 @@ describe('App', () => {
         { path: '/admin/users', component: HomeView },
         { path: '/admin/stocks', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/policy/documents', component: HomeView },
         { path: '/news/hot', component: HomeView },
       ],
     })
@@ -210,6 +213,7 @@ describe('App', () => {
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/policy/documents', component: HomeView },
         { path: '/news/hot', component: HomeView },
       ],
     })
@@ -266,6 +270,7 @@ describe('App', () => {
         { path: '/profile', component: HomeView },
         { path: '/login', component: HomeView },
         { path: '/stocks/:tsCode', component: HomeView },
+        { path: '/policy/documents', component: HomeView },
         { path: '/news/hot', component: HomeView },
       ],
     })

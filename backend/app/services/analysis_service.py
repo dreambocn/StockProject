@@ -329,6 +329,15 @@ def _normalize_evidence_event_payloads(
     return normalized_events
 
 
+def _resolve_generation_event_limit(settings: object, fallback_limit: int) -> int:
+    raw_limit = getattr(settings, "analysis_generation_event_limit", fallback_limit)
+    try:
+        resolved_limit = int(raw_limit)
+    except (TypeError, ValueError):
+        resolved_limit = fallback_limit
+    return max(1, resolved_limit)
+
+
 async def _resolve_report_evidence_payloads(
     session: AsyncSession,
     *,
@@ -441,7 +450,10 @@ async def get_stock_analysis_summary(
         resolved_event_limit * settings.analysis_summary_candidate_pool_multiplier,
         resolved_event_limit + 20,
     )
-    generation_event_limit = settings.analysis_generation_event_limit
+    generation_event_limit = _resolve_generation_event_limit(
+        settings,
+        resolved_event_limit,
+    )
     persisted_report = await load_latest_report(
         session,
         normalized_ts_code,
@@ -570,7 +582,10 @@ async def list_stock_analysis_report_archives(
         evidence_payloads = await _resolve_report_evidence_payloads(
             session,
             report_obj=report,
-            fallback_limit=settings.analysis_generation_event_limit,
+            fallback_limit=_resolve_generation_event_limit(
+                settings,
+                20,
+            ),
             anchor_event_id=report.anchor_event_id,
         )
         serialized_items.append(
@@ -595,7 +610,10 @@ async def get_analysis_report_evidence(
     evidence_payloads = await _resolve_report_evidence_payloads(
         session,
         report_obj=report,
-        fallback_limit=get_settings().analysis_generation_event_limit,
+        fallback_limit=_resolve_generation_event_limit(
+            get_settings(),
+            20,
+        ),
         anchor_event_id=report.anchor_event_id,
     )
     return {
@@ -785,7 +803,10 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 raise AnalysisNotFoundError("stock not found")
 
             settings = get_settings()
-            generation_limit = settings.analysis_generation_event_limit
+            generation_limit = _resolve_generation_event_limit(
+                settings,
+                20,
+            )
             candidate_pool_limit = max(
                 generation_limit
                 * settings.analysis_generation_candidate_pool_multiplier,
