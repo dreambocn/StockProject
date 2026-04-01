@@ -1,9 +1,13 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlparse
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEFAULT_ENV_FILE_PATH = Path(__file__).resolve().parents[3] / ".env"
 
 
 def _remove_jdbc_prefix(url: str) -> str:
@@ -33,6 +37,10 @@ class Settings(BaseSettings):
     postgres_maintenance_db: str = "postgres"
     db_auto_create_database: bool = True
     db_auto_create_tables: bool = True
+    # 远端数据库最大连接数较小时，开发环境默认使用更保守的连接池，避免 API/Worker 叠加后打满数据库。
+    db_pool_size: int = 1
+    db_max_overflow: int = 0
+    db_pool_timeout_seconds: int = 15
     # 登录失败计数达到阈值后触发验证码挑战。
     login_captcha_threshold: int = 2
     login_fail_window_seconds: int = 900
@@ -65,6 +73,17 @@ class Settings(BaseSettings):
     stock_related_news_cache_ttl_seconds: int = 3600
     hot_news_cache_ttl_seconds: int = 3600
     policy_news_cache_ttl_seconds: int = 1800
+    policy_sync_enabled: bool = True
+    policy_sync_lookback_days: int = 7
+    policy_source_timeout_seconds: int = 8
+    policy_source_max_items_per_provider: int = 50
+    policy_sync_max_concurrent_requests: int = 3
+    policy_provider_gov_cn_enabled: bool = True
+    policy_provider_npc_enabled: bool = True
+    policy_provider_pbc_enabled: bool = True
+    policy_provider_csrc_enabled: bool = True
+    policy_provider_ndrc_enabled: bool = True
+    policy_provider_miit_enabled: bool = True
     news_cache_version_legacy_fallback_enabled: bool = True
     news_cache_version_legacy_fallback_seconds: int = 3600
     candidate_hot_search_cache_ttl_seconds: int = 3600
@@ -97,7 +116,7 @@ class Settings(BaseSettings):
     init_admin_password: str = ""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=DEFAULT_ENV_FILE_PATH,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -274,6 +293,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DB_SCHEMA_BOOTSTRAP_MODE=auto_apply 仅允许在 development 环境使用"
             )
+        if self.db_pool_size < 1:
+            raise ValueError("DB_POOL_SIZE 不能小于 1")
+        if self.db_max_overflow < 0:
+            raise ValueError("DB_MAX_OVERFLOW 不能小于 0")
+        if self.db_pool_timeout_seconds < 1:
+            raise ValueError("DB_POOL_TIMEOUT_SECONDS 不能小于 1")
         if self.job_heartbeat_stale_seconds < 30:
             raise ValueError("JOB_HEARTBEAT_STALE_SECONDS 不能小于 30")
         if self.job_retention_days < 1:

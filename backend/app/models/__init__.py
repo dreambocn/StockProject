@@ -6,6 +6,8 @@ from app.models.market_theme_membership import MarketThemeMembership
 from app.models.market_theme_sync_batch import MarketThemeSyncBatch
 from app.models.news_fetch_batch import NewsFetchBatch
 from app.models.news_event import NewsEvent
+from app.models.policy_document import PolicyDocument
+from app.models.policy_document_attachment import PolicyDocumentAttachment
 from app.models.system_job_run import SystemJobRun
 from app.models.stock_adj_factor import StockAdjFactor
 from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
@@ -30,6 +32,8 @@ __all__ = [
     "MarketThemeSyncBatch",
     "NewsFetchBatch",
     "NewsEvent",
+    "PolicyDocument",
+    "PolicyDocumentAttachment",
     "SystemJobRun",
     "StockInstrument",
     "StockCandidateEvidenceCache",

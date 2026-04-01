@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.core.settings import Settings
@@ -79,6 +81,9 @@ def test_settings_captcha_defaults() -> None:
     assert settings.hot_news_cache_ttl_seconds == 3600
     assert settings.trust_proxy_headers is False
     assert settings.trusted_proxy_ips_list == []
+    assert settings.db_pool_size == 1
+    assert settings.db_max_overflow == 0
+    assert settings.db_pool_timeout_seconds == 15
 
 
 def test_settings_parse_cors_allow_origins_normalization() -> None:
@@ -169,3 +174,26 @@ def test_settings_reject_analysis_quota_sum_greater_than_limit() -> None:
             analysis_generation_policy_quota=8,
             analysis_generation_hot_quota=10,
         )
+
+
+def test_settings_policy_provider_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.policy_sync_enabled is True
+    assert settings.policy_sync_lookback_days == 7
+    assert settings.policy_source_timeout_seconds == 8
+    assert settings.policy_source_max_items_per_provider == 50
+    assert settings.policy_sync_max_concurrent_requests == 3
+    assert settings.policy_provider_gov_cn_enabled is True
+    assert settings.policy_provider_npc_enabled is True
+    assert settings.policy_provider_pbc_enabled is True
+    assert settings.policy_provider_csrc_enabled is True
+    assert settings.policy_provider_ndrc_enabled is True
+    assert settings.policy_provider_miit_enabled is True
+
+
+def test_settings_default_env_file_points_to_project_root() -> None:
+    env_file = Path(Settings.model_config["env_file"]).resolve()
+
+    assert env_file.name == ".env"
+    assert env_file.parent.name == "StockProject"
