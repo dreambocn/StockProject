@@ -67,6 +67,12 @@ from app.services.web_source_metadata_service import enrich_web_sources
 LOGGER = get_logger(__name__)
 
 
+def _analysis_logger():
+    # 关键流程：分析服务使用模块级 logger，但测试/热重载可能污染其 disabled/propagate 状态。
+    # 每次发日志前重新取一次 logger，确保会话级日志不会因为外部副作用静默丢失。
+    return get_logger(__name__)
+
+
 class AnalysisNotFoundError(Exception):
     pass
 
@@ -576,7 +582,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
     async with SessionLocal() as session:
         session_row = await load_analysis_session(session, session_id)
         if session_row is None:
-            LOGGER.warning(
+            _analysis_logger().warning(
                 "event=analysis_session_missing session_id=%s message=分析会话不存在，跳过执行",
                 session_id,
             )
@@ -602,7 +608,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     linked_entity_id=session_row.id,
                 )
             await session.commit()
-            LOGGER.info(
+            _analysis_logger().info(
                 "event=analysis_session_started session_id=%s ts_code=%s topic=%s use_web_search=%s trigger_source=%s",
                 session_id,
                 session_row.ts_code,
@@ -860,7 +866,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 settings.analysis_report_freshness_minutes * 60,
             )
             await clear_cached_active_session_id(analysis_key, session_id)
-            LOGGER.info(
+            _analysis_logger().info(
                 "event=analysis_session_completed session_id=%s report_id=%s report_status=%s event_count=%s used_web_search=%s",
                 session_id,
                 report.id,
@@ -902,7 +908,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     )
                 await session.commit()
                 await clear_cached_active_session_id(analysis_key, session_id)
-            LOGGER.exception(
+            _analysis_logger().exception(
                 "event=analysis_session_failed session_id=%s error_type=%s message=分析会话执行失败",
                 session_id,
                 type(exc).__name__,

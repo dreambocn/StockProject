@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.services.analysis_service as analysis_service_module
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
@@ -1094,8 +1095,16 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
             )
             await session.commit()
 
-        with caplog.at_level(logging.INFO, logger="app.services.analysis_service"):
-            await run_analysis_session_by_id("session-1")
+        original_disabled = analysis_service_module.LOGGER.disabled
+        original_propagate = analysis_service_module.LOGGER.propagate
+        analysis_service_module.LOGGER.disabled = True
+        analysis_service_module.LOGGER.propagate = False
+        try:
+            with caplog.at_level(logging.INFO, logger="app.services.analysis_service"):
+                await run_analysis_session_by_id("session-1")
+        finally:
+            analysis_service_module.LOGGER.disabled = original_disabled
+            analysis_service_module.LOGGER.propagate = original_propagate
 
         async with session_maker() as verify_session:
             persisted_report = (

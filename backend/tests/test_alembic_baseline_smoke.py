@@ -69,8 +69,9 @@ def test_alembic_upgrade_head_stamps_legacy_baseline_then_applies_followup_revis
 
             assert "system_job_runs" in tables
             assert "market_themes" in tables
+            assert "policy_documents" in tables
             assert "prompt_version" in report_columns
-            assert current_version == "20260331_0004"
+            assert current_version == "20260331_0005"
         finally:
             await engine.dispose()
 

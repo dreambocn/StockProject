@@ -7,6 +7,7 @@ import { MotionPlugin } from '@vueuse/motion'
 
 import HotNewsView from './HotNewsView.vue'
 import { newsApi, type HotNewsItem, type MacroImpactProfile } from '../api/news'
+import { policyApi } from '../api/policy'
 import { i18n, setAppLocale } from '../i18n'
 
 const HOT_NEWS_ANCHOR_STORAGE_KEY = 'hot-news-anchor-event-selections'
@@ -165,6 +166,12 @@ describe('HotNewsView', () => {
         return geopoliticalImpactCalls === 1 ? initialGeoImpact : pendingLatestGeoImpact.promise
       }
       return []
+    })
+    vi.spyOn(policyApi, 'getDocuments').mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      page_size: 3,
     })
 
     const wrapper = mount(HotNewsView, {
