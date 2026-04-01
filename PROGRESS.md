@@ -4,6 +4,29 @@ Last update: 2026-03-31
 
 ## Completed
 
+- Extended policy data consumption into user-facing pages:
+  - Hot News impact panel now renders related policy documents for the selected macro topic
+  - Analysis workbench now labels policy sources as readable "policy source" evidence instead of raw provider keys
+  - Stock detail page now shows related policy documents using hot-topic or industry/name fallback matching
+  - Verified that policy-derived UI wiring is working while noting real DB population still depends on upgrading placeholder official providers
+- Enabled first live official policy providers:
+  - `gov_cn` now fetches the official latest-policy JSON feed and enriches rows from detail-page metadata
+  - `pbc` now fetches the People’s Bank of China regulation list page and enriches rows from detail-page meta/attachments
+  - Added parser-level provider tests to lock feed/list/detail extraction behavior before wider multi-source rollout
+- Improved policy-sync observability:
+  - `policy_sync_service` now emits successful/failed provider summaries alongside per-provider metrics
+  - `/api/health/readiness` now includes a `policy_sync` summary block for operations checks
+  - Added architecture and troubleshooting doc for the policy data full chain
+- Completed first-phase official provider coverage:
+  - Added live official-source fetchers for `ndrc`, `miit`, `csrc`, and `npc`
+  - Provider parser tests now cover `gov_cn / pbc / ndrc / miit / csrc / npc`
+  - Live probes confirm all six first-phase providers can currently pull official rows in the local environment
+- Fixed backend direct-script configuration loading:
+  - `Settings` now resolves the default env file to the repository root `.env` instead of relying on the current working directory
+  - Directly running `uv run python scripts/sync_policy_documents.py` from `backend` now uses the project-level PostgreSQL and Redis configuration correctly
+- Completed first real policy sync into the configured PostgreSQL database:
+  - `policy_documents` currently contains 62 official policy documents
+  - Source distribution now covers `gov_cn / pbc / ndrc / miit / csrc / npc`
 - Established frontend-backend separated scaffold.
 - Frontend: Vue 3 + Vite + TypeScript + Element Plus + VueUse Motion.
 - Backend: FastAPI with uv-managed environment and tests.
