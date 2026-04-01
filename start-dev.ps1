@@ -13,6 +13,7 @@ $frontendPath = Join-Path $rootPath 'frontend'
 $workerScriptPath = Join-Path $backendPath 'scripts\\run_watchlist_worker.py'
 $analysisWorkerScriptPath = Join-Path $backendPath 'scripts\\run_analysis_worker.py'
 $envFilePath = Join-Path $rootPath '.env'
+$envExampleFilePath = Join-Path $rootPath '.env.example'
 
 function Test-RequiredPath {
     param(
@@ -43,6 +44,12 @@ function New-ProcessCommand {
 `$Host.UI.RawUI.WindowTitle = '$Title'
 try {
     $Command
+}
+catch {
+    Write-Error ('启动失败：' + `$_.Exception.Message)
+    throw
+}
+"@
 }
 
 function Get-EnvFileValues {
@@ -94,18 +101,20 @@ function Test-RequiredEnvValue {
         throw ('缺少必要环境变量：' + ($missing -join ', '))
     }
 }
-catch {
-    Write-Error ('启动失败：' + `$_.Exception.Message)
-    throw
-}
-"@
-}
 
 Test-RequiredPath -Path $backendPath -Description '后端目录' -PathType 'Container'
 Test-RequiredPath -Path $frontendPath -Description '前端目录' -PathType 'Container'
 Test-RequiredPath -Path $workerScriptPath -Description '关注 Worker 脚本' -PathType 'Leaf'
 Test-RequiredPath -Path $analysisWorkerScriptPath -Description '分析 Worker 脚本' -PathType 'Leaf'
-Test-RequiredPath -Path $envFilePath -Description '根目录 .env 文件' -PathType 'Leaf'
+
+# 缺少 .env 时直接给出可执行指引，避免只报“文件不存在”但不知道下一步怎么做。
+if (-not (Test-Path -LiteralPath $envFilePath -PathType Leaf)) {
+    if (Test-Path -LiteralPath $envExampleFilePath -PathType Leaf) {
+        throw "缺少根目录 .env 文件：$envFilePath`n请先执行：Copy-Item '$envExampleFilePath' '$envFilePath'，再按需修改配置后重试。"
+    }
+
+    throw "缺少根目录 .env 文件：$envFilePath"
+}
 
 $envValues = Get-EnvFileValues -Path $envFilePath
 Test-RequiredEnvValue -Values $envValues -Keys @(

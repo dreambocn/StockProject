@@ -1,4 +1,5 @@
 from contextvars import ContextVar, Token
+from datetime import datetime
 import logging
 from logging.config import dictConfig
 
@@ -36,6 +37,20 @@ def get_logger(name: str) -> logging.Logger:
     logger.disabled = False
     logger.propagate = True
     return logger
+
+
+def should_emit_periodic_log(
+    last_emitted_at: datetime | None,
+    *,
+    now: datetime,
+    interval_seconds: int,
+) -> bool:
+    # 周期日志仅用于“仍在运行但暂时无事件”的心跳提示，避免每轮轮询都刷屏。
+    if interval_seconds <= 0:
+        return True
+    if last_emitted_at is None:
+        return True
+    return (now - last_emitted_at).total_seconds() >= interval_seconds
 
 
 def _ensure_logger_active(logger: logging.Logger) -> logging.Logger:

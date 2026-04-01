@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.logging import get_logger, setup_logging
+from app.core.logging import get_logger, setup_logging, should_emit_periodic_log
 from app.db.init_db import ensure_database_schema
 from app.db.session import SessionLocal
 from app.services.watchlist_worker_service import (
@@ -25,6 +25,7 @@ from app.services.watchlist_worker_service import (
 LOGGER = get_logger(__name__)
 HONG_KONG_TZ = ZoneInfo("Asia/Hong_Kong")
 POLL_INTERVAL_SECONDS = 30
+IDLE_LOG_INTERVAL_SECONDS = 300
 
 
 async def _run_once(
@@ -81,15 +82,36 @@ async def main() -> None:
 
     hourly_marker: str | None = None
     daily_marker: str | None = None
+    last_idle_log_at: datetime | None = None
 
     while True:
         try:
             now = datetime.now(HONG_KONG_TZ).replace(second=0, microsecond=0)
+            previous_hourly_marker = hourly_marker
+            previous_daily_marker = daily_marker
             hourly_marker, daily_marker = await _run_once(
                 now=now,
                 hourly_marker=hourly_marker,
                 daily_marker=daily_marker,
             )
+            if (
+                previous_hourly_marker == hourly_marker
+                and previous_daily_marker == daily_marker
+            ):
+                if should_emit_periodic_log(
+                    last_idle_log_at,
+                    now=now,
+                    interval_seconds=IDLE_LOG_INTERVAL_SECONDS,
+                ):
+                    LOGGER.info(
+                        "event=watchlist_worker_idle poll_interval_seconds=%s idle_interval_seconds=%s now=%s message=当前无到期自选任务，Worker继续轮询",
+                        POLL_INTERVAL_SECONDS,
+                        IDLE_LOG_INTERVAL_SECONDS,
+                        now.isoformat(),
+                    )
+                    last_idle_log_at = now
+            else:
+                last_idle_log_at = None
         except Exception:
             LOGGER.exception("event=watchlist_worker_iteration_failed")
 

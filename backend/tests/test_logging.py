@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime, timedelta
 
 from app.core.logging import (
     log_request_failed,
@@ -6,6 +7,7 @@ from app.core.logging import (
     log_request_started,
     reset_request_id,
     set_request_id,
+    should_emit_periodic_log,
 )
 
 
@@ -41,3 +43,25 @@ def test_failed_request_logging_emits_error_event(caplog) -> None:
     assert "event=request_failed" in caplog.text
     assert "request_id=req-err-001" in caplog.text
     assert "error=RuntimeError" in caplog.text
+
+
+def test_should_emit_periodic_log_respects_interval() -> None:
+    now = datetime(2026, 3, 31, 20, 30, tzinfo=UTC)
+
+    assert should_emit_periodic_log(None, now=now, interval_seconds=300) is True
+    assert (
+        should_emit_periodic_log(
+            now,
+            now=now + timedelta(seconds=299),
+            interval_seconds=300,
+        )
+        is False
+    )
+    assert (
+        should_emit_periodic_log(
+            now,
+            now=now + timedelta(seconds=300),
+            interval_seconds=300,
+        )
+        is True
+    )
