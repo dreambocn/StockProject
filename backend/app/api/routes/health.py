@@ -1,11 +1,14 @@
+from inspect import isawaitable
 from time import perf_counter
 
 from fastapi import APIRouter
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.cache.redis import get_redis_client
 from app.core.settings import get_settings
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
+from app.integrations.policy_provider_registry import build_policy_provider_registry
+from app.models.system_job_run import SystemJobRun
 
 
 router = APIRouter()
@@ -78,6 +81,60 @@ def _resolve_readiness_status(
     return "ok"
 
 
+def _build_default_policy_sync_summary() -> dict[str, object]:
+    return {
+        "enabled": settings.policy_sync_enabled,
+        "configured_provider_count": len(build_policy_provider_registry(settings)),
+        "source_max_items_per_provider": settings.policy_source_max_items_per_provider,
+        "last_status": None,
+        "last_finished_at": None,
+        "last_trigger_source": None,
+        "failed_provider_count": None,
+        "successful_provider_count": None,
+        "successful_providers": [],
+        "failed_providers": [],
+    }
+
+
+async def _build_policy_sync_summary() -> dict[str, object]:
+    summary = _build_default_policy_sync_summary()
+    try:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                select(SystemJobRun)
+                .where(SystemJobRun.job_type == "policy_sync")
+                .order_by(
+                    SystemJobRun.finished_at.desc(),
+                    SystemJobRun.created_at.desc(),
+                    SystemJobRun.id.desc(),
+                )
+                .limit(1)
+            )
+            latest_job = result.scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001
+        summary["error_type"] = type(exc).__name__
+        return summary
+
+    if latest_job is None:
+        return summary
+
+    metrics = latest_job.metrics_json if isinstance(latest_job.metrics_json, dict) else {}
+    summary.update(
+        {
+            "last_status": latest_job.status,
+            "last_finished_at": latest_job.finished_at.isoformat()
+            if latest_job.finished_at is not None
+            else None,
+            "last_trigger_source": latest_job.trigger_source,
+            "failed_provider_count": metrics.get("failed_provider_count"),
+            "successful_provider_count": metrics.get("successful_provider_count"),
+            "successful_providers": metrics.get("successful_providers", []),
+            "failed_providers": metrics.get("failed_providers", []),
+        }
+    )
+    return summary
+
+
 @router.get("/health/liveness")
 async def liveness() -> dict[str, str]:
     # 存活检查仅反映进程是否可响应，不做外部依赖探测。
@@ -95,9 +152,17 @@ async def readiness() -> dict[str, object]:
         "redis": redis_status,
         "smtp": smtp_status,
     }
+    if postgres_status["status"] == "ok":
+        maybe_summary = _build_policy_sync_summary()
+        policy_sync_summary = (
+            await maybe_summary if isawaitable(maybe_summary) else maybe_summary
+        )
+    else:
+        policy_sync_summary = _build_default_policy_sync_summary()
     return {
         "status": _resolve_readiness_status(services),
         "services": services,
+        "policy_sync": policy_sync_summary,
     }
 
 

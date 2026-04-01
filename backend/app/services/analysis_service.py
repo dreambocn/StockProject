@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.core.settings import get_settings
 from app.db.session import SessionLocal
 from app.schemas.analysis import (
@@ -63,6 +64,9 @@ from app.services.news_sentiment_service import analyze_news_sentiment
 from app.services.web_source_metadata_service import enrich_web_sources
 
 
+LOGGER = get_logger(__name__)
+
+
 class AnalysisNotFoundError(Exception):
     pass
 
@@ -102,7 +106,20 @@ def _build_structured_sources(events: list[dict[str, object | None]]) -> list[di
     provider_counts: dict[str, int] = {}
     for event in events:
         source = str(event.get("source") or "").lower()
-        provider = "tushare" if "tushare" in source else "akshare"
+        scope = str(event.get("scope") or "").lower()
+        event_type = str(event.get("event_type") or "").lower()
+        # 关键分支：政策事件要单独归档为政策原文来源，避免与普通聚合资讯混在一起。
+        if scope == "policy" or event_type == "policy" or source in {
+            "gov_cn",
+            "ndrc",
+            "miit",
+            "pbc",
+            "csrc",
+            "mofcom",
+        }:
+            provider = "policy_document"
+        else:
+            provider = "tushare" if "tushare" in source else "akshare"
         provider_counts[provider] = provider_counts.get(provider, 0) + 1
     return [
         {"provider": provider, "count": count}
@@ -559,6 +576,10 @@ async def run_analysis_session_by_id(session_id: str) -> None:
     async with SessionLocal() as session:
         session_row = await load_analysis_session(session, session_id)
         if session_row is None:
+            LOGGER.warning(
+                "event=analysis_session_missing session_id=%s message=分析会话不存在，跳过执行",
+                session_id,
+            )
             return
 
         analysis_key = session_row.analysis_key
@@ -581,6 +602,14 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     linked_entity_id=session_row.id,
                 )
             await session.commit()
+            LOGGER.info(
+                "event=analysis_session_started session_id=%s ts_code=%s topic=%s use_web_search=%s trigger_source=%s",
+                session_id,
+                session_row.ts_code,
+                session_row.topic or "",
+                session_row.use_web_search,
+                session_row.trigger_source,
+            )
             await event_bus.publish(
                 session_id,
                 "status",
@@ -831,6 +860,14 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 settings.analysis_report_freshness_minutes * 60,
             )
             await clear_cached_active_session_id(analysis_key, session_id)
+            LOGGER.info(
+                "event=analysis_session_completed session_id=%s report_id=%s report_status=%s event_count=%s used_web_search=%s",
+                session_id,
+                report.id,
+                report_result.status,
+                len(event_payloads),
+                report_result.used_web_search,
+            )
             await event_bus.publish(
                 session_id,
                 "completed",
@@ -865,6 +902,11 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     )
                 await session.commit()
                 await clear_cached_active_session_id(analysis_key, session_id)
+            LOGGER.exception(
+                "event=analysis_session_failed session_id=%s error_type=%s message=分析会话执行失败",
+                session_id,
+                type(exc).__name__,
+            )
             await event_bus.publish(
                 session_id,
                 "error",

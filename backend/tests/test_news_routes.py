@@ -15,6 +15,7 @@ import app.api.routes.news as news_routes
 import app.api.routes.stocks as stocks_routes
 from app.models.news_fetch_batch import NewsFetchBatch
 from app.models.news_event import NewsEvent
+from app.models.policy_document import PolicyDocument
 from app.models.stock_instrument import StockInstrument
 from app.schemas.news import (
     CandidateEvidenceItemResponse,
@@ -240,6 +241,18 @@ def news_client(tmp_path: Path) -> TestClient:
 
 
 def _append_news_events(news_client: TestClient, rows: list[NewsEvent]) -> None:
+    async def _run() -> None:
+        async with news_client.session_maker() as session:
+            session.add_all(rows)
+            await session.commit()
+
+    asyncio.run(_run())
+
+
+def _append_policy_documents(
+    news_client: TestClient,
+    rows: list[PolicyDocument],
+) -> None:
     async def _run() -> None:
         async with news_client.session_maker() as session:
             session.add_all(rows)
@@ -1164,6 +1177,46 @@ def test_policy_news_route_falls_back_to_latest_archived_batch(
     assert response.status_code == 200
     payload = response.json()
     assert [item["title"] for item in payload] == ["最新政策批次"]
+
+
+def test_news_policy_route_reads_projected_policy_documents(
+    news_client: TestClient,
+) -> None:
+    _append_policy_documents(
+        news_client,
+        [
+            PolicyDocument(
+                id="policy-doc-1",
+                source="gov_cn",
+                source_document_id="gov-001",
+                url_hash="hash-001",
+                title="国务院关于支持科技创新的若干政策措施",
+                summary="支持科技创新和设备更新。",
+                document_no="国发〔2026〕1号",
+                issuing_authority="国务院",
+                policy_level="state_council",
+                category="industry",
+                macro_topic="industrial_policy",
+                industry_tags_json=["ai_computing"],
+                market_tags_json=["a_share"],
+                published_at=datetime(2026, 3, 31, 1, 0, tzinfo=UTC),
+                url="https://www.gov.cn/zhengce/content/2026-03/31/content_000002.htm",
+                content_text="为支持科技创新，现提出若干政策措施。",
+                raw_payload_json={"id": "gov-001"},
+                metadata_status="ready",
+                projection_status="pending",
+            )
+        ],
+    )
+
+    response = news_client.get("/api/news/policy")
+
+    assert response.status_code == 200
+    payload = response.json()
+    # 关键断言：兼容接口应直接读取政策主数据投影，而不是继续依赖旧政策网关。
+    assert [item["title"] for item in payload] == ["国务院关于支持科技创新的若干政策措施"]
+    assert payload[0]["source"] == "gov_cn"
+    assert payload[0]["publisher"] == "国务院"
 
 
 def test_stock_news_route_falls_back_to_latest_archived_batch_when_upstream_fails(

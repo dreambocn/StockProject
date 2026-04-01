@@ -22,6 +22,7 @@ from app.schemas.admin_jobs import (
     AdminJobPageResponse,
     AdminJobSummaryResponse,
 )
+from app.schemas.policy import AdminPolicySyncResponse, PolicySyncRequest
 from app.schemas.stocks import (
     AdminStockPageResponse,
     StockBasicSyncResponse,
@@ -33,6 +34,7 @@ from app.services.stock_list_status import (
     parse_stock_list_status_filter,
 )
 from app.services.stock_sync_service import sync_stock_basic_full
+from app.services.policy_sync_service import sync_policy_documents
 from app.services.job_query_service import (
     get_job_status_counts,
     get_job_type_counts,
@@ -153,6 +155,32 @@ async def sync_stocks_full(
         created=int(sync_result["created"]),
         updated=int(sync_result["updated"]),
         list_statuses=list(sync_result["list_statuses"]),
+    )
+
+
+@router.post("/policy/sync", response_model=AdminPolicySyncResponse)
+async def sync_policy_documents_route(
+    payload: PolicySyncRequest,
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AdminPolicySyncResponse:
+    # 关键流程：后台手动同步统一复用政策同步服务，避免脚本入口和 API 入口产生两套口径。
+    result = await sync_policy_documents(
+        session,
+        trigger_source="admin.policy.sync",
+        force_refresh=payload.force_refresh,
+    )
+    return AdminPolicySyncResponse(
+        job_id=str(result.get("job_id") or ""),
+        job_type="policy_sync",
+        status=str(result["status"]),
+        provider_count=int(result["provider_count"]),
+        raw_count=int(result["raw_count"]),
+        normalized_count=int(result["normalized_count"]),
+        inserted_count=int(result["inserted_count"]),
+        updated_count=int(result["updated_count"]),
+        deduped_count=int(result["deduped_count"]),
+        failed_provider_count=int(result["failed_provider_count"]),
     )
 
 

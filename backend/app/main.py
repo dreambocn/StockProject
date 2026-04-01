@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import admin, analysis, auth, health, news, stocks, watchlist
+from app.api.routes import admin, analysis, auth, health, news, policy, stocks, watchlist
 from app.core.logging import (
     get_logger,
     log_request_failed,
@@ -51,6 +51,7 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api", tags=["health"])
 app.include_router(stocks.router, prefix="/api", tags=["stocks"])
 app.include_router(news.router, prefix="/api", tags=["news"])
+app.include_router(policy.router, prefix="/api", tags=["policy"])
 app.include_router(analysis.router, prefix="/api", tags=["analysis"])
 app.include_router(watchlist.router, prefix="/api", tags=["watchlist"])
 app.include_router(auth.router, prefix="/api")

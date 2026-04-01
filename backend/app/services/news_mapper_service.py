@@ -7,6 +7,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.news_event import NewsEvent
+from app.models.policy_document import PolicyDocument
 from app.models.stock_instrument import StockInstrument
 from app.schemas.news import (
     CandidateEvidenceItemResponse,
@@ -68,6 +69,7 @@ MACRO_TOPIC_INDUSTRY_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 SOURCE_PRIORITY_MAP: dict[str, int] = {
+    "policy_document": 40,
     "tushare": 30,
     "akshare": 20,
     "internal": 10,
@@ -98,6 +100,16 @@ def normalize_provider(provider: str | None, source: str | None = None) -> str:
     source_text = str(source or "").strip().lower()
     if provider_text and provider_text != "internal":
         return provider_text
+    if source_text in {
+        "policy_gateway",
+        "gov_cn",
+        "npc",
+        "pbc",
+        "csrc",
+        "ndrc",
+        "miit",
+    }:
+        return "internal"
     if "tushare" in source_text:
         return "tushare"
     if source_text:
@@ -515,6 +527,29 @@ def map_policy_news_rows(rows: list[dict[str, object]]) -> list[NewsEventRespons
             )
         )
     return mapped
+
+
+def map_policy_document_to_news_event_response(
+    document: PolicyDocument,
+    *,
+    fetched_at: datetime,
+) -> NewsEventResponse:
+    # 关键流程：兼容路由只消费投影所需最小字段，正文与附件仍由政策主表负责承载。
+    return NewsEventResponse(
+        scope="policy",
+        cache_variant="policy_source",
+        ts_code=None,
+        symbol=None,
+        title=document.title,
+        summary=document.summary
+        or (document.content_text[:180] if document.content_text else None),
+        published_at=document.published_at,
+        url=document.url,
+        publisher=document.issuing_authority,
+        source=document.source,
+        macro_topic=document.macro_topic or "other",
+        fetched_at=fetched_at,
+    )
 
 
 async def attach_dynamic_a_share_candidates(

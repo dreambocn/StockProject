@@ -9,7 +9,10 @@ from app.core.logging import get_logger
 from app.core.settings import get_settings
 from app.db.session import get_db_session
 from app.integrations.akshare_gateway import fetch_hot_news
-from app.integrations.policy_gateway import fetch_policy_events
+from app.integrations.policy_gateway import (
+    fetch_policy_events,
+    list_policy_source_documents,
+)
 from app.integrations.tushare_gateway import TushareGateway
 from app.schemas.news import (
     HotNewsItemResponse,
@@ -47,6 +50,9 @@ from app.services.news_repository import (
     query_news_events,
     replace_hot_news_rows,
     replace_policy_news_rows,
+)
+from app.services.policy_projection_service import (
+    project_policy_documents_to_news_events,
 )
 from app.services.stock_cache_service import (
     get_singleflight_lock,
@@ -526,6 +532,42 @@ async def get_policy_news(
             fetched_at=fetched_at,
             started_at=fetched_at,
         )
+
+        documents = await list_policy_source_documents(session=session, limit=limit)
+        if documents:
+            projected_rows = await project_policy_documents_to_news_events(
+                session,
+                documents=documents,
+                fetched_at=fetched_at,
+                batch_id=batch.id,
+            )
+            await finalize_news_fetch_batch(
+                session,
+                batch=batch,
+                status=NEWS_FETCH_STATUS_SUCCESS,
+                finished_at=datetime.now(UTC),
+                row_count_raw=len(documents),
+                row_count_mapped=len(projected_rows),
+                row_count_persisted=len(projected_rows),
+                provider_stats=[
+                    {
+                        "provider": "policy_documents",
+                        "status": "success",
+                        "error_type": None,
+                        "raw_count": len(documents),
+                        "mapped_count": len(projected_rows),
+                        "persisted_count": len(projected_rows),
+                    }
+                ],
+                degrade_reasons=[],
+            )
+            await session.commit()
+            await write_news_cache_version(
+                version_key=version_key,
+                version=format_news_cache_version(fetched_at=fetched_at),
+                redis_client_getter=get_redis_client,
+            )
+            return await load_from_db()
 
         try:
             raw_rows = await fetch_policy_events()

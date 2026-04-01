@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,7 @@ from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
 from app.services.llm_analysis_service import AnalysisReportResult
 from app.services.analysis_service import (
+    _build_structured_sources,
     get_stock_analysis_summary,
     list_stock_analysis_report_archives,
     run_analysis_session_by_id,
@@ -173,6 +175,35 @@ def test_analysis_service_keeps_summary_read_only_before_session_generation(
         asyncio.run(run_test())
     finally:
         asyncio.run(engine.dispose())
+
+
+def test_build_structured_sources_marks_policy_document_provider() -> None:
+    sources = _build_structured_sources(
+        [
+            {
+                "scope": "policy",
+                "source": "gov_cn",
+                "event_type": "policy",
+            },
+            {
+                "scope": "stock",
+                "source": "eastmoney_stock",
+                "event_type": "news",
+            },
+            {
+                "scope": "hot",
+                "source": "tushare_major_news",
+                "event_type": "news",
+            },
+        ]
+    )
+
+    # 政策原文来源需要单独标识，避免与普通新闻来源混在一起。
+    assert sources == [
+        {"provider": "akshare", "count": 1},
+        {"provider": "policy_document", "count": 1},
+        {"provider": "tushare", "count": 1},
+    ]
 
 
 def test_analysis_service_filters_report_by_anchor_event_id(tmp_path: Path) -> None:
@@ -873,6 +904,7 @@ def test_analysis_service_summary_event_limit_defaults_from_settings_but_explici
 def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
     tmp_path: Path,
     monkeypatch,
+    caplog,
 ) -> None:
     engine, session_maker = _setup_async_session(tmp_path)
     captured = {"candidate_limit": None, "event_count": None}
@@ -1062,7 +1094,8 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
             )
             await session.commit()
 
-        await run_analysis_session_by_id("session-1")
+        with caplog.at_level(logging.INFO, logger="app.services.analysis_service"):
+            await run_analysis_session_by_id("session-1")
 
         async with session_maker() as verify_session:
             persisted_report = (
@@ -1075,6 +1108,8 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
 
         assert captured["candidate_limit"] == 120
         assert captured["event_count"] == 30
+        assert "event=analysis_session_started session_id=session-1" in caplog.text
+        assert "event=analysis_session_completed session_id=session-1" in caplog.text
 
     try:
         asyncio.run(run_test())

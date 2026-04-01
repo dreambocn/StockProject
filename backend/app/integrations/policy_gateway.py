@@ -1,7 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.settings import get_settings
+from app.models.policy_document import PolicyDocument
 from app.integrations.tushare_gateway import TushareGateway
 
 
@@ -87,3 +91,17 @@ async def fetch_policy_events() -> list[dict[str, Any]]:
 
     rows.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
     return rows
+
+
+async def list_policy_source_documents(
+    session: AsyncSession,
+    *,
+    limit: int,
+) -> list[PolicyDocument]:
+    statement = (
+        select(PolicyDocument)
+        .where(PolicyDocument.metadata_status.in_(["ready", "partial"]))
+        .order_by(PolicyDocument.published_at.desc(), PolicyDocument.created_at.desc())
+        .limit(limit)
+    )
+    return (await session.execute(statement)).scalars().all()

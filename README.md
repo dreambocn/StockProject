@@ -49,6 +49,7 @@ PROGRESS.md 迭代进度记录
 ## 工程化文档
 
 - 运行拓扑：`docs/architecture/runtime-topology.md`
+- 政策数据流：`docs/architecture/policy-data-flow.md`
 - 环境矩阵：`docs/deploy/environment-matrix.md`
 - 实施计划：`docs/plans/2026-03-30-stockproject-module-audit-and-next-steps.md`
 
@@ -79,6 +80,9 @@ PROGRESS.md 迭代进度记录
 - `GET /api/news/hot`
 - `GET /api/news/events`
 - `GET /api/news/impact-map`
+- `GET /api/policy/documents`
+- `GET /api/policy/documents/{document_id}`
+- `GET /api/policy/filters`
 - `GET /api/stocks/{ts_code}/news`
 - `GET /api/stocks/{ts_code}/themes`
 - `GET /api/analysis/stocks/{ts_code}/summary`
@@ -89,6 +93,7 @@ PROGRESS.md 迭代进度记录
 - `GET /api/admin/jobs`
 - `GET /api/admin/jobs/summary`
 - `GET /api/admin/jobs/{job_id}`
+- `POST /api/admin/policy/sync`
 - `GET/POST/PATCH/DELETE /api/watchlist*`
 
 ## 快速开始
@@ -131,8 +136,10 @@ Copy-Item '.\.env.example' '.\.env'
 
 - `SMTP_*`：邮箱验证码与密码变更通知
 - `TUSHARE_TOKEN`：股票基础库与行情同步
+- `POLICY_*`：官方政策同步开关、回看窗口、Provider 开关与超时控制
 - `LLM_*`：分析工作台与 AI 报告生成
 - `INIT_ADMIN_*`：首次启动自动创建管理员
+- `DB_POOL_*`：数据库连接池调优；当远端 PostgreSQL 最大连接数较小时，建议保持较小默认值
 
 完整示例请参考根目录 `.env.example`。
 
@@ -201,6 +208,27 @@ Set-Location 'E:\Development\Project\StockProject\backend'
 uv run python scripts/sync_stocks.py
 ```
 
+### 手动同步政策文档
+
+```powershell
+Set-Location 'E:\Development\Project\StockProject\backend'
+uv run python scripts/sync_policy_documents.py
+```
+
+说明：
+
+- 后端脚本现在会默认读取仓库根目录 `.env`，因此即使从 `backend` 目录直接执行，也会使用项目级数据库和 Redis 配置。
+- 若同步后需要快速确认是否入库，可再调用 `GET /api/policy/documents`，或直接查看 `policy_documents` 表中的最新记录。
+
+当前已接入真实官方抓取的 Provider：
+
+- `gov_cn`
+- `pbc`
+- `ndrc`
+- `miit`
+- `csrc`
+- `npc`
+
 ## 测试与验证
 
 ### 后端测试
@@ -231,6 +259,19 @@ Set-Location 'E:\Development\Project\StockProject\backend'
 uv run alembic upgrade head
 uv run python -c "import asyncio; from app.db.migrations import validate_database_schema; from app.db.session import engine; asyncio.run(validate_database_schema(target_engine=engine)); print('schema validated')"
 ```
+
+### 健康检查与政策同步观测
+
+```powershell
+Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health/readiness'
+```
+
+返回结果除了 `postgres / redis / smtp` 外，还会包含 `policy_sync` 摘要，可用于判断：
+
+- 是否启用了政策同步
+- 当前配置的 Provider 数量
+- 最近一次政策同步状态
+- 最近一次同步的成功源 / 失败源
 
 ### CI 本地对齐
 

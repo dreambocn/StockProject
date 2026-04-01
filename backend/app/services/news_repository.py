@@ -135,7 +135,9 @@ def _derive_news_provider(source: str) -> str:
     return normalize_provider(None, source)
 
 
-def _derive_source_priority(provider: str) -> int:
+def derive_source_priority(provider: str) -> int:
+    if provider == "policy_document":
+        return 40
     if provider == "tushare":
         return 30
     if provider == "akshare":
@@ -223,7 +225,7 @@ async def replace_hot_news_rows(
                     macro_topic=row.macro_topic,
                 ),
                 batch_id=batch_id,
-                source_priority=_derive_source_priority(provider),
+                source_priority=derive_source_priority(provider),
                 evidence_kind="hot",
                 macro_topic=row.macro_topic,
                 fetched_at=fetched_at,
@@ -327,7 +329,7 @@ async def replace_policy_news_rows(
                     macro_topic=row.macro_topic,
                 ),
                 batch_id=batch_id,
-                source_priority=_derive_source_priority(provider),
+                source_priority=derive_source_priority(provider),
                 evidence_kind="macro_event",
                 macro_topic=row.macro_topic,
                 fetched_at=fetched_at,
@@ -407,7 +409,7 @@ async def replace_stock_news_rows(
                     macro_topic=None,
                 ),
                 batch_id=batch_id,
-                source_priority=_derive_source_priority(provider),
+                source_priority=derive_source_priority(provider),
                 evidence_kind="announcement" if row.source == "cninfo_announcement" else "stock_news",
                 macro_topic=None,
                 fetched_at=fetched_at,

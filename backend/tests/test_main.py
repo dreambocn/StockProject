@@ -54,6 +54,22 @@ def test_health_readiness_endpoint_returns_ok_when_dependencies_healthy(
     monkeypatch.setattr(health_routes, "_probe_postgres", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_smtp", _probe_ok)
+    monkeypatch.setattr(
+        health_routes,
+        "_build_policy_sync_summary",
+        lambda: {
+            "enabled": True,
+            "configured_provider_count": 6,
+            "source_max_items_per_provider": 50,
+            "last_status": "success",
+            "last_finished_at": "2026-04-01T12:00:00+00:00",
+            "last_trigger_source": "script.policy.sync",
+            "failed_provider_count": 0,
+            "successful_provider_count": 2,
+            "successful_providers": ["gov_cn", "pbc"],
+            "failed_providers": [],
+        },
+    )
 
     response = client.get("/api/health/readiness")
 
@@ -64,6 +80,9 @@ def test_health_readiness_endpoint_returns_ok_when_dependencies_healthy(
     assert payload["services"]["redis"]["status"] == "ok"
     assert payload["services"]["smtp"]["status"] == "ok"
     assert payload["services"]["postgres"]["error_type"] is None
+    assert payload["policy_sync"]["configured_provider_count"] == 6
+    assert payload["policy_sync"]["last_status"] == "success"
+    assert payload["policy_sync"]["successful_providers"] == ["gov_cn", "pbc"]
 
 
 def test_health_readiness_returns_fail_when_postgres_unavailable(monkeypatch) -> None:
@@ -84,6 +103,22 @@ def test_health_readiness_returns_fail_when_postgres_unavailable(monkeypatch) ->
     monkeypatch.setattr(health_routes, "_probe_postgres", _probe_postgres_fail)
     monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_smtp", _probe_ok)
+    monkeypatch.setattr(
+        health_routes,
+        "_build_policy_sync_summary",
+        lambda: {
+            "enabled": True,
+            "configured_provider_count": 6,
+            "source_max_items_per_provider": 50,
+            "last_status": None,
+            "last_finished_at": None,
+            "last_trigger_source": None,
+            "failed_provider_count": None,
+            "successful_provider_count": None,
+            "successful_providers": [],
+            "failed_providers": [],
+        },
+    )
 
     response = client.get("/api/health/readiness")
 
@@ -113,6 +148,22 @@ def test_health_readiness_returns_degraded_when_smtp_unavailable(monkeypatch) ->
     monkeypatch.setattr(health_routes, "_probe_postgres", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_smtp", _probe_smtp_fail)
+    monkeypatch.setattr(
+        health_routes,
+        "_build_policy_sync_summary",
+        lambda: {
+            "enabled": True,
+            "configured_provider_count": 6,
+            "source_max_items_per_provider": 50,
+            "last_status": "partial",
+            "last_finished_at": "2026-04-01T12:00:00+00:00",
+            "last_trigger_source": "script.policy.sync",
+            "failed_provider_count": 1,
+            "successful_provider_count": 1,
+            "successful_providers": ["gov_cn"],
+            "failed_providers": ["pbc"],
+        },
+    )
 
     response = client.get("/api/health/readiness")
 
@@ -135,6 +186,22 @@ def test_health_endpoint_maps_to_readiness(monkeypatch) -> None:
     monkeypatch.setattr(health_routes, "_probe_postgres", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_redis", _probe_ok)
     monkeypatch.setattr(health_routes, "_probe_smtp", _probe_ok)
+    monkeypatch.setattr(
+        health_routes,
+        "_build_policy_sync_summary",
+        lambda: {
+            "enabled": True,
+            "configured_provider_count": 6,
+            "source_max_items_per_provider": 50,
+            "last_status": "success",
+            "last_finished_at": "2026-04-01T12:00:00+00:00",
+            "last_trigger_source": "script.policy.sync",
+            "failed_provider_count": 0,
+            "successful_provider_count": 2,
+            "successful_providers": ["gov_cn", "pbc"],
+            "failed_providers": [],
+        },
+    )
 
     response = client.get("/api/health")
 
@@ -142,6 +209,7 @@ def test_health_endpoint_maps_to_readiness(monkeypatch) -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert "services" in payload
+    assert payload["policy_sync"]["last_status"] == "success"
 
 
 def test_stocks_endpoint_returns_list_response(tmp_path) -> None:
