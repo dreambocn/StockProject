@@ -1150,7 +1150,7 @@ describe('AnalysisWorkbenchView', () => {
         web_search_status: 'disabled',
         content_format: 'markdown',
       },
-    } as StockAnalysisSummaryResponse)
+    } as unknown as StockAnalysisSummaryResponse)
     vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
       ts_code: '600519.SH',
       items: [],
@@ -1517,7 +1517,7 @@ describe('AnalysisWorkbenchView', () => {
           },
         ],
       },
-    } as StockAnalysisSummaryResponse)
+    } as unknown as StockAnalysisSummaryResponse)
     vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
       ts_code: '600519.SH',
       items: [
@@ -1759,5 +1759,97 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).not.toContain('窗口波动')
     expect(wrapper.text()).not.toContain('异常量比')
     expect(wrapper.text()).toContain('关联评分')
+  })
+
+  it('shows functional pipeline view for multi-agent reports', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    const functionalSummary = {
+      ts_code: '600519.SH',
+      instrument: {
+        ts_code: '600519.SH',
+        symbol: '600519',
+        name: '贵州茅台',
+        market: 'SH',
+        exchange: 'SSE',
+        list_status: 'L',
+      },
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-04-12T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 0,
+      events: [],
+      report: {
+        id: 'functional-report-1',
+        status: 'ready',
+        summary: '## 最终裁决\n采用偏多假设。',
+        risk_points: ['关注公告兑现节奏'],
+        factor_breakdown: [],
+        generated_at: '2026-04-12T08:00:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+        analysis_mode: 'functional_multi_agent',
+        selected_hypothesis: 'bullish_hypothesis',
+        decision_confidence: 'high',
+        decision_reason_summary: '正向证据更强。',
+        pipeline_roles: [
+          {
+            role_key: 'research_planner',
+            role_label: '研究规划',
+            status: 'completed',
+            sort_order: 1,
+            summary: '已生成研究计划',
+            output_payload: {
+              summary: '已生成研究计划',
+              focus_buckets: ['stock_news', 'announcements'],
+            },
+            used_web_search: false,
+            web_search_status: 'disabled',
+            web_sources: [],
+          },
+          {
+            role_key: 'decision_agent',
+            role_label: '最终裁决',
+            status: 'completed',
+            sort_order: 6,
+            summary: '采用偏多假设。',
+            output_payload: {
+              selected_hypothesis: 'bullish_hypothesis',
+            },
+            used_web_search: false,
+            web_search_status: 'disabled',
+            web_sources: [],
+          },
+        ],
+      },
+    } as unknown as StockAnalysisSummaryResponse
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(functionalSummary)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).toContain('研究流水线')
+    const pipelineToggle = wrapper.get('[data-testid="analysis-view-pipeline"]')
+    await pipelineToggle.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('研究规划')
+    expect(wrapper.text()).toContain('已生成研究计划')
+    expect(wrapper.text()).toContain('最终裁决')
   })
 })

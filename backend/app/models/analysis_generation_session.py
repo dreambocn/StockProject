@@ -20,6 +20,12 @@ class AnalysisGenerationSession(Base):
         String(36), nullable=True, index=True
     )
     use_web_search: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    analysis_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="single", index=True
+    )
+    orchestrator_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     # trigger_source_group 用于区分批量任务来源，便于队列聚合与统计。
     trigger_source: Mapped[str] = mapped_column(
         String(32), nullable=False, default="manual", index=True
@@ -35,6 +41,9 @@ class AnalysisGenerationSession(Base):
     stage_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     progress_current: Mapped[int | None] = mapped_column(nullable=True)
     progress_total: Mapped[int | None] = mapped_column(nullable=True)
+    role_count: Mapped[int | None] = mapped_column(nullable=True)
+    role_completed_count: Mapped[int | None] = mapped_column(nullable=True)
+    active_role_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     system_job_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("system_job_runs.id"),

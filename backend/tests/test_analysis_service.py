@@ -13,6 +13,7 @@ import app.services.analysis_service as analysis_service_module
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
+from app.models.analysis_agent_run import AnalysisAgentRun
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
@@ -1119,6 +1120,681 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
         assert captured["event_count"] == 30
         assert "event=analysis_session_started session_id=session-1" in caplog.text
         assert "event=analysis_session_completed session_id=session-1" in caplog.text
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_run_analysis_session_by_id_persists_functional_pipeline_roles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fake_load_recent_news_events(
+        session,
+        ts_code: str,
+        *,
+        topic,
+        anchor_event_id,
+        published_from,
+        published_to,
+        limit,
+        candidate_limit=None,
+    ):
+        _ = (
+            session,
+            ts_code,
+            topic,
+            anchor_event_id,
+            published_from,
+            published_to,
+            limit,
+            candidate_limit,
+        )
+        base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        return [
+            NewsEvent(
+                id="functional-stock-1",
+                scope="stock",
+                cache_variant="default",
+                ts_code="600519.SH",
+                symbol="600519",
+                title="功能化多 Agent 事件",
+                summary="摘要",
+                published_at=base_time,
+                url="https://example.com/functional-stock-1",
+                publisher="测试源",
+                source="stock-source",
+                macro_topic="commodity_supply",
+                fetched_at=base_time,
+            )
+        ]
+
+    async def fake_run_functional_multi_agent_analysis(
+        *,
+        session,
+        session_row,
+        instrument,
+        latest_snapshot,
+        event_payloads,
+        factor_weights,
+        on_final_delta,
+    ):
+        _ = session, instrument, latest_snapshot, event_payloads, factor_weights
+        await on_final_delta("## 最终裁决\n采用偏多假设。")
+        return {
+            "status": "ready",
+            "summary": "## 最终裁决\n采用偏多假设。",
+            "risk_points": ["关注公告兑现节奏"],
+            "factor_breakdown": [],
+            "generated_at": datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+            "used_web_search": False,
+            "web_search_status": "disabled",
+            "web_sources": [],
+            "prompt_version": "functional-decision-v1",
+            "model_name": "test-model",
+            "reasoning_effort": "medium",
+            "token_usage_input": 120,
+            "token_usage_output": 80,
+            "cost_estimate": None,
+            "failure_type": None,
+            "analysis_mode": "functional_multi_agent",
+            "orchestrator_version": "functional-multi-agent-v1",
+            "selected_hypothesis": "bullish_hypothesis",
+            "decision_confidence": "high",
+            "decision_reason_summary": "正向证据更强，且挑战后仍能成立。",
+            "pipeline_roles": [
+                {
+                    "role_key": "research_planner",
+                    "role_label": "研究规划",
+                    "status": "completed",
+                    "sort_order": 1,
+                    "summary": "已生成研究计划",
+                    "output_payload": {"focus_buckets": ["stock_news", "announcements"]},
+                    "used_web_search": False,
+                    "web_search_status": "disabled",
+                    "web_sources": [],
+                    "prompt_version": "functional-planner-v1",
+                    "model_name": "test-model",
+                    "reasoning_effort": "medium",
+                    "token_usage_input": 20,
+                    "token_usage_output": 20,
+                    "cost_estimate": None,
+                    "failure_type": None,
+                },
+                {
+                    "role_key": "decision_agent",
+                    "role_label": "最终裁决",
+                    "status": "completed",
+                    "sort_order": 6,
+                    "summary": "采用偏多假设。",
+                    "output_payload": {"selected_hypothesis": "bullish_hypothesis"},
+                    "used_web_search": False,
+                    "web_search_status": "disabled",
+                    "web_sources": [],
+                    "prompt_version": "functional-decision-v1",
+                    "model_name": "test-model",
+                    "reasoning_effort": "medium",
+                    "token_usage_input": 40,
+                    "token_usage_output": 60,
+                    "cost_estimate": None,
+                    "failure_type": None,
+                },
+            ],
+            "role_progress": [
+                {"role_key": "research_planner", "status": "completed"},
+                {"role_key": "decision_agent", "status": "completed"},
+            ],
+            "active_role_key": "decision_agent",
+            "pipeline_stage": "decisioning",
+        }
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.run_functional_multi_agent_analysis",
+        fake_run_functional_multi_agent_analysis,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr(
+        "app.services.analysis_service.cache_fresh_report_id",
+        fake_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="functional-session-1",
+                    analysis_key="functional-analysis-key",
+                    ts_code="600519.SH",
+                    topic="commodity_supply",
+                    anchor_event_id=None,
+                    status="queued",
+                    analysis_mode="functional_multi_agent",
+                )
+            )
+            session.add(
+                StockDailySnapshot(
+                    ts_code="600519.SH",
+                    trade_date=datetime(2026, 3, 25, tzinfo=timezone.utc).date(),
+                    close=Decimal("1500.00"),
+                    vol=Decimal("1000"),
+                )
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("functional-session-1")
+
+        async with session_maker() as verify_session:
+            persisted_report = (
+                await verify_session.execute(
+                    select(AnalysisReport).where(AnalysisReport.ts_code == "600519.SH")
+                )
+            ).scalar_one()
+            persisted_session = await verify_session.get(
+                AnalysisGenerationSession,
+                "functional-session-1",
+            )
+
+            assert persisted_report.analysis_mode == "functional_multi_agent"
+            assert persisted_report.selected_hypothesis == "bullish_hypothesis"
+            assert persisted_report.decision_confidence == "high"
+            assert persisted_report.decision_reason_summary == "正向证据更强，且挑战后仍能成立。"
+            assert persisted_session.analysis_mode == "functional_multi_agent"
+            assert persisted_session.role_count == 2
+            assert persisted_session.role_completed_count == 2
+            assert persisted_session.active_role_key == "decision_agent"
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_run_analysis_session_by_id_sanitizes_non_json_pipeline_payloads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fake_load_recent_news_events(
+        session,
+        ts_code: str,
+        *,
+        topic,
+        anchor_event_id,
+        published_from,
+        published_to,
+        limit,
+        candidate_limit=None,
+    ):
+        _ = (
+            session,
+            ts_code,
+            topic,
+            anchor_event_id,
+            published_from,
+            published_to,
+            limit,
+            candidate_limit,
+        )
+        base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        return [
+            NewsEvent(
+                id="functional-json-1",
+                scope="stock",
+                cache_variant="default",
+                ts_code="600519.SH",
+                symbol="600519",
+                title="功能化多 Agent 事件",
+                summary="摘要",
+                published_at=base_time,
+                url="https://example.com/functional-json-1",
+                publisher="测试源",
+                source="stock-source",
+                macro_topic="commodity_supply",
+                fetched_at=base_time,
+            )
+        ]
+
+    async def fake_run_functional_multi_agent_analysis(
+        *,
+        session,
+        session_row,
+        instrument,
+        latest_snapshot,
+        event_payloads,
+        factor_weights,
+        on_final_delta,
+    ):
+        _ = session, session_row, instrument, latest_snapshot, event_payloads, factor_weights
+        await on_final_delta("## 最终裁决\n已完成 JSON 安全化验证。")
+        return {
+            "status": "ready",
+            "summary": "## 最终裁决\n已完成 JSON 安全化验证。",
+            "risk_points": ["关注持久化边界"],
+            "factor_breakdown": [],
+            "generated_at": datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+            "used_web_search": False,
+            "web_search_status": "disabled",
+            "web_sources": [],
+            "prompt_version": "functional-decision-v1",
+            "model_name": "test-model",
+            "reasoning_effort": "medium",
+            "token_usage_input": 120,
+            "token_usage_output": 80,
+            "cost_estimate": None,
+            "failure_type": None,
+            "analysis_mode": "functional_multi_agent",
+            "orchestrator_version": "functional-multi-agent-v1",
+            "selected_hypothesis": "neutral_hypothesis",
+            "decision_confidence": "medium",
+            "decision_reason_summary": "先保证 JSON 持久化安全。",
+            "pipeline_roles": [
+                {
+                    "role_key": "evidence_retrieval",
+                    "role_label": "证据检索",
+                    "status": "completed",
+                    "sort_order": 2,
+                    "summary": "已整理证据账本。",
+                    "input_snapshot": {
+                        "captured_at": datetime(2026, 3, 25, 12, 30, tzinfo=timezone.utc),
+                        "tags": {"stock", "policy"},
+                    },
+                    "output_payload": {
+                        "published_at": datetime(2026, 3, 25, tzinfo=timezone.utc).date(),
+                        "generated_at": datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+                        "price": Decimal("1500.25"),
+                        "window": ("T+1", "T+5"),
+                    },
+                    "used_web_search": False,
+                    "web_search_status": "disabled",
+                    "web_sources": [],
+                    "prompt_version": "functional-retrieval-v1",
+                    "model_name": "test-model",
+                    "reasoning_effort": "medium",
+                    "token_usage_input": 20,
+                    "token_usage_output": 20,
+                    "cost_estimate": None,
+                    "failure_type": None,
+                }
+            ],
+            "role_progress": [
+                {"role_key": "evidence_retrieval", "status": "completed"},
+            ],
+            "active_role_key": "evidence_retrieval",
+            "pipeline_stage": "decisioning",
+        }
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.run_functional_multi_agent_analysis",
+        fake_run_functional_multi_agent_analysis,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr(
+        "app.services.analysis_service.cache_fresh_report_id",
+        fake_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="functional-json-session-1",
+                    analysis_key="functional-json-analysis-key",
+                    ts_code="600519.SH",
+                    topic="commodity_supply",
+                    anchor_event_id=None,
+                    status="queued",
+                    analysis_mode="functional_multi_agent",
+                )
+            )
+            session.add(
+                StockDailySnapshot(
+                    ts_code="600519.SH",
+                    trade_date=datetime(2026, 3, 25, tzinfo=timezone.utc).date(),
+                    close=Decimal("1500.00"),
+                    vol=Decimal("1000"),
+                )
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("functional-json-session-1")
+
+        async with session_maker() as verify_session:
+            persisted_session = await verify_session.get(
+                AnalysisGenerationSession,
+                "functional-json-session-1",
+            )
+            persisted_runs = (
+                await verify_session.execute(
+                    select(AnalysisAgentRun).where(
+                        AnalysisAgentRun.session_id == "functional-json-session-1"
+                    )
+                )
+            ).scalars().all()
+
+            assert persisted_session is not None
+            assert persisted_session.status == "completed"
+            assert len(persisted_runs) == 1
+            assert persisted_runs[0].output_payload["published_at"] == "2026-03-25"
+            assert (
+                persisted_runs[0].output_payload["generated_at"]
+                == "2026-03-25T13:00:00+00:00"
+            )
+            assert persisted_runs[0].output_payload["price"] == 1500.25
+            assert persisted_runs[0].output_payload["window"] == ["T+1", "T+5"]
+            assert (
+                persisted_runs[0].input_snapshot["captured_at"]
+                == "2026-03-25T12:30:00+00:00"
+            )
+            assert sorted(persisted_runs[0].input_snapshot["tags"]) == [
+                "policy",
+                "stock",
+            ]
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_run_analysis_session_by_id_marks_session_failed_when_finalizing_flush_breaks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fake_load_recent_news_events(
+        session,
+        ts_code: str,
+        *,
+        topic,
+        anchor_event_id,
+        published_from,
+        published_to,
+        limit,
+        candidate_limit=None,
+    ):
+        _ = (
+            session,
+            ts_code,
+            topic,
+            anchor_event_id,
+            published_from,
+            published_to,
+            limit,
+            candidate_limit,
+        )
+        base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        return [
+            NewsEvent(
+                id="functional-failure-1",
+                scope="stock",
+                cache_variant="default",
+                ts_code="600519.SH",
+                symbol="600519",
+                title="功能化多 Agent 失败场景",
+                summary="摘要",
+                published_at=base_time,
+                url="https://example.com/functional-failure-1",
+                publisher="测试源",
+                source="stock-source",
+                macro_topic="commodity_supply",
+                fetched_at=base_time,
+            )
+        ]
+
+    async def fake_run_functional_multi_agent_analysis(
+        *,
+        session,
+        session_row,
+        instrument,
+        latest_snapshot,
+        event_payloads,
+        factor_weights,
+        on_final_delta,
+    ):
+        _ = session, session_row, instrument, latest_snapshot, event_payloads, factor_weights
+        await on_final_delta("## 最终裁决\n本轮用于验证失败回退。")
+        return {
+            "status": "ready",
+            "summary": "## 最终裁决\n本轮用于验证失败回退。",
+            "risk_points": ["关注持久化异常"],
+            "factor_breakdown": [],
+            "generated_at": datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+            "used_web_search": False,
+            "web_search_status": "disabled",
+            "web_sources": [],
+            "prompt_version": "functional-decision-v1",
+            "model_name": "test-model",
+            "reasoning_effort": "medium",
+            "token_usage_input": 120,
+            "token_usage_output": 80,
+            "cost_estimate": None,
+            "failure_type": None,
+            "analysis_mode": "functional_multi_agent",
+            "orchestrator_version": "functional-multi-agent-v1",
+            "selected_hypothesis": "neutral_hypothesis",
+            "decision_confidence": "medium",
+            "decision_reason_summary": "先验证失败回退路径。",
+            "pipeline_roles": [
+                {
+                    "role_key": "decision_agent",
+                    "role_label": "最终裁决",
+                    "status": "completed",
+                    "sort_order": 6,
+                    "summary": "用于触发落库异常。",
+                    "output_payload": {"selected_hypothesis": "neutral_hypothesis"},
+                    "used_web_search": False,
+                    "web_search_status": "disabled",
+                    "web_sources": [],
+                    "prompt_version": "functional-decision-v1",
+                    "model_name": "test-model",
+                    "reasoning_effort": "medium",
+                    "token_usage_input": 20,
+                    "token_usage_output": 20,
+                    "cost_estimate": None,
+                    "failure_type": None,
+                }
+            ],
+            "role_progress": [
+                {"role_key": "decision_agent", "status": "completed"},
+            ],
+            "active_role_key": "decision_agent",
+            "pipeline_stage": "decisioning",
+        }
+
+    async def fake_create_analysis_agent_run(
+        session,
+        *,
+        session_id: str,
+        report_id: str | None,
+        role_key: str,
+        role_label: str,
+        status: str,
+        sort_order: int,
+        summary: str | None,
+        input_snapshot,
+        output_payload,
+        used_web_search: bool,
+        web_search_status: str,
+        web_sources,
+        prompt_version: str | None,
+        model_name: str | None,
+        reasoning_effort: str | None,
+        token_usage_input: int | None,
+        token_usage_output: int | None,
+        cost_estimate,
+        failure_type: str | None,
+        started_at,
+        completed_at,
+    ):
+        _ = (
+            output_payload,
+            used_web_search,
+            web_search_status,
+            web_sources,
+            prompt_version,
+            model_name,
+            reasoning_effort,
+            token_usage_input,
+            token_usage_output,
+            cost_estimate,
+            failure_type,
+            started_at,
+            completed_at,
+        )
+        row = AnalysisAgentRun(
+            session_id=session_id,
+            report_id=report_id,
+            role_key=role_key,
+            role_label=role_label,
+            status=status,
+            sort_order=sort_order,
+            summary=summary,
+            input_snapshot=input_snapshot,
+            output_payload={
+                "broken_trade_date": datetime(2026, 3, 25, tzinfo=timezone.utc).date(),
+            },
+        )
+        session.add(row)
+        # 关键复现：直接在 flush 时触发 JSON 序列化异常，逼出 finalizing 回退路径。
+        await session.flush()
+        return row
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.run_functional_multi_agent_analysis",
+        fake_run_functional_multi_agent_analysis,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.create_analysis_agent_run",
+        fake_create_analysis_agent_run,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr(
+        "app.services.analysis_service.cache_fresh_report_id",
+        fake_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="functional-failure-session-1",
+                    analysis_key="functional-failure-analysis-key",
+                    ts_code="600519.SH",
+                    topic="commodity_supply",
+                    anchor_event_id=None,
+                    status="queued",
+                    analysis_mode="functional_multi_agent",
+                )
+            )
+            session.add(
+                StockDailySnapshot(
+                    ts_code="600519.SH",
+                    trade_date=datetime(2026, 3, 25, tzinfo=timezone.utc).date(),
+                    close=Decimal("1500.00"),
+                    vol=Decimal("1000"),
+                )
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("functional-failure-session-1")
+
+        async with session_maker() as verify_session:
+            persisted_session = await verify_session.get(
+                AnalysisGenerationSession,
+                "functional-failure-session-1",
+            )
+            persisted_reports = (
+                await verify_session.execute(
+                    select(AnalysisReport).where(
+                        AnalysisReport.session_id == "functional-failure-session-1"
+                    )
+                )
+            ).scalars().all()
+
+            assert persisted_session is not None
+            assert persisted_session.status == "failed"
+            assert persisted_session.current_stage == "failed"
+            assert persisted_session.failure_type in {"TypeError", "StatementError"}
+            assert persisted_session.error_message
+            assert persisted_reports == []
 
     try:
         asyncio.run(run_test())

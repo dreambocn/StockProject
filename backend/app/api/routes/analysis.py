@@ -14,7 +14,10 @@ from app.schemas.analysis import (
     AnalysisSessionStatusResponse,
     StockAnalysisSummaryResponse,
 )
-from app.services.analysis_repository import load_analysis_session
+from app.services.analysis_repository import (
+    list_analysis_agent_runs_for_session,
+    load_analysis_session,
+)
 from app.services.analysis_runtime_service import event_bus
 from app.services.analysis_service import (
     AnalysisNotFoundError,
@@ -83,6 +86,7 @@ async def create_analysis_session_route(
             force_refresh=request.force_refresh,
             use_web_search=request.use_web_search,
             trigger_source=request.trigger_source,
+            analysis_mode=request.analysis_mode,
         )
     except AnalysisNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -100,16 +104,29 @@ async def get_analysis_session_status_route(
     session_row = await load_analysis_session(session, session_id)
     if session_row is None:
         raise HTTPException(status_code=404, detail="analysis session not found")
+    role_rows = await list_analysis_agent_runs_for_session(session, session_id)
 
     return AnalysisSessionStatusResponse.model_validate(
         {
             "session_id": session_row.id,
             "status": session_row.status,
+            "analysis_mode": session_row.analysis_mode,
             "current_stage": session_row.current_stage,
+            "pipeline_stage": session_row.current_stage,
             "stage_message": session_row.stage_message,
             "summary_preview": session_row.summary_preview,
             "progress_current": session_row.progress_current,
             "progress_total": session_row.progress_total,
+            "active_role_key": session_row.active_role_key,
+            "role_progress": [
+                {
+                    "role_key": row.role_key,
+                    "role_label": row.role_label,
+                    "status": row.status,
+                    "sort_order": row.sort_order,
+                }
+                for row in role_rows
+            ],
             "report_id": session_row.report_id,
             "error_message": session_row.error_message,
             "started_at": _normalize_utc_datetime(session_row.started_at),

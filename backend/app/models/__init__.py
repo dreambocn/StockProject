@@ -1,3 +1,4 @@
+from app.models.analysis_agent_run import AnalysisAgentRun
 from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_report import AnalysisReport
@@ -24,6 +25,7 @@ from app.models.web_source_metadata_cache import WebSourceMetadataCache
 __all__ = [
     "User",
     "UserWatchlistItem",
+    "AnalysisAgentRun",
     "AnalysisEventLink",
     "AnalysisGenerationSession",
     "AnalysisReport",

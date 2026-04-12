@@ -8,6 +8,7 @@ import {
   analysisApi,
   type AnalysisReportResponse,
   type AnalysisEventResponse,
+  type AnalysisPipelineRoleResponse,
   type StockAnalysisSummaryResponse,
 } from '../api/analysis'
 import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
@@ -15,6 +16,7 @@ import { useAuthStore } from '../stores/auth'
 
 type EventFilterKey = 'all' | 'high-related' | 'policy' | 'announcement' | 'news' | 'pending'
 type SourceKind = 'hot_news' | 'stock_detail' | 'direct'
+type AnalysisViewMode = 'final' | 'pipeline'
 type ReportEvidencePayload = {
   event_count: number
   events: AnalysisEventResponse[]
@@ -39,6 +41,7 @@ const lastHeartbeatValue = ref('')
 const lastHeartbeatObservedAt = ref<number | null>(null)
 const exportLoading = ref(false)
 const useWebSearch = ref(false)
+const analysisViewMode = ref<AnalysisViewMode>('final')
 const webSearchInherited = ref(false)
 const webSearchSeededTsCode = ref('')
 const watchlistLoading = ref(false)
@@ -198,6 +201,13 @@ const translateConfidence = (value: string | null | undefined) => {
   return t(`analysisWorkbench.confidenceText.${value}`, value)
 }
 
+const translateRoleStatus = (value: string | null | undefined) => {
+  if (!value) {
+    return t('analysisWorkbench.roleStatusText.queued')
+  }
+  return t(`analysisWorkbench.roleStatusText.${value}`, value)
+}
+
 const translateTriggerSource = (value: string | null | undefined) => {
   if (!value) {
     return t('analysisWorkbench.triggerSourceText.manual')
@@ -297,6 +307,27 @@ const reportRuntimeMeta = computed(() => {
       : null,
     selectedReport.value.failure_type
       ? `失败类型 ${selectedReport.value.failure_type}`
+      : null,
+  ].filter((item): item is string => Boolean(item))
+})
+const pipelineRoles = computed<AnalysisPipelineRoleResponse[]>(() => {
+  const roles = selectedReport.value?.pipeline_roles ?? []
+  return [...roles].sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+})
+const hasPipelineRoles = computed(() => pipelineRoles.value.length > 0)
+const reportDecisionMeta = computed(() => {
+  if (!selectedReport.value) {
+    return []
+  }
+  return [
+    selectedReport.value.selected_hypothesis
+      ? `${t('analysisWorkbench.selectedHypothesis')} · ${selectedReport.value.selected_hypothesis}`
+      : null,
+    selectedReport.value.decision_confidence
+      ? `${t('analysisWorkbench.decisionConfidence')} · ${translateConfidence(selectedReport.value.decision_confidence)}`
+      : null,
+    selectedReport.value.decision_reason_summary
+      ? `${t('analysisWorkbench.decisionReason')} · ${selectedReport.value.decision_reason_summary}`
       : null,
   ].filter((item): item is string => Boolean(item))
 })
@@ -883,6 +914,7 @@ const refreshAnalysis = async () => {
       force_refresh: true,
       use_web_search: useWebSearch.value,
       trigger_source: 'manual',
+      analysis_mode: 'functional_multi_agent',
     })
     if (session.cached || !session.session_id) {
       // 缓存命中或未分配流式会话时，直接回拉最新数据即可。
@@ -988,6 +1020,7 @@ watch(
   () => {
     stopStreaming()
     streaming.value = false
+    analysisViewMode.value = 'final'
     selectedReportId.value = null
     streamingMarkdown.value = ''
     reportEvidenceCache.value = {}
@@ -1200,8 +1233,80 @@ watch(
                   </span>
                 </div>
               </div>
+              <div
+                v-if="hasPipelineRoles"
+                class="analysis-view-toggle"
+              >
+                <button
+                  type="button"
+                  class="analysis-filter-chip"
+                  data-testid="analysis-view-final"
+                  :class="{ active: analysisViewMode === 'final' }"
+                  @click="analysisViewMode = 'final'"
+                >
+                  {{ t('analysisWorkbench.finalView') }}
+                </button>
+                <button
+                  type="button"
+                  class="analysis-filter-chip"
+                  data-testid="analysis-view-pipeline"
+                  :class="{ active: analysisViewMode === 'pipeline' }"
+                  @click="analysisViewMode = 'pipeline'"
+                >
+                  {{ t('analysisWorkbench.pipelineView') }}
+                </button>
+              </div>
 
-              <template v-if="reportAvailable">
+              <template v-if="analysisViewMode === 'pipeline' && hasPipelineRoles">
+                <div class="analysis-pipeline">
+                  <div class="analysis-pipeline__summary">
+                    <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.pipelineTitle') }}</p>
+                    <p class="analysis-summary__hint">{{ t('analysisWorkbench.pipelineSubtitle') }}</p>
+                    <div
+                      v-if="reportDecisionMeta.length > 0"
+                      class="analysis-runtime-meta"
+                    >
+                      <span
+                        v-for="metaItem in reportDecisionMeta"
+                        :key="metaItem"
+                        class="analysis-token"
+                      >
+                        {{ metaItem }}
+                      </span>
+                    </div>
+                  </div>
+                  <div class="analysis-pipeline__roles">
+                    <article
+                      v-for="role in pipelineRoles"
+                      :key="role.role_key"
+                      class="analysis-pipeline-card"
+                    >
+                      <div class="analysis-pipeline-card__header">
+                        <div>
+                          <strong>{{ role.role_label }}</strong>
+                          <p v-if="role.summary" class="analysis-factor-card__reason">{{ role.summary }}</p>
+                        </div>
+                        <span class="analysis-token">
+                          {{ translateRoleStatus(role.status) }}
+                        </span>
+                      </div>
+                      <div class="analysis-pipeline-card__meta">
+                        <span v-if="role.prompt_version" class="analysis-token">{{ role.prompt_version }}</span>
+                        <span v-if="role.model_name" class="analysis-token">{{ role.model_name }}</span>
+                        <span class="analysis-token">
+                          {{ t('analysisWorkbench.roleWebSearch') }} · {{ translateWebSearchStatus(role.web_search_status) }}
+                        </span>
+                      </div>
+                      <div v-if="role.output_payload && Object.keys(role.output_payload).length > 0" class="analysis-pipeline-card__body">
+                        <p class="analysis-pipeline-card__body-title">{{ t('analysisWorkbench.roleOutput') }}</p>
+                        <pre class="analysis-pipeline-card__payload">{{ JSON.stringify(role.output_payload, null, 2) }}</pre>
+                      </div>
+                    </article>
+                  </div>
+                </div>
+              </template>
+
+              <template v-else-if="reportAvailable">
                 <p v-if="streaming" class="analysis-summary__hint">
                   {{ streamingHint }}
                 </p>
@@ -1802,6 +1907,71 @@ watch(
   border-radius: 14px;
   border: 1px solid rgba(123, 197, 255, 0.08);
   background: rgba(8, 14, 25, 0.72);
+}
+
+.analysis-view-toggle {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+
+.analysis-pipeline {
+  display: grid;
+  gap: 1rem;
+}
+
+.analysis-pipeline__roles {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.analysis-pipeline-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(123, 197, 255, 0.12);
+  background: rgba(8, 14, 25, 0.66);
+}
+
+.analysis-pipeline-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.analysis-pipeline-card__meta {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.analysis-pipeline-card__body {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.analysis-pipeline-card__body-title {
+  margin: 0;
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--terminal-primary) 72%, white 28%);
+}
+
+.analysis-pipeline-card__payload {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(123, 197, 255, 0.1);
+  background: rgba(6, 11, 20, 0.92);
+  color: #d7e6f5;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  font-family: 'IBM Plex Mono', monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .analysis-overview__value {

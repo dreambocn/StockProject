@@ -38,6 +38,15 @@ class AnalysisReport(Base):
     content_format: Mapped[str] = mapped_column(
         String(16), nullable=False, default="markdown"
     )
+    analysis_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="single", index=True
+    )
+    orchestrator_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    selected_hypothesis: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decision_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    decision_reason_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     # anchor_event_* 用于把报告锚定到关键事件，便于跨页面跳转。
     anchor_event_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True

@@ -132,6 +132,55 @@ def test_analysis_summary_route_supports_event_id_and_returns_anchor_fields(
     assert payload["report"]["structured_sources"] == [{"provider": "akshare", "count": 1}]
 
 
+def test_analysis_summary_route_returns_pipeline_roles_for_functional_reports(
+    tmp_path: Path,
+) -> None:
+    client, engine = _prepare_analysis_client(tmp_path)
+    try:
+        async def _seed() -> None:
+            override_session = app.dependency_overrides[get_db_session]
+            async for session in override_session():
+                session.add(
+                    StockInstrument(
+                        ts_code="600519.SH",
+                        symbol="600519",
+                        name="贵州茅台",
+                        fullname="贵州茅台酒股份有限公司",
+                        list_status="L",
+                    )
+                )
+                session.add(
+                    AnalysisReport(
+                        id="functional-report-1",
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="## 最终裁决\n采用偏多假设。",
+                        risk_points=["关注公告兑现节奏"],
+                        factor_breakdown=[],
+                        analysis_mode="functional_multi_agent",
+                        orchestrator_version="functional-multi-agent-v1",
+                        selected_hypothesis="bullish_hypothesis",
+                        decision_confidence="high",
+                        decision_reason_summary="正向证据更强。",
+                        generated_at=datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc),
+                    )
+                )
+                await session.commit()
+                break
+
+        asyncio.run(_seed())
+        response = client.get("/api/analysis/stocks/600519.SH/summary")
+    finally:
+        _cleanup_analysis_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["report"]["analysis_mode"] == "functional_multi_agent"
+    assert payload["report"]["selected_hypothesis"] == "bullish_hypothesis"
+    assert payload["report"]["decision_confidence"] == "high"
+    assert "pipeline_roles" in payload["report"]
+
+
 def test_analysis_summary_route_backfills_latest_snapshot_from_daily_kline(
     tmp_path: Path,
 ) -> None:

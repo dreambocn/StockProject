@@ -32,6 +32,42 @@ export type AnalysisEventResponse = {
   link_status: string | null
 }
 
+export type AnalysisMode = 'single' | 'functional_multi_agent'
+
+export type AnalysisPipelineRoleResponse = {
+  role_key: string
+  role_label: string
+  status: string
+  sort_order: number
+  summary?: string | null
+  output_payload?: Record<string, unknown>
+  used_web_search?: boolean
+  web_search_status?: 'used' | 'disabled' | 'unsupported'
+  web_sources?: Array<{
+    title?: string
+    url?: string
+    source?: string
+    published_at?: string | null
+    snippet?: string | null
+    domain?: string | null
+    metadata_status?: 'enriched' | 'domain_inferred' | 'unavailable'
+  }>
+  prompt_version?: string | null
+  model_name?: string | null
+  reasoning_effort?: string | null
+  token_usage_input?: number | null
+  token_usage_output?: number | null
+  cost_estimate?: number | null
+  failure_type?: string | null
+}
+
+export type AnalysisRoleProgressResponse = {
+  role_key: string
+  role_label?: string | null
+  status: string
+  sort_order?: number | null
+}
+
 export type AnalysisReportResponse = {
   id?: string | null
   status: string
@@ -49,6 +85,11 @@ export type AnalysisReportResponse = {
   started_at?: string | null
   completed_at?: string | null
   content_format?: 'markdown'
+  analysis_mode?: AnalysisMode
+  orchestrator_version?: string | null
+  selected_hypothesis?: string | null
+  decision_confidence?: string | null
+  decision_reason_summary?: string | null
   prompt_version?: string | null
   model_name?: string | null
   reasoning_effort?: string | null
@@ -58,6 +99,7 @@ export type AnalysisReportResponse = {
   failure_type?: string | null
   evidence_event_count?: number
   evidence_events?: AnalysisEventResponse[]
+  pipeline_roles?: AnalysisPipelineRoleResponse[]
   web_sources?: Array<{
     title?: string
     url?: string
@@ -108,11 +150,15 @@ export type AnalysisSessionCreateResponse = {
 export type AnalysisSessionStatusResponse = {
   session_id: string
   status: string
+  analysis_mode?: AnalysisMode
   current_stage: string | null
+  pipeline_stage?: string | null
   stage_message: string | null
   summary_preview: string | null
   progress_current: number | null
   progress_total: number | null
+  active_role_key?: string | null
+  role_progress?: AnalysisRoleProgressResponse[]
   report_id: string | null
   error_message: string | null
   started_at: string | null
@@ -187,6 +233,7 @@ export const analysisApi = {
       force_refresh?: boolean
       use_web_search?: boolean
       trigger_source?: 'manual' | 'watchlist_daily'
+      analysis_mode?: AnalysisMode
     },
   ) {
     // force_refresh 与 use_web_search 由后端控制真正行为，这里仅透传。

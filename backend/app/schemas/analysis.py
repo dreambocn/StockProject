@@ -39,6 +39,32 @@ class AnalysisEventLinkResponse(BaseModel):
     link_status: str | None
 
 
+class AnalysisRoleProgressResponse(BaseModel):
+    role_key: str
+    role_label: str | None = None
+    status: str
+    sort_order: int | None = None
+
+
+class AnalysisPipelineRoleResponse(BaseModel):
+    role_key: str
+    role_label: str
+    status: str
+    sort_order: int = 0
+    summary: str | None = None
+    output_payload: dict[str, object] = {}
+    used_web_search: bool = False
+    web_search_status: Literal["used", "disabled", "unsupported"] = "disabled"
+    web_sources: list[dict[str, object]] = []
+    prompt_version: str | None = None
+    model_name: str | None = None
+    reasoning_effort: str | None = None
+    token_usage_input: int | None = None
+    token_usage_output: int | None = None
+    cost_estimate: float | None = None
+    failure_type: str | None = None
+
+
 class AnalysisReportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -59,6 +85,11 @@ class AnalysisReportResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     content_format: Literal["markdown"] = "markdown"
+    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+    orchestrator_version: str | None = None
+    selected_hypothesis: str | None = None
+    decision_confidence: str | None = None
+    decision_reason_summary: str | None = None
     anchor_event_id: str | None = None
     anchor_event_title: str | None = None
     # structured_sources/web_sources 用于前端来源展示，允许为空数组。
@@ -66,6 +97,7 @@ class AnalysisReportResponse(BaseModel):
     evidence_event_count: int = 0
     evidence_events: list[AnalysisEventLinkResponse] = []
     web_sources: list[dict[str, object]] = []
+    pipeline_roles: list[AnalysisPipelineRoleResponse] = []
     prompt_version: str | None = None
     model_name: str | None = None
     reasoning_effort: str | None = None
@@ -98,6 +130,7 @@ class AnalysisSessionCreateRequest(BaseModel):
     force_refresh: bool = False
     use_web_search: bool = False
     trigger_source: Literal["manual", "watchlist_daily"] = "manual"
+    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
 
 
 class AnalysisSessionCreateResponse(BaseModel):
@@ -111,11 +144,15 @@ class AnalysisSessionCreateResponse(BaseModel):
 class AnalysisSessionStatusResponse(BaseModel):
     session_id: str
     status: str
+    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
     current_stage: str | None = None
+    pipeline_stage: str | None = None
     stage_message: str | None = None
     summary_preview: str | None = None
     progress_current: int | None = None
     progress_total: int | None = None
+    active_role_key: str | None = None
+    role_progress: list[AnalysisRoleProgressResponse] = []
     report_id: str | None = None
     error_message: str | None = None
     started_at: datetime | None = None

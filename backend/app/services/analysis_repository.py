@@ -1,9 +1,10 @@
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.models.analysis_agent_run import AnalysisAgentRun
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
@@ -34,11 +35,12 @@ def build_analysis_key(
     anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
+    analysis_mode: str = "single",
 ) -> str:
     # 分析 key 用于会话去重，包含主题/锚点/检索开关等关键维度。
     return (
         f"{ts_code.strip().upper()}|{(topic or '').strip()}|{(anchor_event_id or '').strip()}|"
-        f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}"
+        f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}|{analysis_mode.strip() or 'single'}"
     )
 
 
@@ -221,10 +223,15 @@ async def create_analysis_report(
     started_at: datetime | None,
     completed_at: datetime | None,
     content_format: str,
-    structured_sources: list[dict[str, object]] | None,
-    evidence_event_count: int | None,
-    evidence_events: list[dict[str, object]] | None,
-    web_sources: list[dict[str, object]] | None,
+    analysis_mode: str = "single",
+    orchestrator_version: str | None = None,
+    selected_hypothesis: str | None = None,
+    decision_confidence: str | None = None,
+    decision_reason_summary: str | None = None,
+    structured_sources: list[dict[str, object]] | None = None,
+    evidence_event_count: int | None = None,
+    evidence_events: list[dict[str, object]] | None = None,
+    web_sources: list[dict[str, object]] | None = None,
     prompt_version: str | None = None,
     model_name: str | None = None,
     reasoning_effort: str | None = None,
@@ -252,6 +259,11 @@ async def create_analysis_report(
         started_at=started_at,
         completed_at=completed_at,
         content_format=content_format,
+        analysis_mode=analysis_mode,
+        orchestrator_version=orchestrator_version,
+        selected_hypothesis=selected_hypothesis,
+        decision_confidence=decision_confidence,
+        decision_reason_summary=decision_reason_summary,
         structured_sources=structured_sources,
         evidence_event_count=evidence_event_count,
         evidence_events=evidence_events,
@@ -328,8 +340,11 @@ async def load_latest_report(
     *,
     topic: str | None = None,
     anchor_event_id: str | None = None,
+    analysis_mode: str = "single",
 ) -> AnalysisReport | None:
-    statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code)
+    statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code).where(
+        AnalysisReport.analysis_mode == analysis_mode
+    )
     if topic:
         statement = statement.where(AnalysisReport.topic == topic)
     if anchor_event_id is None:
@@ -354,12 +369,14 @@ async def load_latest_fresh_report(
     topic: str | None,
     anchor_event_id: str | None,
     freshness_minutes: int,
+    analysis_mode: str = "single",
 ) -> AnalysisReport | None:
     freshness_threshold = datetime.now(UTC) - timedelta(minutes=freshness_minutes)
     statement = (
         select(AnalysisReport)
         .where(AnalysisReport.ts_code == ts_code)
         .where(AnalysisReport.generated_at >= freshness_threshold)
+        .where(AnalysisReport.analysis_mode == analysis_mode)
     )
     if topic is None:
         statement = statement.where(AnalysisReport.topic.is_(None))
@@ -380,8 +397,11 @@ async def list_analysis_reports(
     topic: str | None = None,
     anchor_event_id: str | None = None,
     limit: int,
+    analysis_mode: str = "single",
 ) -> list[AnalysisReport]:
-    statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code)
+    statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code).where(
+        AnalysisReport.analysis_mode == analysis_mode
+    )
     if topic:
         statement = statement.where(AnalysisReport.topic == topic)
     if anchor_event_id is None:
@@ -412,10 +432,12 @@ async def create_analysis_session_record(
     anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
+    analysis_mode: str = "single",
     system_job_id: str | None = None,
     prompt_version: str | None = None,
     model_name: str | None = None,
     reasoning_effort: str | None = None,
+    orchestrator_version: str | None = None,
 ) -> AnalysisGenerationSession:
     row = AnalysisGenerationSession(
         analysis_key=analysis_key,
@@ -423,6 +445,8 @@ async def create_analysis_session_record(
         topic=topic,
         anchor_event_id=anchor_event_id,
         use_web_search=use_web_search,
+        analysis_mode=analysis_mode,
+        orchestrator_version=orchestrator_version,
         trigger_source=trigger_source,
         trigger_source_group=build_trigger_source_group(trigger_source),
         status="queued",
@@ -430,6 +454,9 @@ async def create_analysis_session_record(
         stage_message="等待分析任务执行",
         progress_current=0,
         progress_total=0,
+        role_count=0,
+        role_completed_count=0,
+        active_role_key=None,
         system_job_id=system_job_id,
         prompt_version=prompt_version,
         model_name=model_name,
@@ -469,45 +496,146 @@ async def claim_next_analysis_session_for_worker(
 ) -> str | None:
     now = datetime.now(UTC)
 
-    # 关键流程：Worker 先领取 queued，只有没有 queued 时才回收 stale running，避免饿死新任务。
-    queued_statement = (
-        select(AnalysisGenerationSession)
-        .where(AnalysisGenerationSession.status == "queued")
-        .order_by(
-            AnalysisGenerationSession.created_at.asc(),
-            AnalysisGenerationSession.id.asc(),
+    def _build_claim_statement(
+        *,
+        status: str,
+        order_by,
+        updated_before: datetime | None = None,
+    ):
+        candidate_statement = (
+            select(AnalysisGenerationSession.id)
+            .where(AnalysisGenerationSession.status == status)
+            .order_by(*order_by)
+            .limit(1)
         )
-        .limit(1)
-    )
-    queued_row = (await session.execute(queued_statement)).scalar_one_or_none()
-    if queued_row is not None:
-        queued_row.status = "running"
-        queued_row.started_at = now
-        queued_row.completed_at = None
-        queued_row.error_message = None
-        await session.flush()
-        return queued_row.id
+        if updated_before is not None:
+            candidate_statement = candidate_statement.where(
+                AnalysisGenerationSession.updated_at < updated_before
+            )
 
-    stale_running_statement = (
-        select(AnalysisGenerationSession)
-        .where(AnalysisGenerationSession.status == "running")
-        .where(AnalysisGenerationSession.updated_at < stale_before)
-        .order_by(
-            AnalysisGenerationSession.updated_at.asc(),
-            AnalysisGenerationSession.id.asc(),
+        get_bind = getattr(session, "get_bind", None)
+        if callable(get_bind):
+            bind = get_bind()
+            dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+            if dialect_name == "postgresql":
+                # PostgreSQL 下显式跳过已锁定候选，避免多个 worker 互相阻塞或重复领取。
+                candidate_statement = candidate_statement.with_for_update(
+                    skip_locked=True
+                )
+
+        candidate_id = candidate_statement.scalar_subquery()
+        return (
+            update(AnalysisGenerationSession)
+            .where(AnalysisGenerationSession.id == candidate_id)
+            .values(
+                status="running",
+                started_at=now,
+                completed_at=None,
+                error_message=None,
+                failure_type=None,
+            )
+            .returning(AnalysisGenerationSession.id)
         )
-        .limit(1)
-    )
-    stale_running_row = (
-        await session.execute(stale_running_statement)
-    ).scalar_one_or_none()
-    if stale_running_row is None:
-        return None
 
-    stale_running_row.status = "running"
-    stale_running_row.started_at = now
-    stale_running_row.completed_at = None
-    stale_running_row.error_message = None
-    await session.flush()
-    return stale_running_row.id
+    # 关键流程：Worker 先原子领取 queued，只有没有 queued 时才回收 stale running，避免饿死新任务。
+    queued_result = await session.execute(
+        _build_claim_statement(
+            status="queued",
+            order_by=(
+                AnalysisGenerationSession.created_at.asc(),
+                AnalysisGenerationSession.id.asc(),
+            ),
+        )
+    )
+    queued_id = queued_result.scalar_one_or_none()
+    if queued_id is not None:
+        return queued_id
+
+    stale_result = await session.execute(
+        _build_claim_statement(
+            status="running",
+            updated_before=stale_before,
+            order_by=(
+                AnalysisGenerationSession.updated_at.asc(),
+                AnalysisGenerationSession.id.asc(),
+            ),
+        )
+    )
+    return stale_result.scalar_one_or_none()
+
+
+async def create_analysis_agent_run(
+    session: AsyncSession,
+    *,
+    session_id: str,
+    report_id: str | None,
+    role_key: str,
+    role_label: str,
+    status: str,
+    sort_order: int,
+    summary: str | None,
+    input_snapshot: dict[str, object] | None,
+    output_payload: dict[str, object] | None,
+    used_web_search: bool,
+    web_search_status: str,
+    web_sources: list[dict[str, object]] | None,
+    prompt_version: str | None,
+    model_name: str | None,
+    reasoning_effort: str | None,
+    token_usage_input: int | None,
+    token_usage_output: int | None,
+    cost_estimate: float | None,
+    failure_type: str | None,
+    started_at: datetime | None,
+    completed_at: datetime | None,
+) -> AnalysisAgentRun:
+    row = AnalysisAgentRun(
+        session_id=session_id,
+        report_id=report_id,
+        role_key=role_key,
+        role_label=role_label,
+        status=status,
+        sort_order=sort_order,
+        summary=summary,
+        input_snapshot=input_snapshot,
+        output_payload=output_payload,
+        used_web_search=used_web_search,
+        web_search_status=web_search_status,
+        web_sources=web_sources,
+        prompt_version=prompt_version,
+        model_name=model_name,
+        reasoning_effort=reasoning_effort,
+        token_usage_input=token_usage_input,
+        token_usage_output=token_usage_output,
+        cost_estimate=cost_estimate,
+        failure_type=failure_type,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+    session.add(row)
+    return row
+
+
+async def list_analysis_agent_runs_for_report(
+    session: AsyncSession,
+    report_id: str,
+) -> list[AnalysisAgentRun]:
+    statement = (
+        select(AnalysisAgentRun)
+        .where(AnalysisAgentRun.report_id == report_id)
+        .order_by(AnalysisAgentRun.sort_order.asc(), AnalysisAgentRun.created_at.asc())
+    )
+    return (await session.execute(statement)).scalars().all()
+
+
+async def list_analysis_agent_runs_for_session(
+    session: AsyncSession,
+    session_id: str,
+) -> list[AnalysisAgentRun]:
+    statement = (
+        select(AnalysisAgentRun)
+        .where(AnalysisAgentRun.session_id == session_id)
+        .order_by(AnalysisAgentRun.sort_order.asc(), AnalysisAgentRun.created_at.asc())
+    )
+    return (await session.execute(statement)).scalars().all()
 

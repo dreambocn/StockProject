@@ -231,6 +231,37 @@ def test_create_analysis_session_uses_recent_report_across_trigger_sources(
     assert payload["report_id"]
 
 
+def test_create_analysis_session_keeps_functional_multi_agent_cache_isolated(
+    tmp_path: Path,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(
+            _seed_report(
+                session_maker,
+                ts_code="600519.SH",
+                generated_at=datetime.now(UTC),
+            )
+        )
+        response = client.post(
+            "/api/analysis/stocks/600519.SH/sessions",
+            json={
+                "force_refresh": False,
+                "use_web_search": False,
+                "trigger_source": "manual",
+                "analysis_mode": "functional_multi_agent",
+            },
+        )
+    finally:
+        _cleanup_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cached"] is False
+    assert payload["session_id"]
+    assert payload["status"] == "queued"
+
+
 def test_analysis_reports_route_returns_latest_first(tmp_path: Path) -> None:
     client, engine, session_maker = _prepare_client(tmp_path)
     try:

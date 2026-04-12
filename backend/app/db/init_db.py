@@ -257,6 +257,11 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         "started_at": "TIMESTAMP",
         "completed_at": "TIMESTAMP",
         "content_format": "VARCHAR(16) DEFAULT 'markdown'",
+        "analysis_mode": "VARCHAR(32) DEFAULT 'single'",
+        "orchestrator_version": "VARCHAR(64)",
+        "selected_hypothesis": "VARCHAR(64)",
+        "decision_confidence": "VARCHAR(16)",
+        "decision_reason_summary": "TEXT",
         "anchor_event_id": "VARCHAR(36)",
         "anchor_event_title": "VARCHAR(255)",
         "structured_sources": "JSON",
@@ -283,6 +288,25 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
                 "ALTER TABLE analysis_generation_sessions ADD COLUMN anchor_event_id VARCHAR(36)"
             )
         )
+    required_session_column_sql: dict[str, str] = {
+        "analysis_mode": "VARCHAR(32) DEFAULT 'single'",
+        "orchestrator_version": "VARCHAR(64)",
+        "role_count": "INTEGER",
+        "role_completed_count": "INTEGER",
+        "active_role_key": "VARCHAR(64)",
+    }
+    for column_name, column_type in required_session_column_sql.items():
+        if column_name in session_columns:
+            continue
+        sync_connection.execute(
+            text(
+                "ALTER TABLE analysis_generation_sessions "
+                f"ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+    if "analysis_agent_runs" not in set(inspector.get_table_names()):
+        return
 
 
 def _ensure_stock_candidate_evidence_cache_columns(sync_connection: Connection) -> None:

@@ -1,13 +1,18 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.models.analysis_event_link import AnalysisEventLink
 from app.models.news_event import NewsEvent
-from app.services.analysis_repository import load_analysis_events, load_recent_news_events
+from app.services.analysis_repository import (
+    claim_next_analysis_session_for_worker,
+    load_analysis_events,
+    load_recent_news_events,
+)
 
 
 def _setup_async_session(tmp_path: Path):
@@ -351,3 +356,83 @@ def test_load_analysis_events_candidate_limit_supports_summary_oversampling(
         asyncio.run(run_test())
     finally:
         asyncio.run(engine.dispose())
+
+
+def test_claim_next_analysis_session_for_worker_allows_only_one_concurrent_winner() -> None:
+    class _FakeResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+    class _AsyncBarrier:
+        def __init__(self, parties: int) -> None:
+            self._parties = parties
+            self._count = 0
+            self._event = asyncio.Event()
+            self._guard = asyncio.Lock()
+
+        async def wait(self) -> None:
+            async with self._guard:
+                self._count += 1
+                if self._count >= self._parties:
+                    self._event.set()
+            await self._event.wait()
+
+    class _FakeConcurrentClaimSession:
+        def __init__(self, shared_state: dict[str, object], barrier: _AsyncBarrier) -> None:
+            self._shared_state = shared_state
+            self._barrier = barrier
+
+        async def execute(self, statement):
+            statement_kind = getattr(statement, "__visit_name__", "")
+            if statement_kind == "update":
+                if self._shared_state["available"]:
+                    self._shared_state["available"] = False
+                    return _FakeResult("session-queued-1")
+                return _FakeResult(None)
+
+            if statement_kind == "select":
+                await self._barrier.wait()
+                if self._shared_state["available"]:
+                    return _FakeResult(
+                        SimpleNamespace(
+                            id="session-queued-1",
+                            status="queued",
+                            started_at=None,
+                            completed_at=None,
+                            error_message=None,
+                        )
+                    )
+                return _FakeResult(None)
+
+            raise AssertionError(f"unexpected statement kind: {statement_kind}")
+
+        async def flush(self) -> None:
+            self._shared_state["available"] = False
+
+    async def run_test() -> None:
+        shared_state = {"available": True}
+        barrier = _AsyncBarrier(parties=2)
+        sessions = [
+            _FakeConcurrentClaimSession(shared_state, barrier),
+            _FakeConcurrentClaimSession(shared_state, barrier),
+        ]
+
+        results = await asyncio.gather(
+            claim_next_analysis_session_for_worker(
+                sessions[0],
+                stale_before=datetime.now(UTC) - timedelta(seconds=900),
+            ),
+            claim_next_analysis_session_for_worker(
+                sessions[1],
+                stale_before=datetime.now(UTC) - timedelta(seconds=900),
+            ),
+        )
+
+        # 并发认领时只能有一个 worker 成功，另一个必须拿到空结果。
+        assert results.count("session-queued-1") == 1
+        assert results.count(None) == 1
+
+    asyncio.run(run_test())

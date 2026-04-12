@@ -5,6 +5,7 @@ from html import escape
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analysis_report import AnalysisReport
+from app.services.analysis_repository import list_analysis_agent_runs_for_report
 
 
 class AnalysisExportNotFoundError(Exception):
@@ -19,6 +20,11 @@ async def load_analysis_report_for_export(
     report = await session.get(AnalysisReport, report_id)
     if report is None:
         raise AnalysisExportNotFoundError("analysis report not found")
+    setattr(
+        report,
+        "pipeline_roles",
+        await list_analysis_agent_runs_for_report(session, report.id),
+    )
     return report
 
 
@@ -29,6 +35,14 @@ def render_report_markdown(report: AnalysisReport) -> str:
     sections.append("")
     sections.append(f"- 生成时间：{report.generated_at.isoformat() if report.generated_at else '--'}")
     sections.append(f"- 触发来源：{report.trigger_source}")
+    if getattr(report, "analysis_mode", "single") == "functional_multi_agent":
+        sections.append("- 分析模式：纯职能多 Agent")
+    if getattr(report, "selected_hypothesis", None):
+        sections.append(f"- 采纳假设：{report.selected_hypothesis}")
+    if getattr(report, "decision_confidence", None):
+        sections.append(f"- 裁决置信度：{report.decision_confidence}")
+    if getattr(report, "decision_reason_summary", None):
+        sections.append(f"- 采纳理由：{report.decision_reason_summary}")
     if report.topic:
         sections.append(f"- 主题：{report.topic}")
     if report.anchor_event_title:
@@ -86,6 +100,15 @@ def render_report_markdown(report: AnalysisReport) -> str:
             sections.append(line)
     else:
         sections.append("- 暂无 Web 来源")
+
+    pipeline_roles = getattr(report, "pipeline_roles", None) or []
+    if pipeline_roles:
+        sections.extend(["", "## 研究流水线"])
+        for item in pipeline_roles:
+            sections.append(
+                f"- {getattr(item, 'role_label', '角色')}（{getattr(item, 'status', 'unknown')}）："
+                f"{getattr(item, 'summary', None) or '暂无摘要'}"
+            )
 
     return "\n".join(sections).strip() + "\n"
 

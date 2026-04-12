@@ -1,3 +1,4 @@
+import inspect
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlparse
@@ -21,11 +22,14 @@ from app.schemas.stocks import (
 )
 from app.services.analysis_repository import (
     build_analysis_key,
+    create_analysis_agent_run,
     create_analysis_report,
     create_analysis_session_record,
     load_active_session_by_key,
     load_analysis_events,
     load_analysis_report_by_id,
+    list_analysis_agent_runs_for_report,
+    list_analysis_agent_runs_for_session,
     load_analysis_session,
     load_latest_report,
     load_latest_fresh_report,
@@ -58,6 +62,13 @@ from app.services.job_service import (
     mark_job_running,
     touch_job_heartbeat,
 )
+from app.services.analysis_orchestrator_service import (
+    ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
+    FUNCTIONAL_MULTI_AGENT_ORCHESTRATOR_VERSION,
+    normalize_analysis_mode,
+    run_functional_multi_agent_analysis,
+    to_json_safe_payload,
+)
 from app.services.key_event_extraction_service import extract_key_event_types
 from app.services.llm_analysis_service import generate_stock_analysis_report
 from app.services.news_sentiment_service import analyze_news_sentiment
@@ -78,6 +89,20 @@ def _analysis_logger():
     # 关键流程：分析服务使用模块级 logger，但测试/热重载可能污染其 disabled/propagate 状态。
     # 每次发日志前重新取一次 logger，确保会话级日志不会因为外部副作用静默丢失。
     return get_logger(__name__)
+
+
+def _supports_keyword_argument(func: object, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+    parameter = signature.parameters.get(keyword)
+    if parameter is None:
+        return False
+    return parameter.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }
 
 
 class AnalysisNotFoundError(Exception):
@@ -101,6 +126,9 @@ async def _update_session_progress(
     completed_at: datetime | None = None,
     error_message: str | None = None,
     failure_type: str | None = None,
+    active_role_key: str | None = None,
+    role_count: int | None = None,
+    role_completed_count: int | None = None,
 ) -> None:
     # 关键流程：轮询依赖数据库中的运行态字段，这里统一写库并刷新 heartbeat。
     now = datetime.now(UTC)
@@ -122,6 +150,12 @@ async def _update_session_progress(
         session_row.error_message = error_message
     if failure_type is not None:
         session_row.failure_type = failure_type
+    if active_role_key is not None:
+        session_row.active_role_key = active_role_key
+    if role_count is not None:
+        session_row.role_count = role_count
+    if role_completed_count is not None:
+        session_row.role_completed_count = role_completed_count
     session_row.heartbeat_at = now
     await session.commit()
 
@@ -329,6 +363,36 @@ def _normalize_evidence_event_payloads(
     return normalized_events
 
 
+def _serialize_pipeline_roles(role_rows: list[object] | None) -> list[dict[str, object]]:
+    serialized: list[dict[str, object]] = []
+    for row in role_rows or []:
+        serialized.append(
+            {
+                "role_key": getattr(row, "role_key", ""),
+                "role_label": getattr(row, "role_label", ""),
+                "status": getattr(row, "status", "queued"),
+                "sort_order": int(getattr(row, "sort_order", 0) or 0),
+                "summary": getattr(row, "summary", None),
+                "output_payload": getattr(row, "output_payload", None) or {},
+                "used_web_search": getattr(row, "used_web_search", False),
+                "web_search_status": getattr(row, "web_search_status", "disabled"),
+                "web_sources": getattr(row, "web_sources", None) or [],
+                "prompt_version": getattr(row, "prompt_version", None),
+                "model_name": getattr(row, "model_name", None),
+                "reasoning_effort": getattr(row, "reasoning_effort", None),
+                "token_usage_input": getattr(row, "token_usage_input", None),
+                "token_usage_output": getattr(row, "token_usage_output", None),
+                "cost_estimate": (
+                    float(getattr(row, "cost_estimate"))
+                    if getattr(row, "cost_estimate", None) is not None
+                    else None
+                ),
+                "failure_type": getattr(row, "failure_type", None),
+            }
+        )
+    return serialized
+
+
 def _resolve_generation_event_limit(settings: object, fallback_limit: int) -> int:
     raw_limit = getattr(settings, "analysis_generation_event_limit", fallback_limit)
     try:
@@ -336,6 +400,62 @@ def _resolve_generation_event_limit(settings: object, fallback_limit: int) -> in
     except (TypeError, ValueError):
         resolved_limit = fallback_limit
     return max(1, resolved_limit)
+
+
+def _normalize_optional_json_object(payload: object) -> dict[str, object] | None:
+    normalized = to_json_safe_payload(payload)
+    if normalized is None:
+        return None
+    if isinstance(normalized, dict):
+        return normalized
+    return {"value": normalized}
+
+
+def _normalize_json_list(payload: object) -> list[object]:
+    normalized = to_json_safe_payload(payload)
+    if isinstance(normalized, list):
+        return normalized
+    return []
+
+
+async def _persist_analysis_session_failure(
+    *,
+    session_id: str,
+    analysis_key: str,
+    error_message: str,
+    failure_type: str,
+) -> None:
+    async with SessionLocal() as recovery_session:
+        recovery_row = await load_analysis_session(recovery_session, session_id)
+        if recovery_row is None:
+            return
+
+        recovery_row.status = "failed"
+        recovery_row.current_stage = "failed"
+        recovery_row.stage_message = "分析生成失败"
+        recovery_row.error_message = error_message
+        recovery_row.completed_at = datetime.now(UTC)
+        recovery_row.heartbeat_at = datetime.now(UTC)
+        recovery_row.failure_type = failure_type
+        analysis_job = (
+            await recovery_session.get(SystemJobRun, recovery_row.system_job_id)
+            if recovery_row.system_job_id
+            else None
+        )
+        if analysis_job is not None:
+            await finish_job_run(
+                recovery_session,
+                job=analysis_job,
+                status=JOB_STATUS_FAILED,
+                summary="股票分析任务执行失败",
+                error_type=failure_type,
+                error_message=error_message,
+                linked_entity_type="analysis_generation_session",
+                linked_entity_id=recovery_row.id,
+            )
+        await recovery_session.commit()
+
+    await clear_cached_active_session_id(analysis_key, session_id)
 
 
 async def _resolve_report_evidence_payloads(
@@ -373,6 +493,7 @@ def _serialize_report(
     report_obj: object | None,
     *,
     evidence_payloads: list[dict[str, object]] | None = None,
+    pipeline_roles: list[dict[str, object]] | None = None,
 ) -> dict[str, object] | None:
     if report_obj is None:
         return None
@@ -398,6 +519,15 @@ def _serialize_report(
             "started_at": getattr(report_obj, "started_at", None),
             "completed_at": getattr(report_obj, "completed_at", None),
             "content_format": getattr(report_obj, "content_format", "markdown"),
+            "analysis_mode": getattr(report_obj, "analysis_mode", "single"),
+            "orchestrator_version": getattr(report_obj, "orchestrator_version", None),
+            "selected_hypothesis": getattr(report_obj, "selected_hypothesis", None),
+            "decision_confidence": getattr(report_obj, "decision_confidence", None),
+            "decision_reason_summary": getattr(
+                report_obj,
+                "decision_reason_summary",
+                None,
+            ),
             "structured_sources": getattr(report_obj, "structured_sources", None) or [],
             "evidence_event_count": (
                 int(getattr(report_obj, "evidence_event_count"))
@@ -406,6 +536,7 @@ def _serialize_report(
             ),
             "evidence_events": evidence_payloads or [],
             "web_sources": getattr(report_obj, "web_sources", None) or [],
+            "pipeline_roles": pipeline_roles or [],
             "prompt_version": getattr(report_obj, "prompt_version", None),
             "model_name": getattr(report_obj, "model_name", None),
             "reasoning_effort": getattr(report_obj, "reasoning_effort", None),
@@ -459,7 +590,16 @@ async def get_stock_analysis_summary(
         normalized_ts_code,
         topic=topic,
         anchor_event_id=event_id,
+        analysis_mode=ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
     )
+    if persisted_report is None:
+        persisted_report = await load_latest_report(
+            session,
+            normalized_ts_code,
+            topic=topic,
+            anchor_event_id=event_id,
+            analysis_mode="single",
+        )
     event_context_status: Literal["direct", "topic_fallback", "none"] = "none"
     event_context_message: str | None = None
     if event_id and persisted_report is None:
@@ -468,6 +608,10 @@ async def get_stock_analysis_summary(
             normalized_ts_code,
             topic=topic,
             anchor_event_id=None,
+            analysis_mode=(
+                getattr(persisted_report, "analysis_mode", None)
+                or ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT
+            ),
         )
         event_context_status = "topic_fallback"
         event_context_message = "未找到指定锚点事件，已回退到主题级分析"
@@ -475,6 +619,10 @@ async def get_stock_analysis_summary(
         event_context_status = "direct"
 
     if persisted_report is not None:
+        pipeline_role_rows = await list_analysis_agent_runs_for_report(
+            session,
+            persisted_report.id,
+        )
         enriched_web_sources, _remaining_budget = await _backfill_report_web_sources(
             session,
             report_obj=persisted_report,
@@ -482,6 +630,9 @@ async def get_stock_analysis_summary(
             remaining_budget=5,
         )
         persisted_report.web_sources = enriched_web_sources
+        pipeline_roles = _serialize_pipeline_roles(pipeline_role_rows)
+    else:
+        pipeline_roles = []
 
     if persisted_report is not None:
         event_payloads = await _resolve_report_evidence_payloads(
@@ -516,6 +667,7 @@ async def get_stock_analysis_summary(
     report_payload = _serialize_report(
         persisted_report,
         evidence_payloads=event_payloads if persisted_report is not None else None,
+        pipeline_roles=pipeline_roles,
     )
     status = _derive_status(
         getattr(persisted_report, "status", None) if persisted_report else None,
@@ -565,7 +717,17 @@ async def list_stock_analysis_report_archives(
         topic=topic,
         anchor_event_id=event_id,
         limit=limit,
+        analysis_mode=ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
     )
+    if not reports:
+        reports = await list_analysis_reports(
+            session,
+            ts_code=normalized_ts_code,
+            topic=topic,
+            anchor_event_id=event_id,
+            limit=limit,
+            analysis_mode="single",
+        )
     remaining_budget = 10
     for index, report in enumerate(reports):
         if index >= 3 or remaining_budget <= 0:
@@ -579,6 +741,10 @@ async def list_stock_analysis_report_archives(
         report.web_sources = enriched_web_sources
     serialized_items: list[dict[str, object]] = []
     for report in reports:
+        pipeline_role_rows = await list_analysis_agent_runs_for_report(
+            session,
+            report.id,
+        )
         evidence_payloads = await _resolve_report_evidence_payloads(
             session,
             report_obj=report,
@@ -590,7 +756,11 @@ async def list_stock_analysis_report_archives(
         )
         serialized_items.append(
             AnalysisReportArchiveItemResponse.model_validate(
-                _serialize_report(report, evidence_payloads=evidence_payloads)
+                _serialize_report(
+                    report,
+                    evidence_payloads=evidence_payloads,
+                    pipeline_roles=_serialize_pipeline_roles(pipeline_role_rows),
+                )
             ).model_dump()
         )
     return {
@@ -633,6 +803,7 @@ async def start_analysis_session(
     force_refresh: bool,
     use_web_search: bool,
     trigger_source: str,
+    analysis_mode: str = "single",
     execute_inline: bool = False,
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
@@ -641,12 +812,22 @@ async def start_analysis_session(
         raise AnalysisNotFoundError("stock not found")
 
     settings = get_settings()
+    resolved_analysis_mode = normalize_analysis_mode(
+        analysis_mode,
+        trigger_source=trigger_source,
+    )
+    orchestrator_version = (
+        FUNCTIONAL_MULTI_AGENT_ORCHESTRATOR_VERSION
+        if resolved_analysis_mode == ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT
+        else None
+    )
     analysis_key = build_analysis_key(
         ts_code=normalized_ts_code,
         topic=topic,
         anchor_event_id=event_id,
         use_web_search=use_web_search,
         trigger_source=trigger_source,
+        analysis_mode=resolved_analysis_mode,
     )
     lock = await get_analysis_lock(analysis_key)
     async with lock:
@@ -658,6 +839,7 @@ async def start_analysis_session(
             topic=topic,
             anchor_event_id=event_id,
             freshness_minutes=settings.analysis_report_freshness_minutes,
+            analysis_mode=resolved_analysis_mode,
         )
         if fresh_report is not None:
             return {
@@ -714,10 +896,12 @@ async def start_analysis_session(
             anchor_event_id=event_id,
             use_web_search=use_web_search,
             trigger_source=trigger_source,
+            analysis_mode=resolved_analysis_mode,
             system_job_id=analysis_job.id,
             prompt_version=get_analysis_prompt_version(),
             model_name=settings.llm_model,
             reasoning_effort=settings.llm_reasoning_effort,
+            orchestrator_version=orchestrator_version,
         )
         analysis_job.linked_entity_type = "analysis_generation_session"
         analysis_job.linked_entity_id = session_row.id
@@ -966,6 +1150,10 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     progress_total=total_progress,
                 )
 
+            latest_snapshot = await load_resolved_latest_snapshot(
+                session,
+                ts_code=session_row.ts_code,
+            )
             factor_weights = calculate_factor_weights(event_payloads)
             await _update_session_progress(
                 session,
@@ -1004,15 +1192,93 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     },
                 )
 
-            report_result = await generate_stock_analysis_report(
-                ts_code=session_row.ts_code,
-                instrument_name=instrument.name,
-                events=event_payloads,
-                factor_weights=factor_weights,
-                session=session,
-                use_web_search=session_row.use_web_search,
-                on_delta=on_delta,
-            )
+            async def on_role_event(event_name: str, payload: dict[str, object]) -> None:
+                active_role_key = str(payload.get("role_key") or "") or None
+                if active_role_key:
+                    session_row.active_role_key = active_role_key
+                await event_bus.publish(
+                    session_id,
+                    event_name,
+                    {"session_id": session_id, **payload},
+                )
+
+            if session_row.analysis_mode == ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT:
+                functional_kwargs: dict[str, object] = {
+                    "session": session,
+                    "session_row": session_row,
+                    "instrument": instrument,
+                    "latest_snapshot": latest_snapshot,
+                    "event_payloads": event_payloads,
+                    "factor_weights": factor_weights,
+                    "on_final_delta": on_delta,
+                }
+                if _supports_keyword_argument(
+                    run_functional_multi_agent_analysis,
+                    "on_role_event",
+                ):
+                    functional_kwargs["on_role_event"] = on_role_event
+                functional_result = await run_functional_multi_agent_analysis(
+                    **functional_kwargs,
+                )
+                if isinstance(functional_result, dict):
+                    functional_result = type(
+                        "FunctionalResultShim",
+                        (),
+                        functional_result,
+                    )()
+                report_status = functional_result.status
+                report_summary = functional_result.summary
+                report_risk_points = functional_result.risk_points
+                report_factor_breakdown = functional_result.factor_breakdown
+                report_generated_at = functional_result.generated_at
+                report_used_web_search = functional_result.used_web_search
+                report_web_search_status = functional_result.web_search_status
+                report_web_sources = functional_result.web_sources
+                report_prompt_version = functional_result.prompt_version
+                report_model_name = functional_result.model_name
+                report_reasoning_effort = functional_result.reasoning_effort
+                report_token_usage_input = functional_result.token_usage_input
+                report_token_usage_output = functional_result.token_usage_output
+                report_cost_estimate = functional_result.cost_estimate
+                report_failure_type = functional_result.failure_type
+                report_analysis_mode = functional_result.analysis_mode
+                report_orchestrator_version = functional_result.orchestrator_version
+                selected_hypothesis = functional_result.selected_hypothesis
+                decision_confidence = functional_result.decision_confidence
+                decision_reason_summary = functional_result.decision_reason_summary
+                pipeline_roles = functional_result.pipeline_roles
+            else:
+                report_result = await generate_stock_analysis_report(
+                    ts_code=session_row.ts_code,
+                    instrument_name=instrument.name,
+                    events=event_payloads,
+                    factor_weights=factor_weights,
+                    session=session,
+                    use_web_search=session_row.use_web_search,
+                    on_delta=on_delta,
+                )
+                report_status = report_result.status
+                report_summary = report_result.summary
+                report_risk_points = report_result.risk_points
+                report_factor_breakdown = report_result.factor_breakdown
+                report_generated_at = report_result.generated_at
+                report_used_web_search = report_result.used_web_search
+                report_web_search_status = report_result.web_search_status
+                report_web_sources = report_result.web_sources
+                report_prompt_version = report_result.prompt_version
+                report_model_name = report_result.model_name
+                report_reasoning_effort = report_result.reasoning_effort
+                report_token_usage_input = report_result.token_usage_input
+                report_token_usage_output = report_result.token_usage_output
+                report_cost_estimate = report_result.cost_estimate
+                report_failure_type = report_result.failure_type
+                report_analysis_mode = "single"
+                report_orchestrator_version = None
+                selected_hypothesis = None
+                decision_confidence = None
+                decision_reason_summary = None
+                pipeline_roles = []
+
             await _update_session_progress(
                 session,
                 session_row=session_row,
@@ -1021,17 +1287,29 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 progress_current=total_progress,
                 progress_total=total_progress,
             )
+            safe_report_risk_points = [
+                str(item)
+                for item in _normalize_json_list(report_risk_points)
+            ]
+            safe_report_factor_breakdown = _normalize_json_list(
+                report_factor_breakdown
+            )
+            safe_structured_sources = _normalize_json_list(
+                _build_structured_sources(event_payloads)
+            )
+            safe_evidence_events = _normalize_json_list(event_payloads)
+            safe_report_web_sources = _normalize_json_list(report_web_sources)
             report = await create_analysis_report(
                 session,
                 ts_code=session_row.ts_code,
-                status=report_result.status,
-                summary=report_result.summary,
-                risk_points=report_result.risk_points,
-                factor_breakdown=report_result.factor_breakdown,
+                status=report_status,
+                summary=report_summary,
+                risk_points=safe_report_risk_points,
+                factor_breakdown=safe_report_factor_breakdown,
                 topic=session_row.topic,
                 published_from=None,
                 published_to=None,
-                generated_at=report_result.generated_at,
+                generated_at=report_generated_at,
                 trigger_source=session_row.trigger_source,
                 anchor_event_id=session_row.anchor_event_id,
                 anchor_event_title=next(
@@ -1042,59 +1320,130 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     ),
                     None,
                 ),
-                used_web_search=report_result.used_web_search,
-                web_search_status=report_result.web_search_status,
+                used_web_search=report_used_web_search,
+                web_search_status=report_web_search_status,
                 session_id=session_id,
                 started_at=session_row.started_at,
-                completed_at=report_result.generated_at,
+                completed_at=report_generated_at,
                 content_format="markdown",
-                structured_sources=_build_structured_sources(event_payloads),
+                analysis_mode=report_analysis_mode,
+                orchestrator_version=report_orchestrator_version,
+                selected_hypothesis=selected_hypothesis,
+                decision_confidence=decision_confidence,
+                decision_reason_summary=decision_reason_summary,
+                structured_sources=safe_structured_sources,
                 evidence_event_count=len(event_payloads),
-                evidence_events=event_payloads,
-                web_sources=report_result.web_sources,
-                prompt_version=report_result.prompt_version,
-                model_name=report_result.model_name or session_row.model_name,
+                evidence_events=safe_evidence_events,
+                web_sources=safe_report_web_sources,
+                prompt_version=report_prompt_version,
+                model_name=report_model_name or session_row.model_name,
                 reasoning_effort=(
-                    report_result.reasoning_effort or session_row.reasoning_effort
+                    report_reasoning_effort or session_row.reasoning_effort
                 ),
-                token_usage_input=report_result.token_usage_input,
-                token_usage_output=report_result.token_usage_output,
-                cost_estimate=report_result.cost_estimate,
-                failure_type=report_result.failure_type,
+                token_usage_input=report_token_usage_input,
+                token_usage_output=report_token_usage_output,
+                cost_estimate=report_cost_estimate,
+                failure_type=report_failure_type,
             )
             await session.flush()
-            session_row.summary_preview = report_result.summary
+            for role in pipeline_roles:
+                role_obj = (
+                    type("FunctionalRoleShim", (), role)()
+                    if isinstance(role, dict)
+                    else role
+                )
+                safe_role_input_snapshot = _normalize_optional_json_object(
+                    getattr(role_obj, "input_snapshot", None)
+                )
+                safe_role_output_payload = _normalize_optional_json_object(
+                    getattr(role_obj, "output_payload", None)
+                )
+                safe_role_web_sources = _normalize_json_list(
+                    getattr(role_obj, "web_sources", None)
+                )
+                await create_analysis_agent_run(
+                    session,
+                    session_id=session_id,
+                    report_id=report.id,
+                    role_key=role_obj.role_key,
+                    role_label=role_obj.role_label,
+                    status=role_obj.status,
+                    sort_order=role_obj.sort_order,
+                    summary=getattr(role_obj, "summary", None),
+                    input_snapshot=safe_role_input_snapshot,
+                    output_payload=safe_role_output_payload,
+                    used_web_search=getattr(role_obj, "used_web_search", False),
+                    web_search_status=getattr(role_obj, "web_search_status", "disabled"),
+                    web_sources=safe_role_web_sources,
+                    prompt_version=getattr(role_obj, "prompt_version", None),
+                    model_name=getattr(role_obj, "model_name", None),
+                    reasoning_effort=getattr(role_obj, "reasoning_effort", None),
+                    token_usage_input=getattr(role_obj, "token_usage_input", None),
+                    token_usage_output=getattr(role_obj, "token_usage_output", None),
+                    cost_estimate=getattr(role_obj, "cost_estimate", None),
+                    failure_type=getattr(role_obj, "failure_type", None),
+                    started_at=getattr(role_obj, "started_at", None),
+                    completed_at=getattr(role_obj, "completed_at", None),
+                )
+            session_row.summary_preview = report_summary
             session_row.report_id = report.id
             session_row.status = "completed"
-            session_row.completed_at = report_result.generated_at
-            session_row.prompt_version = report_result.prompt_version
-            session_row.model_name = report_result.model_name or session_row.model_name
+            session_row.completed_at = report_generated_at
+            session_row.prompt_version = report_prompt_version
+            session_row.model_name = report_model_name or session_row.model_name
             session_row.reasoning_effort = (
-                report_result.reasoning_effort or session_row.reasoning_effort
+                report_reasoning_effort or session_row.reasoning_effort
             )
-            session_row.token_usage_input = report_result.token_usage_input
-            session_row.token_usage_output = report_result.token_usage_output
-            session_row.cost_estimate = report_result.cost_estimate
-            session_row.failure_type = report_result.failure_type
+            session_row.token_usage_input = report_token_usage_input
+            session_row.token_usage_output = report_token_usage_output
+            session_row.cost_estimate = report_cost_estimate
+            session_row.failure_type = report_failure_type
+            session_row.analysis_mode = report_analysis_mode
+            session_row.orchestrator_version = report_orchestrator_version
+            session_row.role_count = len(pipeline_roles)
+            session_row.role_completed_count = len(
+                [
+                    item
+                    for item in pipeline_roles
+                    if (
+                        item.get("status") == "completed"
+                        if isinstance(item, dict)
+                        else item.status == "completed"
+                    )
+                ]
+            )
+            session_row.active_role_key = (
+                (
+                    pipeline_roles[-1].get("role_key")
+                    if isinstance(pipeline_roles[-1], dict)
+                    else pipeline_roles[-1].role_key
+                )
+                if pipeline_roles
+                else None
+            )
             session_row.current_stage = "completed"
             session_row.stage_message = "分析已完成"
             session_row.progress_current = total_progress
             session_row.progress_total = total_progress
-            session_row.heartbeat_at = report_result.generated_at
+            session_row.heartbeat_at = report_generated_at
             if analysis_job is not None:
                 await finish_job_run(
                     session,
                     job=analysis_job,
                     status=_map_analysis_report_status_to_job_status(
-                        report_result.status
+                        report_status
                     ),
                     summary="股票分析任务已完成",
                     metrics_json={
                         "event_count": len(event_payloads),
-                        "risk_point_count": len(report_result.risk_points),
-                        "used_web_search": report_result.used_web_search,
-                        "token_usage_input": report_result.token_usage_input,
-                        "token_usage_output": report_result.token_usage_output,
+                        "risk_point_count": len(report_risk_points),
+                        "used_web_search": report_used_web_search,
+                        "token_usage_input": report_token_usage_input,
+                        "token_usage_output": report_token_usage_output,
+                        "analysis_mode": report_analysis_mode,
+                        "role_count": len(pipeline_roles),
+                        "selected_hypothesis": selected_hypothesis,
+                        "decision_confidence": decision_confidence,
                     },
                     linked_entity_type="analysis_generation_session",
                     linked_entity_id=session_row.id,
@@ -1112,9 +1461,9 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 "event=analysis_session_completed session_id=%s report_id=%s report_status=%s event_count=%s used_web_search=%s",
                 session_id,
                 report.id,
-                report_result.status,
+                report_status,
                 len(event_payloads),
-                report_result.used_web_search,
+                report_used_web_search,
             )
             await event_bus.publish(
                 session_id,
@@ -1122,37 +1471,30 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 {
                     "session_id": session_id,
                     "report_id": report.id,
-                    "status": report_result.status,
+                    "status": report_status,
                 },
             )
         except Exception as exc:
-            session_row = await load_analysis_session(session, session_id)
-            if session_row is not None:
-                session_row.status = "failed"
-                session_row.current_stage = "failed"
-                session_row.stage_message = "分析生成失败"
-                session_row.error_message = str(exc)
-                session_row.completed_at = datetime.now(UTC)
-                session_row.heartbeat_at = datetime.now(UTC)
-                session_row.failure_type = type(exc).__name__
-                if analysis_job is None and session_row.system_job_id:
-                    analysis_job = await session.get(
-                        SystemJobRun,
-                        session_row.system_job_id,
-                    )
-                if analysis_job is not None:
-                    await finish_job_run(
-                        session,
-                        job=analysis_job,
-                        status=JOB_STATUS_FAILED,
-                        summary="股票分析任务执行失败",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                        linked_entity_type="analysis_generation_session",
-                        linked_entity_id=session_row.id,
-                    )
-                await session.commit()
-                await clear_cached_active_session_id(analysis_key, session_id)
+            try:
+                await session.rollback()
+            except Exception:
+                _analysis_logger().warning(
+                    "event=analysis_session_rollback_failed session_id=%s message=分析会话回滚失败，准备切换到恢复写入",
+                    session_id,
+                )
+
+            try:
+                await _persist_analysis_session_failure(
+                    session_id=session_id,
+                    analysis_key=analysis_key,
+                    error_message=str(exc),
+                    failure_type=type(exc).__name__,
+                )
+            except Exception:
+                _analysis_logger().exception(
+                    "event=analysis_session_failure_persist_failed session_id=%s message=分析会话失败态回写失败",
+                    session_id,
+                )
             _analysis_logger().exception(
                 "event=analysis_session_failed session_id=%s error_type=%s message=分析会话执行失败",
                 session_id,
