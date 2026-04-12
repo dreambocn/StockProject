@@ -30,3 +30,5 @@ yarn-error.log*
 
 ## Local OpenCode workspace
 .opencode/
+
+.VSCodeCounter/
