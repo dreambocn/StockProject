@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,7 @@ from app.api.deps.auth import (
     get_login_challenge_store,
     get_token_store,
 )
+from app.cache.redis import AuthCacheUnavailableError
 from app.cache.email_verification_store import EmailVerificationStore
 from app.cache.login_challenge_store import LoginChallengeStore
 from app.cache.token_store import TokenStore
@@ -61,6 +62,7 @@ from app.services.email_verification_service import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = get_logger("app.auth")
 settings = get_settings()
+AUTH_SERVICE_UNAVAILABLE_DETAIL = "auth service unavailable"
 
 
 def _resolve_request_client_ip(request: Request) -> str:
@@ -97,6 +99,28 @@ async def _enforce_email_code_ip_risk_control(
         ) from exc
 
 
+def _raise_auth_service_unavailable(exc: Exception) -> NoReturn:
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=AUTH_SERVICE_UNAVAILABLE_DETAIL,
+    ) from exc
+
+
+async def _release_email_code_cooldown_best_effort(
+    scene: str,
+    email: str,
+    email_verification_store: EmailVerificationStore,
+) -> None:
+    try:
+        await email_verification_store.release_send_cooldown(scene, email)
+    except AuthCacheUnavailableError:
+        # 冷却释放失败不覆盖主错误语义，但要留下运行态证据方便排查。
+        logger.warning(
+            "event=auth.email_code_cooldown_release_skipped scene=%s reason=auth_cache_unavailable",
+            scene,
+        )
+
+
 @router.post(
     "/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED
 )
@@ -107,28 +131,35 @@ async def register(
         EmailVerificationStore, Depends(get_email_verification_store)
     ],
 ) -> UserResponse:
-    # 注册安全边界：必须先验证邮箱验证码，再进入用户创建流程。
-    # 这样可以把“邮箱所有权校验”前置，降低恶意批量注册风险。
-    is_email_code_valid = (
-        await email_verification_store.validate_email_verification_code(
-            REGISTER_EMAIL_SCENE,
-            payload.email,
-            payload.email_code.strip(),
-        )
-    )
-    if not is_email_code_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="email verification code invalid",
-        )
-
     try:
+        # 注册安全边界：必须先验证邮箱验证码，再进入用户创建流程。
+        # 这样可以把“邮箱所有权校验”前置，降低恶意批量注册风险。
+        is_email_code_valid = (
+            await email_verification_store.validate_email_verification_code(
+                REGISTER_EMAIL_SCENE,
+                payload.email,
+                payload.email_code.strip(),
+            )
+        )
+        if not is_email_code_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="email verification code invalid",
+            )
+
         user = await register_user(
             session,
             username=payload.username,
             email=payload.email,
             password=payload.password,
         )
+        # 关键状态收敛：注册成功后立即消费验证码，防止同验证码被重复使用。
+        await email_verification_store.consume_email_verification_code(
+            REGISTER_EMAIL_SCENE,
+            payload.email,
+        )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except AuthError as exc:
         logger.warning(
             "event=auth.register.failed username=%s reason=%s",
@@ -137,11 +168,6 @@ async def register(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    # 关键状态收敛：注册成功后立即消费验证码，防止同验证码被重复使用。
-    await email_verification_store.consume_email_verification_code(
-        REGISTER_EMAIL_SCENE,
-        payload.email,
-    )
     logger.info("event=auth.register.success user_id=%s", user.id)
     return UserResponse.model_validate(user)
 
@@ -155,26 +181,26 @@ async def send_register_email_code(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> EmailCodeSendResponse:
-    await _enforce_email_code_ip_risk_control(
-        REGISTER_EMAIL_SCENE,
-        request,
-        email_verification_store,
-    )
-
-    # 先抢占冷却窗口，再发送邮件，避免并发请求绕过前端倒计时而刷接口。
-    is_allowed = await email_verification_store.try_acquire_send_cooldown(
-        REGISTER_EMAIL_SCENE,
-        payload.email,
-        settings.email_code_cooldown_seconds,
-    )
-    if not is_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="email verification code send too frequent",
+    try:
+        await _enforce_email_code_ip_risk_control(
+            REGISTER_EMAIL_SCENE,
+            request,
+            email_verification_store,
         )
 
-    code = generate_email_verification_code(settings.email_code_length)
-    try:
+        # 先抢占冷却窗口，再发送邮件，避免并发请求绕过前端倒计时而刷接口。
+        is_allowed = await email_verification_store.try_acquire_send_cooldown(
+            REGISTER_EMAIL_SCENE,
+            payload.email,
+            settings.email_code_cooldown_seconds,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="email verification code send too frequent",
+            )
+
+        code = generate_email_verification_code(settings.email_code_length)
         await email_sender.send_register_verification_code(
             payload.email,
             code,
@@ -186,11 +212,14 @@ async def send_register_email_code(
             code,
             settings.email_code_ttl_seconds,
         )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except RuntimeError as exc:
         # 失败回滚：邮件发送失败时释放冷却锁，避免用户被错误冷却“锁死”。
-        await email_verification_store.release_send_cooldown(
+        await _release_email_code_cooldown_best_effort(
             REGISTER_EMAIL_SCENE,
             payload.email,
+            email_verification_store,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -215,68 +244,73 @@ async def login(
     ],
 ) -> TokenPairResponse:
     client_ip = request.client.host if request.client else "unknown"
-    # 失败计数绑定账号 + IP，降低撞库时跨 IP 复用失败次数的问题。
-    identity_key = build_login_identity_key(payload.account, client_ip)
-    failed_login_count = await login_challenge_store.get_failed_login_count(
-        identity_key
-    )
-
-    # 风控分支：失败次数达到阈值后，必须先通过验证码，防止撞库持续尝试。
-    if failed_login_count >= settings.login_captcha_threshold:
-        if not payload.captcha_id or not payload.captcha_code:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={
-                    "message": "captcha required",
-                    "captcha_required": True,
-                    "captcha_reason": "captcha_missing",
-                },
-            )
-
-        is_captcha_valid = await login_challenge_store.validate_captcha_challenge(
-            payload.captcha_id,
-            payload.captcha_code.strip().upper(),
-        )
-        if not is_captcha_valid:
-            # 验证码错误仍返回 401，前端可继续提示输入验证码。
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={
-                    "message": "captcha invalid",
-                    "captcha_required": True,
-                    "captcha_reason": "captcha_invalid",
-                },
-            )
-
     try:
-        user = await authenticate_user(session, payload.account, payload.password)
-        tokens = await issue_token_pair(user, token_store)
-    except AuthError as exc:
-        # 鉴权失败时累计失败次数；达到阈值后，响应中显式通知前端拉起验证码流程。
-        current_count = await login_challenge_store.record_failed_login(
-            identity_key,
-            settings.login_fail_window_seconds,
+        # 失败计数绑定账号 + IP，降低撞库时跨 IP 复用失败次数的问题。
+        identity_key = build_login_identity_key(payload.account, client_ip)
+        failed_login_count = await login_challenge_store.get_failed_login_count(
+            identity_key
         )
-        logger.warning(
-            "event=auth.login.failed account=%s reason=%s", payload.account, exc.detail
-        )
-        if current_count >= settings.login_captcha_threshold:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail={
-                    "message": exc.detail,
-                    "captcha_required": True,
-                    "captcha_reason": "threshold_reached",
-                },
-            ) from exc
 
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        # 风控分支：失败次数达到阈值后，必须先通过验证码，防止撞库持续尝试。
+        if failed_login_count >= settings.login_captcha_threshold:
+            if not payload.captcha_id or not payload.captcha_code:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={
+                        "message": "captcha required",
+                        "captcha_required": True,
+                        "captcha_reason": "captcha_missing",
+                    },
+                )
 
-    # 成功登录后清理风控状态，避免后续正常登录被历史失败次数误伤。
-    await login_challenge_store.reset_failed_login_count(identity_key)
-    if payload.captcha_id:
-        # 成功登录后撤销验证码挑战，避免旧 challenge 被重放。
-        await login_challenge_store.revoke_captcha_challenge(payload.captcha_id)
+            is_captcha_valid = await login_challenge_store.validate_captcha_challenge(
+                payload.captcha_id,
+                payload.captcha_code.strip().upper(),
+            )
+            if not is_captcha_valid:
+                # 验证码错误仍返回 401，前端可继续提示输入验证码。
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={
+                        "message": "captcha invalid",
+                        "captcha_required": True,
+                        "captcha_reason": "captcha_invalid",
+                    },
+                )
+
+        try:
+            user = await authenticate_user(session, payload.account, payload.password)
+            tokens = await issue_token_pair(user, token_store)
+        except AuthError as exc:
+            # 鉴权失败时累计失败次数；达到阈值后，响应中显式通知前端拉起验证码流程。
+            current_count = await login_challenge_store.record_failed_login(
+                identity_key,
+                settings.login_fail_window_seconds,
+            )
+            logger.warning(
+                "event=auth.login.failed account=%s reason=%s",
+                payload.account,
+                exc.detail,
+            )
+            if current_count >= settings.login_captcha_threshold:
+                raise HTTPException(
+                    status_code=exc.status_code,
+                    detail={
+                        "message": exc.detail,
+                        "captcha_required": True,
+                        "captcha_reason": "threshold_reached",
+                    },
+                ) from exc
+
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+        # 成功登录后清理风控状态，避免后续正常登录被历史失败次数误伤。
+        await login_challenge_store.reset_failed_login_count(identity_key)
+        if payload.captcha_id:
+            # 成功登录后撤销验证码挑战，避免旧 challenge 被重放。
+            await login_challenge_store.revoke_captcha_challenge(payload.captcha_id)
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
 
     logger.info("event=auth.login.success user_id=%s", user.id)
     return TokenPairResponse(**tokens)
@@ -288,14 +322,18 @@ async def get_captcha_challenge(
         LoginChallengeStore, Depends(get_login_challenge_store)
     ],
 ) -> CaptchaChallengeResponse:
-    # 验证码答案仅存储在服务端缓存，前端只拿图片与挑战 ID。
-    # 这样可以避免把答案或可逆信息暴露给客户端。
-    challenge = generate_captcha_challenge(settings.captcha_length)
-    await login_challenge_store.set_captcha_challenge(
-        challenge.captcha_id,
-        challenge.answer,
-        settings.captcha_ttl_seconds,
-    )
+    try:
+        # 验证码答案仅存储在服务端缓存，前端只拿图片与挑战 ID。
+        # 这样可以避免把答案或可逆信息暴露给客户端。
+        challenge = generate_captcha_challenge(settings.captcha_length)
+        await login_challenge_store.set_captcha_challenge(
+            challenge.captcha_id,
+            challenge.answer,
+            settings.captcha_ttl_seconds,
+        )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
+
     return CaptchaChallengeResponse(
         captcha_id=challenge.captcha_id,
         image_base64=challenge.image_base64,
@@ -311,6 +349,8 @@ async def refresh(
     try:
         # 刷新只接受 refresh token，并在服务层完成旋转与撤销。
         tokens = await refresh_token_pair(payload.refresh_token, token_store)
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except AuthError as exc:
         logger.warning("event=auth.refresh.failed reason=%s", exc.detail)
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
@@ -330,21 +370,21 @@ async def update_password(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> MessageResponse:
-    # 已登录改密仍要求邮箱验证码，形成“登录态 + 当前密码 + 邮箱所有权”三重校验。
-    is_email_code_valid = (
-        await email_verification_store.validate_email_verification_code(
-            CHANGE_PASSWORD_EMAIL_SCENE,
-            current_user.email,
-            payload.email_code.strip(),
-        )
-    )
-    if not is_email_code_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="email verification code invalid",
-        )
-
     try:
+        # 已登录改密仍要求邮箱验证码，形成“登录态 + 当前密码 + 邮箱所有权”三重校验。
+        is_email_code_valid = (
+            await email_verification_store.validate_email_verification_code(
+                CHANGE_PASSWORD_EMAIL_SCENE,
+                current_user.email,
+                payload.email_code.strip(),
+            )
+        )
+        if not is_email_code_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="email verification code invalid",
+            )
+
         await change_password(
             session,
             user_id=current_user.id,
@@ -352,6 +392,13 @@ async def update_password(
             new_password=payload.new_password,
             token_store=token_store,
         )
+        # 改密成功后消费验证码，阻断验证码重放。
+        await email_verification_store.consume_email_verification_code(
+            CHANGE_PASSWORD_EMAIL_SCENE,
+            current_user.email,
+        )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except AuthError as exc:
         logger.warning(
             "event=auth.password_change.failed user_id=%s reason=%s",
@@ -360,11 +407,6 @@ async def update_password(
         )
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    # 改密成功后消费验证码，阻断验证码重放。
-    await email_verification_store.consume_email_verification_code(
-        CHANGE_PASSWORD_EMAIL_SCENE,
-        current_user.email,
-    )
     try:
         await email_sender.send_password_changed_notice(current_user.email)
     except RuntimeError:
@@ -387,26 +429,26 @@ async def send_change_password_email_code(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> EmailCodeSendResponse:
-    await _enforce_email_code_ip_risk_control(
-        CHANGE_PASSWORD_EMAIL_SCENE,
-        request,
-        email_verification_store,
-    )
-
-    # 改密验证码同样受冷却限制，防止恶意频繁触发邮件。
-    is_allowed = await email_verification_store.try_acquire_send_cooldown(
-        CHANGE_PASSWORD_EMAIL_SCENE,
-        current_user.email,
-        settings.email_code_cooldown_seconds,
-    )
-    if not is_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="email verification code send too frequent",
+    try:
+        await _enforce_email_code_ip_risk_control(
+            CHANGE_PASSWORD_EMAIL_SCENE,
+            request,
+            email_verification_store,
         )
 
-    code = generate_email_verification_code(settings.email_code_length)
-    try:
+        # 改密验证码同样受冷却限制，防止恶意频繁触发邮件。
+        is_allowed = await email_verification_store.try_acquire_send_cooldown(
+            CHANGE_PASSWORD_EMAIL_SCENE,
+            current_user.email,
+            settings.email_code_cooldown_seconds,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="email verification code send too frequent",
+            )
+
+        code = generate_email_verification_code(settings.email_code_length)
         await email_sender.send_change_password_verification_code(
             current_user.email,
             code,
@@ -418,11 +460,14 @@ async def send_change_password_email_code(
             code,
             settings.email_code_ttl_seconds,
         )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except RuntimeError as exc:
         # 发送失败回滚冷却，避免用户必须等待冷却后才能重试。
-        await email_verification_store.release_send_cooldown(
+        await _release_email_code_cooldown_best_effort(
             CHANGE_PASSWORD_EMAIL_SCENE,
             current_user.email,
+            email_verification_store,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -446,35 +491,35 @@ async def send_reset_password_email_code(
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> EmailCodeSendResponse:
-    await _enforce_email_code_ip_risk_control(
-        RESET_PASSWORD_EMAIL_SCENE,
-        request,
-        email_verification_store,
-    )
-
-    # 忘记密码场景也要做发送冷却，避免接口被刷。
-    is_allowed = await email_verification_store.try_acquire_send_cooldown(
-        RESET_PASSWORD_EMAIL_SCENE,
-        payload.email,
-        settings.email_code_cooldown_seconds,
-    )
-    if not is_allowed:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="email verification code send too frequent",
-        )
-
-    user = await get_user_by_email(session, payload.email)
-    if user is None:
-        # 防枚举策略：邮箱不存在时返回与成功一致的响应，不暴露账号存在性。
-        return EmailCodeSendResponse(
-            message="email code sent",
-            expires_in=settings.email_code_ttl_seconds,
-            cooldown_in=settings.email_code_cooldown_seconds,
-        )
-
-    code = generate_email_verification_code(settings.email_code_length)
     try:
+        await _enforce_email_code_ip_risk_control(
+            RESET_PASSWORD_EMAIL_SCENE,
+            request,
+            email_verification_store,
+        )
+
+        # 忘记密码场景也要做发送冷却，避免接口被刷。
+        is_allowed = await email_verification_store.try_acquire_send_cooldown(
+            RESET_PASSWORD_EMAIL_SCENE,
+            payload.email,
+            settings.email_code_cooldown_seconds,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="email verification code send too frequent",
+            )
+
+        user = await get_user_by_email(session, payload.email)
+        if user is None:
+            # 防枚举策略：邮箱不存在时返回与成功一致的响应，不暴露账号存在性。
+            return EmailCodeSendResponse(
+                message="email code sent",
+                expires_in=settings.email_code_ttl_seconds,
+                cooldown_in=settings.email_code_cooldown_seconds,
+            )
+
+        code = generate_email_verification_code(settings.email_code_length)
         await email_sender.send_reset_password_verification_code(
             payload.email,
             code,
@@ -486,11 +531,14 @@ async def send_reset_password_email_code(
             code,
             settings.email_code_ttl_seconds,
         )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except RuntimeError as exc:
         # 发送失败时释放冷却，保障用户可立即重试。
-        await email_verification_store.release_send_cooldown(
+        await _release_email_code_cooldown_best_effort(
             RESET_PASSWORD_EMAIL_SCENE,
             payload.email,
+            email_verification_store,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -514,35 +562,38 @@ async def reset_password(
     ],
     email_sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> MessageResponse:
-    # 未登录重置密码的安全边界：必须通过邮箱验证码校验。
-    is_email_code_valid = (
-        await email_verification_store.validate_email_verification_code(
-            RESET_PASSWORD_EMAIL_SCENE,
-            payload.email,
-            payload.email_code.strip(),
-        )
-    )
-    if not is_email_code_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="email verification code invalid",
-        )
-
     try:
+        # 未登录重置密码的安全边界：必须通过邮箱验证码校验。
+        is_email_code_valid = (
+            await email_verification_store.validate_email_verification_code(
+                RESET_PASSWORD_EMAIL_SCENE,
+                payload.email,
+                payload.email_code.strip(),
+            )
+        )
+        if not is_email_code_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="email verification code invalid",
+            )
+
         await reset_password_by_email(
             session,
             payload.email,
             payload.new_password,
             token_store=token_store,
         )
+
+        # 重置成功后消费验证码，防止同验证码重复改密。
+        await email_verification_store.consume_email_verification_code(
+            RESET_PASSWORD_EMAIL_SCENE,
+            payload.email,
+        )
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    # 重置成功后消费验证码，防止同验证码重复改密。
-    await email_verification_store.consume_email_verification_code(
-        RESET_PASSWORD_EMAIL_SCENE,
-        payload.email,
-    )
     try:
         await email_sender.send_password_changed_notice(payload.email)
     except RuntimeError:
@@ -564,6 +615,8 @@ async def do_logout(
     try:
         # 登出仅撤销 refresh token；access token 自然过期。
         await logout(payload.refresh_token, token_store)
+    except AuthCacheUnavailableError as exc:
+        _raise_auth_service_unavailable(exc)
     except AuthError as exc:
         logger.warning("event=auth.logout.failed reason=%s", exc.detail)
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

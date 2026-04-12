@@ -1,6 +1,13 @@
 import asyncio
 
-from app.cache.redis import RedisEmailVerificationStore, RedisLoginChallengeStore
+from redis.exceptions import ConnectionError as RedisConnectionError
+
+from app.cache.redis import (
+    AuthCacheUnavailableError,
+    RedisEmailVerificationStore,
+    RedisLoginChallengeStore,
+    RedisTokenStore,
+)
 
 
 class FakeRedis:
@@ -34,6 +41,67 @@ class FakeRedisWithNx(FakeRedis):
         self.values[key] = value
         self.expire_calls.append((key, ex))
         return True
+
+
+class BrokenPipeline:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def set(self, *args, **kwargs):
+        _ = args, kwargs
+        return self
+
+    def sadd(self, *args, **kwargs):
+        _ = args, kwargs
+        return self
+
+    def delete(self, *args, **kwargs):
+        _ = args, kwargs
+        return self
+
+    def srem(self, *args, **kwargs):
+        _ = args, kwargs
+        return self
+
+    async def execute(self):
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+
+class BrokenRedis:
+    async def incr(self, key: str) -> int:
+        _ = key
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    async def expire(self, key: str, seconds: int) -> None:
+        _ = key, seconds
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    async def get(self, key: str):
+        _ = key
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    async def delete(self, *keys: str) -> None:
+        _ = keys
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    async def set(self, *args, **kwargs):
+        _ = args, kwargs
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    async def exists(self, key: str) -> int:
+        _ = key
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    async def smembers(self, key: str):
+        _ = key
+        raise RedisConnectionError("redis://secret@dangerous-host:6379/0")
+
+    def pipeline(self, transaction: bool = True):
+        _ = transaction
+        return BrokenPipeline()
 
 
 def test_record_failed_login_and_reset() -> None:
@@ -113,5 +181,50 @@ def test_email_verification_store_code_and_cooldown() -> None:
             await store.try_acquire_send_cooldown("register", "a@example.com", 60)
             is True
         )
+
+    asyncio.run(run_test())
+
+
+def test_login_challenge_store_wraps_redis_errors() -> None:
+    async def run_test() -> None:
+        store = RedisLoginChallengeStore(BrokenRedis())  # type: ignore[arg-type]
+
+        with pytest.raises(AuthCacheUnavailableError) as exc_info:
+            await store.get_failed_login_count("user-ip")
+
+        assert str(exc_info.value) == "auth service unavailable"
+        assert "dangerous-host" not in str(exc_info.value)
+
+    import pytest
+
+    asyncio.run(run_test())
+
+
+def test_email_verification_store_wraps_redis_errors() -> None:
+    async def run_test() -> None:
+        store = RedisEmailVerificationStore(BrokenRedis())  # type: ignore[arg-type]
+
+        with pytest.raises(AuthCacheUnavailableError) as exc_info:
+            await store.try_acquire_send_cooldown("register", "a@example.com", 60)
+
+        assert str(exc_info.value) == "auth service unavailable"
+        assert "dangerous-host" not in str(exc_info.value)
+
+    import pytest
+
+    asyncio.run(run_test())
+
+
+def test_token_store_wraps_redis_errors() -> None:
+    async def run_test() -> None:
+        store = RedisTokenStore(BrokenRedis())  # type: ignore[arg-type]
+
+        with pytest.raises(AuthCacheUnavailableError) as exc_info:
+            await store.set_refresh_token("jti-1", "user-1", 300)
+
+        assert str(exc_info.value) == "auth service unavailable"
+        assert "dangerous-host" not in str(exc_info.value)
+
+    import pytest
 
     asyncio.run(run_test())

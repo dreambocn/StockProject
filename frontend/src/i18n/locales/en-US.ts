@@ -473,6 +473,7 @@ export default {
     emailCodeInvalid: 'Email verification code is invalid or expired',
     emailCodeTooFrequent: 'Verification code sent too frequently, please try later',
     emailServiceUnavailable: 'Email service is unavailable, please try later',
+    authServiceUnavailable: 'Authentication service is unavailable, please try later',
     insufficientPermissions: 'Insufficient permissions to access admin console',
     passwordPolicy:
       'Password must be at least 8 characters and include uppercase, lowercase, number, and special character',

@@ -10,6 +10,7 @@ const messages: Record<string, string> = {
   'errors.emailCodeInvalid': '邮箱验证码错误或已过期',
   'errors.emailCodeTooFrequent': '验证码发送过于频繁，请稍后重试',
   'errors.emailServiceUnavailable': '邮件服务暂不可用，请稍后重试',
+  'errors.authServiceUnavailable': '认证服务暂不可用，请稍后重试',
   'errors.validation.required': '{field}为必填项',
   'errors.validation.tooShort': '{field}至少 {min} 位',
   'errors.validation.tooLong': '{field}最多 {max} 位',
@@ -46,10 +47,14 @@ describe('mapApiErrorMessage', () => {
     const serviceUnavailableError = new ApiError('email service unavailable', 503, {
       detail: 'email service unavailable',
     })
+    const authServiceUnavailableError = new ApiError('auth service unavailable', 503, {
+      detail: 'auth service unavailable',
+    })
 
     expect(mapApiErrorMessage(invalidCodeError, t, 'errors.fallback')).toBe('邮箱验证码错误或已过期')
     expect(mapApiErrorMessage(tooFrequentError, t, 'errors.fallback')).toBe('验证码发送过于频繁，请稍后重试')
     expect(mapApiErrorMessage(serviceUnavailableError, t, 'errors.fallback')).toBe('邮件服务暂不可用，请稍后重试')
+    expect(mapApiErrorMessage(authServiceUnavailableError, t, 'errors.fallback')).toBe('认证服务暂不可用，请稍后重试')
   })
 
   it('uses detail.message when backend returns detail object', () => {

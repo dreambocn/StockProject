@@ -471,6 +471,7 @@ export default {
     emailCodeInvalid: '邮箱验证码错误或已过期',
     emailCodeTooFrequent: '验证码发送过于频繁，请稍后重试',
     emailServiceUnavailable: '邮件服务暂不可用，请稍后重试',
+    authServiceUnavailable: '认证服务暂不可用，请稍后重试',
     insufficientPermissions: '权限不足，无法访问后台管理',
     passwordPolicy: '密码至少 8 位，且必须包含大写字母、小写字母、数字和特殊字符',
     fallback: '请求失败，请稍后重试',

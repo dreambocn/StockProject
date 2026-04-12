@@ -11,6 +11,7 @@ from app.api.deps.auth import (
     get_login_challenge_store,
     get_token_store,
 )
+from app.cache.redis import AuthCacheUnavailableError
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
@@ -165,6 +166,97 @@ class InMemoryEmailSender:
 
     async def send_password_changed_notice(self, email: str) -> None:
         self.sent_notices.append(email)
+
+
+class BrokenLoginChallengeStore:
+    async def record_failed_login(self, identity_key: str, window_seconds: int) -> int:
+        _ = identity_key, window_seconds
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def get_failed_login_count(self, identity_key: str) -> int:
+        _ = identity_key
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def reset_failed_login_count(self, identity_key: str) -> None:
+        _ = identity_key
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def set_captcha_challenge(
+        self, captcha_id: str, answer: str, expires_seconds: int
+    ) -> None:
+        _ = captcha_id, answer, expires_seconds
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def validate_captcha_challenge(self, captcha_id: str, answer: str) -> bool:
+        _ = captcha_id, answer
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def revoke_captcha_challenge(self, captcha_id: str) -> None:
+        _ = captcha_id
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+
+class BrokenTokenStore:
+    async def set_refresh_token(
+        self, jti: str, user_id: str, expires_seconds: int
+    ) -> None:
+        _ = jti, user_id, expires_seconds
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def validate_refresh_token(self, jti: str, user_id: str) -> bool:
+        _ = jti, user_id
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def revoke_refresh_token(self, jti: str) -> None:
+        _ = jti
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def revoke_all_refresh_tokens_for_user(self, user_id: str) -> None:
+        _ = user_id
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+
+class BrokenEmailVerificationStore:
+    async def try_acquire_send_cooldown(
+        self, scene: str, email: str, cooldown_seconds: int
+    ) -> bool:
+        _ = scene, email, cooldown_seconds
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def release_send_cooldown(self, scene: str, email: str) -> None:
+        _ = scene, email
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def set_email_verification_code(
+        self, scene: str, email: str, code: str, expires_seconds: int
+    ) -> None:
+        _ = scene, email, code, expires_seconds
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def validate_email_verification_code(
+        self, scene: str, email: str, code: str
+    ) -> bool:
+        _ = scene, email, code
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def consume_email_verification_code(self, scene: str, email: str) -> None:
+        _ = scene, email
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def is_ip_blocked(self, ip: str) -> bool:
+        _ = ip
+        raise AuthCacheUnavailableError("auth service unavailable")
+
+    async def check_and_increment_ip_limits(
+        self,
+        scene: str,
+        ip: str,
+        minute_limit: int,
+        day_limit: int,
+        block_seconds: int,
+    ) -> bool:
+        _ = scene, ip, minute_limit, day_limit, block_seconds
+        raise AuthCacheUnavailableError("auth service unavailable")
 
 
 @pytest.fixture
@@ -338,6 +430,56 @@ def test_login_supports_username_or_email(auth_client: TestClient) -> None:
     assert login_by_email_response.status_code == 200
 
 
+def test_login_returns_503_when_login_challenge_store_unavailable(
+    auth_client: TestClient,
+) -> None:
+    original_override = app.dependency_overrides[get_login_challenge_store]
+    app.dependency_overrides[get_login_challenge_store] = lambda: BrokenLoginChallengeStore()
+    try:
+        response = auth_client.post(
+            "/api/auth/login",
+            json={"account": "alice", "password": "Passw0rd!123"},
+        )
+    finally:
+        app.dependency_overrides[get_login_challenge_store] = original_override
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "auth service unavailable"
+
+
+def test_login_returns_503_when_token_store_unavailable_after_authentication(
+    auth_client: TestClient,
+) -> None:
+    send_code_response = auth_client.post(
+        "/api/auth/register/email-code",
+        json={"email": "redis-login@example.com"},
+    )
+    assert send_code_response.status_code == 200
+    register_response = auth_client.post(
+        "/api/auth/register",
+        json={
+            "username": "redis-login",
+            "email": "redis-login@example.com",
+            "email_code": "000000",
+            "password": "Passw0rd!123",
+        },
+    )
+    assert register_response.status_code == 201
+
+    original_override = app.dependency_overrides[get_token_store]
+    app.dependency_overrides[get_token_store] = lambda: BrokenTokenStore()
+    try:
+        response = auth_client.post(
+            "/api/auth/login",
+            json={"account": "redis-login", "password": "Passw0rd!123"},
+        )
+    finally:
+        app.dependency_overrides[get_token_store] = original_override
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "auth service unavailable"
+
+
 def test_register_rejects_weak_password(auth_client: TestClient) -> None:
     send_code_response = auth_client.post(
         "/api/auth/register/email-code",
@@ -451,6 +593,20 @@ def test_get_captcha_challenge_returns_image_and_id(auth_client: TestClient) -> 
     assert payload["captcha_id"]
     assert payload["image_base64"]
     assert payload["expires_in"] > 0
+
+
+def test_get_captcha_challenge_returns_503_when_store_unavailable(
+    auth_client: TestClient,
+) -> None:
+    original_override = app.dependency_overrides[get_login_challenge_store]
+    app.dependency_overrides[get_login_challenge_store] = lambda: BrokenLoginChallengeStore()
+    try:
+        response = auth_client.get("/api/auth/captcha")
+    finally:
+        app.dependency_overrides[get_login_challenge_store] = original_override
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "auth service unavailable"
 
 
 def test_login_rejects_missing_or_invalid_captcha_after_threshold(
@@ -643,6 +799,23 @@ def test_email_code_send_endpoint_has_cooldown(auth_client: TestClient) -> None:
     assert second_send_response.status_code == 429
 
 
+def test_register_email_code_returns_503_when_store_unavailable(
+    auth_client: TestClient,
+) -> None:
+    original_override = app.dependency_overrides[get_email_verification_store]
+    app.dependency_overrides[get_email_verification_store] = lambda: BrokenEmailVerificationStore()
+    try:
+        response = auth_client.post(
+            "/api/auth/register/email-code",
+            json={"email": "cache-down@example.com"},
+        )
+    finally:
+        app.dependency_overrides[get_email_verification_store] = original_override
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "auth service unavailable"
+
+
 def test_reset_password_flow_with_email_code(auth_client: TestClient) -> None:
     send_register_code_response = auth_client.post(
         "/api/auth/register/email-code",
@@ -701,6 +874,51 @@ def test_reset_password_flow_with_email_code(auth_client: TestClient) -> None:
         json={"account": "kate", "password": "N3wPass!456"},
     )
     assert new_login_response.status_code == 200
+
+
+def test_refresh_and_logout_return_503_when_token_store_unavailable(
+    auth_client: TestClient,
+) -> None:
+    send_code_response = auth_client.post(
+        "/api/auth/register/email-code",
+        json={"email": "redis-refresh@example.com"},
+    )
+    assert send_code_response.status_code == 200
+    register_response = auth_client.post(
+        "/api/auth/register",
+        json={
+            "username": "redis-refresh",
+            "email": "redis-refresh@example.com",
+            "email_code": "000000",
+            "password": "Passw0rd!123",
+        },
+    )
+    assert register_response.status_code == 201
+    login_response = auth_client.post(
+        "/api/auth/login",
+        json={"account": "redis-refresh", "password": "Passw0rd!123"},
+    )
+    assert login_response.status_code == 200
+    refresh_token = login_response.json()["refresh_token"]
+
+    original_override = app.dependency_overrides[get_token_store]
+    app.dependency_overrides[get_token_store] = lambda: BrokenTokenStore()
+    try:
+        refresh_response = auth_client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        logout_response = auth_client.post(
+            "/api/auth/logout",
+            json={"refresh_token": refresh_token},
+        )
+    finally:
+        app.dependency_overrides[get_token_store] = original_override
+
+    assert refresh_response.status_code == 503
+    assert refresh_response.json()["detail"] == "auth service unavailable"
+    assert logout_response.status_code == 503
+    assert logout_response.json()["detail"] == "auth service unavailable"
 
 
 def test_register_email_code_ip_rate_limit_blocks_after_threshold(
