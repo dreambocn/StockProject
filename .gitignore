@@ -40,3 +40,7 @@ docs/*.docx
 .opencode/
 
 .VSCodeCounter/
+
+
+./PROGRESS.md
+./AGENTS.md
