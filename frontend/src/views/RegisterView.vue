@@ -178,7 +178,7 @@ const submitRegister = async () => {
 
 .auth-panel {
   border: 1px solid var(--terminal-border);
-  background: linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(11, 18, 32, 0.96));
+  background: var(--terminal-card-bg);
   border-radius: 16px;
   padding: 1.3rem;
   box-shadow: var(--terminal-shadow);
@@ -230,7 +230,7 @@ h1 {
 }
 
 .code-btn:hover {
-  color: #fff;
+  color: var(--terminal-panel);
   background: color-mix(in srgb, var(--terminal-primary) 34%, transparent);
   box-shadow: none;
 }
@@ -276,7 +276,7 @@ h1 {
   border-right: 1px solid var(--terminal-border);
   border-bottom: 1px solid var(--terminal-border);
   border-left-color: var(--terminal-border);
-  background: color-mix(in srgb, var(--terminal-surface, #10172a) 82%, #0e1728);
+  background: color-mix(in srgb, var(--terminal-panel) 85%, var(--terminal-surface) 15%);
   box-shadow: none;
   overflow: hidden;
 }

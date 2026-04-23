@@ -284,9 +284,7 @@ onMounted(async () => {
 .job-row {
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
-  background:
-    radial-gradient(circle at top right, rgba(123, 197, 255, 0.14), transparent 42%),
-    linear-gradient(145deg, rgba(20, 32, 54, 0.96), rgba(9, 17, 31, 0.98));
+  background: var(--terminal-card-elevated-bg);
 }
 
 .jobs-header,
@@ -356,10 +354,10 @@ onMounted(async () => {
 .filter-item select {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid rgba(123, 197, 255, 0.18);
+  border: 1px solid color-mix(in srgb, var(--terminal-primary) 18%, var(--terminal-border));
   border-radius: 10px;
   padding: 0.6rem 0.7rem;
-  background: rgba(8, 14, 25, 0.72);
+  background: var(--terminal-input-bg);
   color: var(--terminal-text);
 }
 
@@ -379,9 +377,7 @@ onMounted(async () => {
 .jobs-detail-card {
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
-  background:
-    linear-gradient(165deg, rgba(15, 23, 38, 0.98), rgba(9, 14, 24, 0.98)),
-    rgba(8, 14, 25, 0.95);
+  background: var(--terminal-card-strong-bg);
 }
 
 .jobs-list-header {
@@ -470,9 +466,9 @@ onMounted(async () => {
 .job-detail__block pre {
   padding: 0.75rem;
   border-radius: 12px;
-  background: rgba(8, 14, 25, 0.78);
+  background: var(--terminal-code-bg);
   border: 1px solid rgba(123, 197, 255, 0.1);
-  color: #d9e8f7;
+  color: var(--terminal-code-text);
 }
 
 @media (max-width: 960px) {

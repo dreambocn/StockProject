@@ -15,6 +15,7 @@ import { i18n, setAppLocale } from '../i18n'
 import { analysisApi, type StockAnalysisSummaryResponse } from '../api/analysis'
 import { watchlistApi } from '../api/watchlist'
 import { useAuthStore } from '../stores/auth'
+import { setAppTheme } from '../theme'
 
 const createRouterWithQuery = () =>
   createRouter({
@@ -22,6 +23,7 @@ const createRouterWithQuery = () =>
     routes: [
       { path: '/', component: { template: '<div>home</div>' } },
       { path: '/news/hot', component: { template: '<div>hot</div>' } },
+      { path: '/watchlist', component: { template: '<div>watchlist</div>' } },
       { path: '/stocks/:tsCode', component: { template: '<div>stock detail</div>' } },
       { path: '/analysis', component: AnalysisWorkbenchView },
     ],
@@ -193,9 +195,9 @@ describe('AnalysisWorkbenchView', () => {
     const { wrapper } = await mountWorkbench(router)
 
     expect(spy).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('请输入 TS Code')
+    expect(wrapper.text()).toContain('请从关注、热点候选或个股详情进入分析工作台')
+    expect(wrapper.text()).toContain('去关注')
     expect(wrapper.text()).toContain('去热点新闻')
-    expect(wrapper.text()).toContain('返回首页')
 
     const hotNewsButton = wrapper
       .findAll('button')
@@ -204,6 +206,18 @@ describe('AnalysisWorkbenchView', () => {
     await hotNewsButton!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/news/hot')
+
+    await router.push({ path: '/analysis' })
+    await router.isReady()
+    await flushPromises()
+
+    const watchlistButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('去关注'))
+    expect(watchlistButton).toBeDefined()
+    await watchlistButton!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/watchlist')
   })
 
   it('renders translated overview, factor ranking and event filters for professional analysis', async () => {
@@ -402,6 +416,272 @@ describe('AnalysisWorkbenchView', () => {
     expect(router.currentRoute.value.query.topic).toBe('regulation_policy')
     expect(router.currentRoute.value.query.event_id).toBe('evt-policy')
     expect(router.currentRoute.value.query.event_title).toBe('监管政策优化白酒消费环境')
+  })
+
+  it('shows watchlist source context and routes back to watchlist for watchlist entries', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', source: 'watchlist' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 关注分析摘要'),
+    )
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.text()).toContain('来源: 关注列表')
+    expect(wrapper.text()).toContain('返回关注')
+    expect(wrapper.text()).not.toContain('来源: 直接访问')
+
+    const backButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('返回关注'))
+    expect(backButton).toBeDefined()
+    await backButton!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/watchlist')
+  })
+
+  it('renders research header, decision deck and evidence workspace as separate regions', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', source: 'stock_detail' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ...createMinimalSummary('600519.SH', '## 决策摘要'),
+      report: {
+        ...createMinimalSummary('600519.SH', '## 决策摘要').report!,
+        selected_hypothesis: 'neutral_hypothesis',
+        decision_confidence: 'medium',
+        decision_reason_summary: '当前以观察为主。',
+        factor_breakdown: [
+          {
+            factor_key: 'policy',
+            factor_label: '政策',
+            weight: 0.42,
+            direction: 'positive',
+            evidence: ['政策边际改善'],
+            reason: '政策改善带来风险偏好修复',
+          },
+        ],
+        risk_points: ['行业修复节奏仍需确认'],
+      },
+    } as unknown as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.find('[data-testid="analysis-research-header"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analysis-decision-deck"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analysis-evidence-workspace"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('采纳假设')
+    expect(wrapper.text()).toContain('裁决置信度')
+    expect(wrapper.text()).toContain('行业修复节奏仍需确认')
+  })
+
+  it('hides history section when only the current report exists', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 当前解读'),
+    )
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [createMinimalSummary('600519.SH', '## 当前解读').report!],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.find('[data-testid="analysis-history-section"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="analysis-secondary-column"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('历史报告')
+  })
+
+  it('moves history section below the main reading area when multiple reports exist', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 当前解读'),
+    )
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [
+        createMinimalSummary('600519.SH', '## 当前解读').report!,
+        {
+          ...createMinimalSummary('600519.SH', '## 历史解读').report!,
+          id: 'report-history',
+          generated_at: '2026-03-22T08:00:00Z',
+        },
+      ],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const summaryPanel = wrapper.get('[data-testid="analysis-summary-panel"]')
+    const spotlightRow = wrapper.get('[data-testid="analysis-spotlight-row"]')
+    const workspace = wrapper.get('[data-testid="analysis-evidence-workspace"]')
+    const historySection = wrapper.get('[data-testid="analysis-history-section"]')
+
+    expect(wrapper.find('[data-testid="analysis-secondary-column"]').exists()).toBe(false)
+    expect(historySection.text()).toContain('历史报告')
+    expect(spotlightRow.find('[data-testid="analysis-factor-spotlight"]').exists()).toBe(true)
+    expect(spotlightRow.find('[data-testid="analysis-risk-spotlight"]').exists()).toBe(true)
+    expect(summaryPanel.element.compareDocumentPosition(spotlightRow.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(workspace.element.compareDocumentPosition(historySection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps primary controls and lower workspace readable in light theme', async () => {
+    setAppLocale('zh-CN')
+    setAppTheme('light')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', source: 'stock_detail' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-04-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 2,
+      events: [
+        {
+          event_id: 'evt-1',
+          scope: 'hot',
+          title: '事件一',
+          published_at: '2026-04-23T08:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.4,
+          anchor_trade_date: '2026-04-23',
+          window_return_pct: 1.1,
+          window_volatility: 0.7,
+          abnormal_volume_ratio: 1.3,
+          correlation_score: 0.88,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-2',
+          scope: 'policy',
+          title: '事件二',
+          published_at: '2026-04-23T07:30:00Z',
+          source: 'policy_document',
+          macro_topic: 'regulation_policy',
+          event_type: 'policy',
+          event_tags: ['政策'],
+          sentiment_label: 'neutral',
+          sentiment_score: 0.1,
+          anchor_trade_date: '2026-04-23',
+          window_return_pct: 0.8,
+          window_volatility: 0.5,
+          abnormal_volume_ratio: 1.1,
+          correlation_score: 0.76,
+          confidence: 'medium',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        id: 'report-light-theme',
+        status: 'ready',
+        summary: '## 白天主题摘要',
+        risk_points: ['关注兑现节奏'],
+        factor_breakdown: [
+          {
+            factor_key: 'policy',
+            factor_label: '政策',
+            weight: 0.48,
+            direction: 'positive',
+            evidence: ['政策边际改善'],
+            reason: '政策改善带来风险偏好修复',
+          },
+        ],
+        generated_at: '2026-04-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+        structured_sources: [{ provider: 'policy_document', count: 1 }],
+        web_sources: [
+          {
+            title: '政策解读链接',
+            url: 'https://example.com/policy',
+            source: 'Policy Source',
+            published_at: '2026-04-23T08:05:00Z',
+            snippet: '用于验证来源区块在白天主题下仍可显示。',
+            domain: 'example.com',
+            metadata_status: 'enriched',
+          },
+        ],
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(wrapper.find('[data-testid="analysis-hero-toolbar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analysis-evidence-workspace"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="analysis-secondary-column"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="analysis-history-section"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('刷新分析')
+    expect(wrapper.text()).toContain('事件一')
+    expect(wrapper.text()).toContain('关注兑现节奏')
+    const overviewItems = wrapper.findAll('.analysis-overview__item')
+    expect(overviewItems).toHaveLength(5)
+    expect(overviewItems[4]?.classes()).toContain('analysis-overview__item--wide')
+
+    const sourcesToggle = wrapper.get('[data-testid="analysis-view-sources"]')
+    await sourcesToggle.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('政策解读链接')
+    expect(wrapper.text()).toContain('用于验证来源区块在白天主题下仍可显示。')
   })
 
   it('passes event context to api and pins anchor event to top', async () => {
@@ -721,6 +1001,18 @@ describe('AnalysisWorkbenchView', () => {
           web_search_status: 'disabled',
           content_format: 'markdown',
         },
+        {
+          id: 'report-history',
+          status: 'ready',
+          summary: '# 历史标题\n\n- 历史条目',
+          risk_points: [],
+          factor_breakdown: [],
+          generated_at: '2026-03-22T08:00:00Z',
+          trigger_source: 'manual',
+          used_web_search: false,
+          web_search_status: 'disabled',
+          content_format: 'markdown',
+        },
       ],
     })
     vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
@@ -729,8 +1021,8 @@ describe('AnalysisWorkbenchView', () => {
 
     const markdownBody = wrapper.get('[data-testid="analysis-markdown"]')
     expect(markdownBody.html()).toContain('<h1')
-    expect(wrapper.text()).toContain('历史报告')
-    expect(wrapper.text()).toContain('手动触发')
+    expect(wrapper.get('[data-testid="analysis-history-section"]').text()).toContain('历史报告')
+    expect(wrapper.get('[data-testid="analysis-history-section"]').text()).toContain('手动触发')
   })
 
   it('renders structured web citations separately from markdown body', async () => {
@@ -817,6 +1109,13 @@ describe('AnalysisWorkbenchView', () => {
 
     const { wrapper } = await mountWorkbench(router)
 
+    expect(wrapper.get('[data-testid="analysis-markdown"]').html()).toContain('核心判断')
+    expect(wrapper.text()).not.toContain('国际油价收涨')
+
+    const sourcesToggle = wrapper.get('[data-testid="analysis-view-sources"]')
+    await sourcesToggle.trigger('click')
+    await flushPromises()
+
     expect(wrapper.text()).toContain('国际油价收涨')
     expect(wrapper.text()).toContain('Reuters')
     expect(wrapper.text()).toContain('市场继续关注供给端扰动')
@@ -824,7 +1123,6 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).toContain('补充链接')
     expect(wrapper.text()).toContain('unknown.example.com')
     expect(wrapper.text()).toContain('时间待补全')
-    expect(wrapper.get('[data-testid="analysis-markdown"]').html()).toContain('核心判断')
     const citationLink = wrapper.find('a[href="https://finance.example.com/oil"]')
     expect(citationLink.exists()).toBe(true)
   })
@@ -1437,6 +1735,10 @@ describe('AnalysisWorkbenchView', () => {
 
     const { wrapper } = await mountWorkbench(router)
 
+    const sourcesToggle = wrapper.get('[data-testid="analysis-view-sources"]')
+    await sourcesToggle.trigger('click')
+    await flushPromises()
+
     expect(wrapper.text()).toContain('国际油价收涨')
     expect(wrapper.text()).toContain('Reuters')
     expect(wrapper.text()).toContain('finance.example.com')
@@ -1844,12 +2146,172 @@ describe('AnalysisWorkbenchView', () => {
     const { wrapper } = await mountWorkbench(router)
 
     expect(wrapper.text()).toContain('研究流水线')
+    expect(wrapper.get('[data-testid="analysis-view-events"]').classes()).toContain('active')
+    expect(wrapper.find('[data-testid="analysis-view-sources"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('采用偏多假设。')
+
     const pipelineToggle = wrapper.get('[data-testid="analysis-view-pipeline"]')
     await pipelineToggle.trigger('click')
     await flushPromises()
 
+    expect(wrapper.text()).toContain('采用偏多假设。')
     expect(wrapper.text()).toContain('研究规划')
     expect(wrapper.text()).toContain('已生成研究计划')
     expect(wrapper.text()).toContain('最终裁决')
+  })
+
+  it('shows evidence cards progressively and expands on demand', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ts_code: '600519.SH',
+      instrument: null,
+      latest_snapshot: null,
+      status: 'ready',
+      generated_at: '2026-03-23T08:00:00Z',
+      topic: null,
+      published_from: null,
+      published_to: null,
+      event_count: 5,
+      events: [
+        {
+          event_id: 'evt-1',
+          scope: 'hot',
+          title: '事件一',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.4,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.1,
+          window_volatility: 0.7,
+          abnormal_volume_ratio: 1.3,
+          correlation_score: 0.95,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-2',
+          scope: 'policy',
+          title: '事件二',
+          published_at: '2026-03-23T07:30:00Z',
+          source: 'policy_document',
+          macro_topic: 'regulation_policy',
+          event_type: 'policy',
+          event_tags: ['政策'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.5,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.2,
+          window_volatility: 0.8,
+          abnormal_volume_ratio: 1.4,
+          correlation_score: 0.88,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-3',
+          scope: 'stock',
+          title: '事件三',
+          published_at: '2026-03-23T07:00:00Z',
+          source: 'cninfo_announcement',
+          macro_topic: 'announcement',
+          event_type: 'announcement',
+          event_tags: ['公告'],
+          sentiment_label: 'neutral',
+          sentiment_score: 0.1,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 0.8,
+          window_volatility: 0.5,
+          abnormal_volume_ratio: 1.1,
+          correlation_score: 0.72,
+          confidence: 'medium',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-4',
+          scope: 'hot',
+          title: '事件四',
+          published_at: '2026-03-23T06:30:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'negative',
+          sentiment_score: -0.2,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: -0.3,
+          window_volatility: 0.9,
+          abnormal_volume_ratio: 1.6,
+          correlation_score: 0.66,
+          confidence: 'medium',
+          link_status: 'linked',
+        },
+        {
+          event_id: 'evt-5',
+          scope: 'hot',
+          title: '事件五',
+          published_at: '2026-03-23T06:00:00Z',
+          source: 'eastmoney_global',
+          macro_topic: 'industry',
+          event_type: 'news',
+          event_tags: ['行业'],
+          sentiment_label: 'neutral',
+          sentiment_score: 0,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 0.4,
+          window_volatility: 0.4,
+          abnormal_volume_ratio: 1.05,
+          correlation_score: 0.55,
+          confidence: 'low',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        id: 'report-events-progressive',
+        status: 'ready',
+        summary: '## 摘要',
+        risk_points: [],
+        factor_breakdown: [],
+        generated_at: '2026-03-23T08:10:00Z',
+        trigger_source: 'manual',
+        used_web_search: false,
+        web_search_status: 'disabled',
+        content_format: 'markdown',
+        evidence_event_count: 5,
+      },
+    } as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    let eventTitles = wrapper.findAll('[data-testid="analysis-event-title"]').map((item) => item.text())
+    expect(eventTitles).toEqual(['事件一', '事件二', '事件三', '事件四'])
+    expect(wrapper.text()).toContain('展开更多证据')
+    expect(wrapper.text()).not.toContain('事件五')
+
+    const expandButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('展开更多证据'))
+    expect(expandButton).toBeDefined()
+    await expandButton!.trigger('click')
+    await flushPromises()
+
+    eventTitles = wrapper.findAll('[data-testid="analysis-event-title"]').map((item) => item.text())
+    expect(eventTitles).toEqual(['事件一', '事件二', '事件三', '事件四', '事件五'])
+    expect(wrapper.text()).toContain('收起证据')
   })
 })

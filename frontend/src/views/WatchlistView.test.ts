@@ -202,6 +202,7 @@ describe('WatchlistView', () => {
 
     expect(router.currentRoute.value.path).toBe('/analysis')
     expect(router.currentRoute.value.query.ts_code).toBe('600519.SH')
+    expect(router.currentRoute.value.query.source).toBe('watchlist')
   })
 
   it('updates watchlist automation switches in place', async () => {

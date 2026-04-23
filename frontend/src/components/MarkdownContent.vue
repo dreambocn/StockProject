@@ -55,7 +55,7 @@ const renderedHtml = computed(() => {
 
 <style scoped>
 .markdown-content {
-  color: #e7f0fb;
+  color: var(--terminal-text-body);
   line-height: 1.8;
   font-size: 0.98rem;
 }
@@ -64,7 +64,14 @@ const renderedHtml = computed(() => {
 .markdown-content :deep(h2),
 .markdown-content :deep(h3) {
   margin: 0 0 0.75rem;
-  color: #f5fbff;
+  color: var(--terminal-text-primary);
+}
+
+.markdown-content :deep(h4),
+.markdown-content :deep(h5),
+.markdown-content :deep(h6),
+.markdown-content :deep(strong) {
+  color: var(--terminal-text-primary);
 }
 
 .markdown-content :deep(p),
@@ -80,11 +87,20 @@ const renderedHtml = computed(() => {
   padding-left: 1.2rem;
 }
 
+.markdown-content :deep(blockquote) {
+  padding: 0.8rem 0.9rem;
+  border-left: 3px solid color-mix(in srgb, var(--terminal-primary) 46%, transparent);
+  border-radius: 0 12px 12px 0;
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
+  color: var(--terminal-text-body);
+}
+
 .markdown-content :deep(code) {
   font-family: 'IBM Plex Mono', monospace;
   padding: 0.1rem 0.25rem;
   border-radius: 6px;
-  background: rgba(8, 14, 25, 0.8);
+  background: var(--terminal-code-bg);
+  color: var(--terminal-code-text);
 }
 
 .markdown-content :deep(pre code) {

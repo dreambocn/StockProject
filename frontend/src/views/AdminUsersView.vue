@@ -246,9 +246,7 @@ onMounted(async () => {
   border: 1px solid color-mix(in srgb, var(--terminal-border) 85%, transparent);
   border-radius: 18px;
   padding: 1rem 1.05rem;
-  background:
-    radial-gradient(circle at 86% 12%, rgba(123, 197, 255, 0.2), transparent 45%),
-    linear-gradient(145deg, rgba(21, 33, 53, 0.97), rgba(9, 17, 31, 0.96));
+  background: var(--terminal-hero-bg);
   box-shadow: var(--terminal-shadow);
 }
 
@@ -308,7 +306,7 @@ h1 {
   padding: 0.58rem 0.8rem;
   border: 1px solid var(--terminal-border);
   border-radius: 12px;
-  background: linear-gradient(150deg, rgba(23, 36, 58, 0.94), rgba(10, 18, 32, 0.96));
+  background: var(--terminal-card-elevated-bg);
   display: grid;
   gap: 0.18rem;
 }
@@ -328,7 +326,7 @@ h1 {
 .status-chip em {
   font-style: normal;
   font-size: 0.68rem;
-  color: color-mix(in srgb, var(--terminal-muted) 72%, white 28%);
+  color: color-mix(in srgb, var(--terminal-muted) 84%, var(--terminal-text) 16%);
 }
 
 .status-chip.danger {
@@ -348,7 +346,7 @@ h1 {
 .admin-card {
   border: 1px solid var(--terminal-border);
   border-radius: 18px;
-  background: linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(9, 16, 30, 0.97));
+  background: var(--terminal-card-strong-bg);
   box-shadow: var(--terminal-shadow);
   position: relative;
   overflow: hidden;
@@ -400,7 +398,7 @@ h2 {
   border: 1px solid color-mix(in srgb, var(--terminal-border) 75%, transparent);
   border-radius: 14px;
   padding: 0.45rem;
-  background: linear-gradient(180deg, rgba(12, 20, 35, 0.94), rgba(8, 15, 28, 0.95));
+  background: var(--terminal-card-table-shell-bg);
 }
 
 .create-card .section-note {

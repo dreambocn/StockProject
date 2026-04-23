@@ -25,6 +25,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+## Local docs artifacts
+docs/thesis/
+docs/plans/
+docs/*.txt
+docs/*.pdf
+docs/*.doc
+docs/*.docx
+
 ## Local worktrees
 .worktrees/
 

@@ -462,7 +462,7 @@ h1 {
   padding: 0.55rem 0.8rem;
   border: 1px solid var(--terminal-border);
   border-radius: 12px;
-  background: linear-gradient(150deg, rgba(25, 40, 63, 0.95), rgba(11, 20, 35, 0.96));
+  background: var(--terminal-card-elevated-bg);
   display: grid;
   gap: 0.2rem;
 }
@@ -490,7 +490,7 @@ h1 {
 .admin-card {
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
-  background: linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(9, 16, 30, 0.97));
+  background: var(--terminal-card-strong-bg);
   box-shadow: var(--terminal-shadow);
 }
 
@@ -528,7 +528,7 @@ h1 {
   border: 1px solid color-mix(in srgb, var(--terminal-border) 75%, transparent);
   border-radius: 14px;
   padding: 0.45rem;
-  background: linear-gradient(180deg, rgba(12, 20, 35, 0.94), rgba(8, 15, 28, 0.95));
+  background: var(--terminal-card-table-shell-bg);
 }
 
 .pagination-wrap {

@@ -356,7 +356,8 @@ h1 {
 .terminal-card {
   border: 1px solid var(--terminal-border);
   border-radius: 14px;
-  background: linear-gradient(140deg, rgba(26, 38, 59, 0.96), rgba(14, 23, 37, 0.92));
+  background: var(--terminal-card-muted-bg);
+  box-shadow: var(--terminal-shadow);
 }
 
 .stock-waterfall {

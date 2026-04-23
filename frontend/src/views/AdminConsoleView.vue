@@ -75,9 +75,7 @@ const adminEntries = [
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
   padding: 1rem 1.1rem;
-  background:
-    radial-gradient(circle at top right, rgba(122, 206, 255, 0.18), transparent 60%),
-    linear-gradient(145deg, rgba(18, 29, 50, 0.96), rgba(8, 16, 30, 0.97));
+  background: var(--terminal-hero-bg);
   box-shadow: var(--terminal-shadow);
 }
 
@@ -113,16 +111,15 @@ h1 {
   padding: 1rem;
   display: grid;
   gap: 0.45rem;
-  background:
-    radial-gradient(circle at 85% 18%, rgba(247, 181, 0, 0.16), transparent 44%),
-    linear-gradient(145deg, rgba(20, 32, 54, 0.96), rgba(9, 17, 31, 0.98));
+  background: var(--terminal-card-elevated-bg);
   transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+  box-shadow: var(--terminal-shadow);
 }
 
 .entry-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(123, 197, 255, 0.55);
-  box-shadow: 0 14px 32px rgba(6, 12, 24, 0.36);
+  border-color: color-mix(in srgb, var(--terminal-primary) 46%, var(--terminal-border));
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--terminal-primary) 12%, transparent);
 }
 
 .entry-icon {
@@ -144,7 +141,7 @@ h2 {
   font-family: 'IBM Plex Mono', monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #7bc5ff;
+  color: var(--terminal-primary);
   font-size: 0.76rem;
 }
 

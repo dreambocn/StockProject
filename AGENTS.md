@@ -150,6 +150,10 @@ Linting: no dedicated frontend lint command configured.
 - Keep login/register/profile visual language aligned
 - Use IBM Plex Sans + IBM Plex Mono pairing
 - For new frontend pages/features, add appropriate motion/transition effects when they improve clarity and perceived quality
+- All frontend work must be theme-aware: support both `light` and `dark`, and do not treat one theme as an afterthought
+- Light theme readability is a first-class requirement because the project uses screenshot-friendly white surfaces in user-facing flows
+- Prefer semantic theme tokens over hardcoded text/background colors, especially for正文、标题、说明文、按钮文案、空态和卡片摘要
+- Before finishing frontend work, check both themes for contrast, isolated dark/light panels, and whether primary reading paths still look intentional in screenshots
 
 ## 6.1) 中文注释规范（关键流程）
 - 所有新增或修改的"关键流程"代码必须补充中文注释，至少覆盖：

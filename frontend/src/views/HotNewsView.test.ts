@@ -549,6 +549,7 @@ describe('HotNewsView', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/news/hot', component: HotNewsView },
+        { path: '/analysis', component: { template: '<div>analysis</div>' } },
         { path: '/stocks/:tsCode', component: { template: '<div>stock</div>' } },
       ],
     })
@@ -565,13 +566,14 @@ describe('HotNewsView', () => {
 
     const actionButton = wrapper
       .findAll('button')
-      .find((item) => item.text().includes('查看详情'))
+      .find((item) => item.text().includes('进入分析'))
     expect(actionButton).toBeDefined()
 
     await actionButton!.trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.path).toBe('/stocks/600938.SH')
+    expect(router.currentRoute.value.path).toBe('/analysis')
+    expect(router.currentRoute.value.query.ts_code).toBe('600938.SH')
     expect(router.currentRoute.value.query.topic).toBe('commodity_supply')
     expect(router.currentRoute.value.query.source).toBe('hot_news')
     expect(router.currentRoute.value.query.event_id).toBe('evt-hot-1')

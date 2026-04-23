@@ -207,7 +207,8 @@ watch(
 .watchlist-card {
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
-  background: linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(11, 18, 32, 0.96));
+  background: var(--terminal-card-bg);
+  box-shadow: var(--terminal-shadow);
 }
 
 .watchlist-card__header,
@@ -229,15 +230,15 @@ watch(
   border: 1px solid var(--terminal-border);
   border-radius: 999px;
   padding: 0.35rem 0.75rem;
-  background: rgba(8, 14, 25, 0.7);
+  background: var(--terminal-card-soft-bg);
   color: var(--terminal-muted);
   cursor: pointer;
   transition: 0.2s ease;
 }
 
 .watchlist-toggle:hover:not(:disabled) {
-  color: #f5fbff;
-  border-color: rgba(123, 197, 255, 0.3);
+  color: var(--terminal-text);
+  border-color: color-mix(in srgb, var(--terminal-primary) 32%, var(--terminal-border));
 }
 
 .watchlist-toggle:disabled {

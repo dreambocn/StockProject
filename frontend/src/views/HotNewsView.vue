@@ -293,6 +293,20 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
     },
   })
 }
+
+const goToAnalysis = async (tsCode: string, profile: MacroImpactProfile) => {
+  const anchorEvent = getAnchorEventForTopic(profile)
+  await router.push({
+    path: '/analysis',
+    query: {
+      ts_code: tsCode,
+      topic: profile.topic,
+      event_id: anchorEvent?.event_id ?? undefined,
+      event_title: anchorEvent?.title ?? profile.anchor_event?.title ?? undefined,
+      source: 'hot_news',
+    },
+  })
+}
 </script>
 
 <template>
@@ -379,6 +393,14 @@ const goToStockDetail = async (tsCode: string, profile: MacroImpactProfile) => {
                       {{ `${t('hotNews.candidateFreshness')} ${candidate.freshness_score}` }}
                     </span>
                   </div>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    class="impact-candidate-action impact-candidate-action--primary"
+                    @click="goToAnalysis(candidate.ts_code, profile)"
+                  >
+                    {{ t('hotNews.enterAnalysis') }}
+                  </el-button>
                   <el-button
                     plain
                     size="small"
@@ -520,7 +542,8 @@ h1 {
   border: 1px solid var(--terminal-border);
   border-radius: 12px;
   padding: 0.7rem;
-  background: linear-gradient(150deg, rgba(20, 30, 49, 0.9), rgba(9, 16, 28, 0.92));
+  background: var(--terminal-card-muted-bg);
+  box-shadow: var(--terminal-shadow);
 }
 
 .impact-header h2 {
@@ -538,7 +561,7 @@ h1 {
   border: 1px solid rgba(123, 197, 255, 0.22);
   border-radius: 10px;
   padding: 0.5rem;
-  background: rgba(8, 14, 25, 0.65);
+  background: var(--terminal-card-soft-bg);
 }
 
 .impact-topic {
@@ -590,7 +613,7 @@ h1 {
   border: 1px solid rgba(123, 197, 255, 0.12);
   border-radius: 10px;
   padding: 0.55rem;
-  background: rgba(12, 20, 34, 0.72);
+  background: color-mix(in srgb, var(--terminal-card-soft-bg) 90%, var(--terminal-panel) 10%);
 }
 
 .impact-policy-list {
@@ -603,7 +626,7 @@ h1 {
   border: 1px solid rgba(123, 197, 255, 0.12);
   border-radius: 10px;
   padding: 0.55rem;
-  background: rgba(12, 20, 34, 0.72);
+  background: color-mix(in srgb, var(--terminal-card-soft-bg) 90%, var(--terminal-panel) 10%);
 }
 
 .impact-policy-meta {
@@ -660,7 +683,7 @@ h1 {
 .impact-candidate-evidence-card {
   border-radius: 8px;
   border: 1px solid rgba(123, 197, 255, 0.08);
-  background: rgba(7, 12, 22, 0.78);
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
   padding: 0.48rem 0.55rem;
 }
 
@@ -687,14 +710,41 @@ h1 {
 }
 
 .impact-candidate-action {
+  min-width: 5.8rem;
+  border-radius: 999px;
+  border-color: rgba(123, 197, 255, 0.18);
+  background: var(--terminal-card-soft-bg);
   color: var(--terminal-primary);
+  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.05);
+}
+
+.impact-candidate-action--primary.el-button {
+  border-color: rgba(255, 208, 120, 0.24);
+  background: var(--terminal-highlight-panel);
+  color: var(--terminal-highlight-panel-text);
+  box-shadow:
+    0 12px 26px rgba(46, 129, 214, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.impact-candidate-action--primary.el-button:hover,
+.impact-candidate-action--primary.el-button:focus-visible {
+  border-color: rgba(255, 220, 154, 0.34);
+  transform: translateY(-1px);
+}
+
+.impact-candidate-action.el-button.is-plain:hover,
+.impact-candidate-action.el-button.is-plain:focus-visible {
+  border-color: rgba(123, 197, 255, 0.28);
+  background: color-mix(in srgb, var(--terminal-primary) 12%, var(--terminal-panel) 88%);
+  color: var(--terminal-text);
 }
 
 .topic-filter-panel {
   border: 1px solid var(--terminal-border);
   border-radius: 12px;
   padding: 0.6rem;
-  background: rgba(19, 29, 48, 0.66);
+  background: color-mix(in srgb, var(--terminal-panel) 82%, var(--terminal-surface) 18%);
 }
 
 .topic-filter-label {
@@ -714,7 +764,7 @@ h1 {
 .topic-filter-chip {
   border: 1px solid var(--terminal-border);
   border-radius: 999px;
-  background: rgba(8, 14, 25, 0.7);
+  background: var(--terminal-card-soft-bg);
   color: var(--terminal-text);
   font-size: 0.75rem;
   padding: 0.25rem 0.55rem;
@@ -729,7 +779,8 @@ h1 {
 .news-card {
   border: 1px solid var(--terminal-border);
   border-radius: 12px;
-  background: linear-gradient(145deg, rgba(26, 38, 59, 0.96), rgba(14, 23, 37, 0.92));
+  background: var(--terminal-card-muted-bg);
+  box-shadow: var(--terminal-shadow);
 }
 
 .news-time {

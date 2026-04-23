@@ -376,9 +376,7 @@ onMounted(async () => {
 .detail-panel {
   border: 1px solid var(--terminal-border);
   border-radius: 16px;
-  background:
-    radial-gradient(circle at top right, rgba(122, 206, 255, 0.14), transparent 55%),
-    linear-gradient(145deg, rgba(19, 29, 48, 0.95), rgba(9, 16, 30, 0.97));
+  background: var(--terminal-hero-bg);
   box-shadow: var(--terminal-shadow);
 }
 
@@ -393,7 +391,7 @@ onMounted(async () => {
 .panel-kicker {
   margin: 0;
   font-family: 'IBM Plex Mono', monospace;
-  color: #f7b500;
+  color: var(--terminal-warning);
   letter-spacing: 0.14em;
   font-size: 0.74rem;
   text-transform: uppercase;
@@ -422,7 +420,7 @@ onMounted(async () => {
 .detail-button {
   border-radius: 12px;
   border: 1px solid var(--terminal-border);
-  background: rgba(9, 17, 31, 0.72);
+  background: var(--terminal-input-bg);
   color: var(--terminal-text);
   padding: 0.72rem 0.85rem;
 }
@@ -452,7 +450,7 @@ onMounted(async () => {
   padding: 0 0.75rem;
   border-radius: 12px;
   border: 1px solid var(--terminal-border);
-  background: rgba(9, 17, 31, 0.6);
+  background: color-mix(in srgb, var(--terminal-input-bg) 90%, var(--terminal-panel) 10%);
   color: var(--terminal-muted);
   font-size: 0.86rem;
   white-space: nowrap;
@@ -556,7 +554,7 @@ onMounted(async () => {
   padding: 0.95rem;
   display: grid;
   gap: 0.55rem;
-  background: rgba(8, 16, 30, 0.82);
+  background: var(--terminal-card-soft-bg-strong);
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease,

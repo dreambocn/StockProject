@@ -15,8 +15,8 @@ import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
 import { useAuthStore } from '../stores/auth'
 
 type EventFilterKey = 'all' | 'high-related' | 'policy' | 'announcement' | 'news' | 'pending'
-type SourceKind = 'hot_news' | 'stock_detail' | 'direct'
-type AnalysisViewMode = 'final' | 'pipeline'
+type SourceKind = 'watchlist' | 'hot_news' | 'stock_detail' | 'direct'
+type AnalysisViewMode = 'events' | 'factors' | 'pipeline' | 'sources'
 type ReportEvidencePayload = {
   event_count: number
   events: AnalysisEventResponse[]
@@ -33,6 +33,7 @@ const loading = ref(false)
 const errorMessage = ref('')
 const selectedEventFilter = ref<EventFilterKey>('all')
 const showAllFactors = ref(false)
+const showAllEvents = ref(false)
 const selectedReportId = ref<string | null>(null)
 const streamingMarkdown = ref('')
 const streaming = ref(false)
@@ -41,11 +42,12 @@ const lastHeartbeatValue = ref('')
 const lastHeartbeatObservedAt = ref<number | null>(null)
 const exportLoading = ref(false)
 const useWebSearch = ref(false)
-const analysisViewMode = ref<AnalysisViewMode>('final')
+const analysisViewMode = ref<AnalysisViewMode>('events')
 const webSearchInherited = ref(false)
 const webSearchSeededTsCode = ref('')
 const watchlistLoading = ref(false)
 const watchlistItem = ref<WatchlistItemResponse | null>(null)
+const expandedRolePayloads = ref<Record<string, boolean>>({})
 // 通过递增版本号标识“本轮加载”，用于拦截并发返回的过期数据。
 const workbenchLoadVersion = ref(0)
 const reportEvidenceCache = ref<Record<string, ReportEvidencePayload>>({})
@@ -246,6 +248,9 @@ const eventTitle = computed(() => readQueryString(route.query.event_title))
 const hasTsCode = computed(() => Boolean(tsCode.value))
 
 const sourceKind = computed<SourceKind>(() => {
+  if (source.value === 'watchlist') {
+    return 'watchlist'
+  }
   if (source.value === 'hot_news') {
     return 'hot_news'
   }
@@ -345,6 +350,13 @@ const visibleFactors = computed(() =>
   showAllFactors.value ? sortedFactors.value : sortedFactors.value.slice(0, 3),
 )
 const hasMoreFactors = computed(() => sortedFactors.value.length > 3)
+const highlightFactors = computed(() => sortedFactors.value.slice(0, 2))
+const riskHighlights = computed(() => (selectedReport.value?.risk_points ?? []).slice(0, 3))
+// 只有存在可切换的真实历史报告时才展示历史区，避免单报告场景浪费首屏空间。
+const hasHistoricalReports = computed(() => reportArchives.value.length >= 2)
+// 因子区与风险区共用第二行双列位，若其中一块无数据则让另一块自动占满整行。
+const showFactorSpotlight = computed(() => highlightFactors.value.length > 0 || riskHighlights.value.length === 0)
+const showRiskSpotlight = computed(() => riskHighlights.value.length > 0 || highlightFactors.value.length === 0)
 
 const sortedEvents = computed(() => {
   const events = activeEvidenceEvents.value
@@ -431,6 +443,17 @@ const emptyEventMessage = computed(() => {
   }
 })
 
+const visibleEvents = computed(() =>
+  showAllEvents.value ? filteredEvents.value : filteredEvents.value.slice(0, 4),
+)
+const hasMoreEvents = computed(() => filteredEvents.value.length > 4)
+
+const structuredSourceItems = computed(() => selectedReport.value?.structured_sources ?? [])
+const webSourceItems = computed(() => selectedReport.value?.web_sources ?? [])
+const hasSourcesWorkspace = computed(
+  () => structuredSourceItems.value.length > 0 || webSourceItems.value.length > 0 || reportRuntimeMeta.value.length > 0,
+)
+
 const hotNewsAnchorEvent = computed(() => {
   const matchedEvent =
     (eventId.value
@@ -482,6 +505,52 @@ const overviewItems = computed(() => [
   },
 ])
 
+const overviewGridItems = computed(() =>
+  overviewItems.value.map((item, index, items) => ({
+    ...item,
+    isWide: items.length % 2 === 1 && index === items.length - 1,
+  })),
+)
+
+const decisionGlanceItems = computed(() => {
+  const items = [
+    selectedReport.value?.selected_hypothesis
+      ? {
+          key: 'hypothesis',
+          label: t('analysisWorkbench.selectedHypothesis'),
+          value: selectedReport.value.selected_hypothesis,
+        }
+      : null,
+    selectedReport.value?.decision_confidence
+      ? {
+          key: 'confidence',
+          label: t('analysisWorkbench.decisionConfidence'),
+          value: translateConfidence(selectedReport.value.decision_confidence),
+        }
+      : null,
+    selectedReport.value?.decision_reason_summary
+      ? {
+          key: 'reason',
+          label: t('analysisWorkbench.decisionReason'),
+          value: selectedReport.value.decision_reason_summary,
+        }
+      : null,
+  ].filter(
+    (
+      item,
+    ): item is {
+      key: string
+      label: string
+      value: string
+    } => Boolean(item),
+  )
+
+  return items.map((item, index) => ({
+    ...item,
+    isWide: items.length % 2 === 1 && index === items.length - 1,
+  }))
+})
+
 const contextItems = computed(() =>
   [
     `${t('analysisWorkbench.contextSource')}: ${sourceLabel.value}`,
@@ -500,6 +569,9 @@ const contextItems = computed(() =>
 )
 
 const sourceActionLabel = computed(() => {
+  if (sourceKind.value === 'watchlist') {
+    return t('analysisWorkbench.backToWatchlist')
+  }
   if (sourceKind.value === 'hot_news') {
     return t('analysisWorkbench.backToHotTopic')
   }
@@ -729,8 +801,8 @@ const goToHotNews = async () => {
   await router.push('/news/hot')
 }
 
-const goToHome = async () => {
-  await router.push('/')
+const goToWatchlist = async () => {
+  await router.push('/watchlist')
 }
 
 const goToStockDetail = async () => {
@@ -761,6 +833,11 @@ const goToStockDetail = async () => {
 }
 
 const goToSource = async () => {
+  if (sourceKind.value === 'watchlist') {
+    await router.push('/watchlist')
+    return
+  }
+
   if (sourceKind.value === 'hot_news') {
     const query: Record<string, string> = {}
     if (topicContext.value) {
@@ -789,6 +866,7 @@ const goToSource = async () => {
 
 const selectFilter = (filterKey: EventFilterKey) => {
   selectedEventFilter.value = filterKey
+  showAllEvents.value = false
 }
 
 const selectReport = (reportId: string | null | undefined) => {
@@ -797,6 +875,16 @@ const selectReport = (reportId: string | null | undefined) => {
   }
   selectedReportId.value = reportId
   streamingMarkdown.value = ''
+  showAllFactors.value = false
+  showAllEvents.value = false
+  expandedRolePayloads.value = {}
+}
+
+const toggleRolePayload = (roleKey: string) => {
+  expandedRolePayloads.value = {
+    ...expandedRolePayloads.value,
+    [roleKey]: !expandedRolePayloads.value[roleKey],
+  }
 }
 
 const toggleWatchlist = async () => {
@@ -1020,13 +1108,15 @@ watch(
   () => {
     stopStreaming()
     streaming.value = false
-    analysisViewMode.value = 'final'
+    analysisViewMode.value = 'events'
     selectedReportId.value = null
     streamingMarkdown.value = ''
     reportEvidenceCache.value = {}
     activeEvidenceEvents.value = []
     activeEvidenceTotal.value = 0
     activeEvidenceLoadToken += 1
+    expandedRolePayloads.value = {}
+    showAllEvents.value = false
     // 路由上下文变化时重置继承状态，避免旧股票影响新分析。
     useWebSearch.value = false
     webSearchInherited.value = false
@@ -1044,11 +1134,11 @@ watch(
         <p class="analysis-empty__title">{{ t('analysisWorkbench.emptyTitle') }}</p>
         <p class="analysis-empty__desc">{{ t('analysisWorkbench.emptyDesc') }}</p>
         <div class="analysis-empty__actions">
+          <el-button plain @click="goToWatchlist">
+            {{ t('analysisWorkbench.emptyWatchlistAction') }}
+          </el-button>
           <el-button type="primary" @click="goToHotNews">
             {{ t('analysisWorkbench.emptyHotNewsAction') }}
-          </el-button>
-          <el-button plain @click="goToHome">
-            {{ t('analysisWorkbench.emptyHomeAction') }}
           </el-button>
         </div>
       </div>
@@ -1083,7 +1173,7 @@ watch(
       </div>
 
       <div v-else class="analysis-shell">
-        <el-card class="analysis-hero">
+        <el-card class="analysis-hero" data-testid="analysis-research-header">
           <div class="analysis-hero__header">
             <div class="analysis-hero__headline">
               <p class="analysis-kicker">{{ t('analysisWorkbench.panelTitle') }}</p>
@@ -1206,9 +1296,10 @@ watch(
 
           <div class="analysis-overview">
             <article
-              v-for="item in overviewItems"
+              v-for="item in overviewGridItems"
               :key="item.key"
               class="analysis-overview__item"
+              :class="{ 'analysis-overview__item--wide': item.isWide }"
             >
               <span class="analysis-overview__label">{{ item.label }}</span>
               <strong class="analysis-overview__value">{{ item.value }}</strong>
@@ -1218,33 +1309,177 @@ watch(
 
         <div class="analysis-content">
           <div class="analysis-main">
-            <el-card class="analysis-panel analysis-panel--summary">
+            <div class="analysis-decision-layout" data-testid="analysis-decision-deck">
+              <el-card class="analysis-panel analysis-panel--summary" data-testid="analysis-summary-panel">
+                <div class="analysis-panel__header">
+                  <div>
+                    <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.summaryTitle') }}</p>
+                    <h2 class="analysis-panel__title">{{ t('analysisWorkbench.summarySubtitle') }}</h2>
+                  </div>
+                  <div class="analysis-panel__meta-stack">
+                    <span class="analysis-panel__meta">
+                      {{ t('analysisWorkbench.metricStatus') }} · {{ displayStatus }}
+                    </span>
+                    <span v-if="selectedReport" class="analysis-panel__meta">
+                      {{ t('analysisWorkbench.webSearchStatusLabel') }} · {{ currentReportWebSearchStatus }}
+                    </span>
+                  </div>
+                </div>
+
+                <div v-if="decisionGlanceItems.length > 0" class="analysis-decision-glance">
+                  <article
+                    v-for="item in decisionGlanceItems"
+                    :key="item.key"
+                    class="analysis-decision-glance__item"
+                    :class="{ 'analysis-decision-glance__item--wide': item.isWide }"
+                  >
+                    <span class="analysis-overview__label">{{ item.label }}</span>
+                    <strong class="analysis-overview__value">{{ item.value }}</strong>
+                  </article>
+                </div>
+
+                <template v-if="reportAvailable">
+                  <p v-if="streaming" class="analysis-summary__hint">
+                    {{ streamingHint }}
+                  </p>
+                  <p v-if="needsFallbackHint" class="analysis-summary__hint">
+                    {{ t('analysisWorkbench.partialHint') }}
+                  </p>
+                  <p v-if="summary?.event_context_message" class="analysis-summary__hint">
+                    {{ summary.event_context_message }}
+                  </p>
+                  <MarkdownContent :source="activeSummaryMarkdown" />
+
+                  <div
+                    v-if="structuredSourceItems.length > 0"
+                    class="analysis-source-evidence"
+                  >
+                    <span class="analysis-source-evidence__label">
+                      {{ t('analysisWorkbench.inputSourcesLabel') }}
+                    </span>
+                    <span
+                      v-for="sourceItem in structuredSourceItems"
+                      :key="`${sourceItem.provider}-${sourceItem.count}`"
+                      class="analysis-token"
+                    >
+                      {{ `${formatStructuredSourceProvider(sourceItem.provider) ?? 'source'} × ${sourceItem.count ?? 0}` }}
+                    </span>
+                  </div>
+                </template>
+
+                <template v-else-if="withoutReport">
+                  <p v-if="streaming" class="analysis-summary__hint">{{ streamingHint }}</p>
+                  <p class="analysis-summary__pending-title">{{ t('analysisWorkbench.pendingTitle') }}</p>
+                  <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
+                </template>
+
+                <template v-else>
+                  <p v-if="streaming" class="analysis-summary__hint">{{ streamingHint }}</p>
+                  <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
+                </template>
+              </el-card>
+
+              <div class="analysis-decision-side" data-testid="analysis-spotlight-row">
+                <el-card
+                  v-if="showFactorSpotlight"
+                  class="analysis-panel analysis-panel--spotlight"
+                  :class="{ 'analysis-panel--wide': !showRiskSpotlight }"
+                  data-testid="analysis-factor-spotlight"
+                >
+                  <div class="analysis-panel__header">
+                    <div>
+                      <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.factorHeading') }}</p>
+                      <h2 class="analysis-panel__title">{{ t('analysisWorkbench.factorSubtitle') }}</h2>
+                    </div>
+                  </div>
+
+                  <div v-if="highlightFactors.length > 0" class="analysis-factor-list analysis-factor-list--spotlight">
+                    <article
+                      v-for="factor in highlightFactors"
+                      :key="factor.factor_key"
+                      class="analysis-factor-card analysis-factor-card--compact"
+                    >
+                      <div class="analysis-factor-card__header">
+                        <div>
+                          <p class="analysis-factor-card__title">{{ factor.factor_label }}</p>
+                          <p class="analysis-factor-card__reason">{{ factor.reason }}</p>
+                        </div>
+                        <div class="analysis-factor-card__meta">
+                          <strong>{{ formatWeight(factor.weight) }}</strong>
+                          <span>{{ translateSentiment(factor.direction) }}</span>
+                        </div>
+                      </div>
+
+                      <div class="analysis-factor-card__bar">
+                        <span :style="{ width: `${Math.max(8, factor.weight * 100)}%` }" />
+                      </div>
+
+                      <div class="analysis-factor-card__evidence">
+                        <span
+                          v-for="evidence in factor.evidence"
+                          :key="evidence"
+                          class="analysis-token"
+                        >
+                          {{ evidence }}
+                        </span>
+                      </div>
+                    </article>
+                  </div>
+                  <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noFactors') }}</p>
+                </el-card>
+
+                <el-card
+                  v-if="showRiskSpotlight"
+                  class="analysis-panel analysis-panel--spotlight"
+                  :class="{ 'analysis-panel--wide': !showFactorSpotlight }"
+                  data-testid="analysis-risk-spotlight"
+                >
+                  <div class="analysis-panel__header">
+                    <div>
+                      <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.riskHeading') }}</p>
+                      <h2 class="analysis-panel__title">{{ t('analysisWorkbench.riskSubtitle') }}</h2>
+                    </div>
+                  </div>
+
+                  <ul v-if="riskHighlights.length > 0" class="analysis-risk-list">
+                    <li v-for="point in riskHighlights" :key="point">
+                      {{ point }}
+                    </li>
+                  </ul>
+                  <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noRisks') }}</p>
+                </el-card>
+              </div>
+            </div>
+
+            <el-card class="analysis-panel analysis-panel--workspace" data-testid="analysis-evidence-workspace">
               <div class="analysis-panel__header">
                 <div>
-                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.summaryTitle') }}</p>
-                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.summarySubtitle') }}</h2>
+                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.workspaceTitle') }}</p>
+                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.workspaceSubtitle') }}</h2>
                 </div>
-                <div class="analysis-panel__meta-stack">
-                  <span class="analysis-panel__meta">
-                    {{ t('analysisWorkbench.metricStatus') }} · {{ displayStatus }}
-                  </span>
-                  <span v-if="selectedReport" class="analysis-panel__meta">
-                    {{ t('analysisWorkbench.webSearchStatusLabel') }} · {{ currentReportWebSearchStatus }}
-                  </span>
-                </div>
+                <span class="analysis-panel__meta">
+                  {{ filteredEvents.length }} / {{ activeEvidenceTotal }}
+                </span>
               </div>
-              <div
-                v-if="hasPipelineRoles"
-                class="analysis-view-toggle"
-              >
+
+              <div class="analysis-view-toggle analysis-view-toggle--workspace">
                 <button
                   type="button"
                   class="analysis-filter-chip"
-                  data-testid="analysis-view-final"
-                  :class="{ active: analysisViewMode === 'final' }"
-                  @click="analysisViewMode = 'final'"
+                  data-testid="analysis-view-events"
+                  :class="{ active: analysisViewMode === 'events' }"
+                  @click="analysisViewMode = 'events'"
                 >
-                  {{ t('analysisWorkbench.finalView') }}
+                  {{ t('analysisWorkbench.eventsView') }}
+                </button>
+                <button
+                  type="button"
+                  class="analysis-filter-chip"
+                  data-testid="analysis-view-factors"
+                  :class="{ active: analysisViewMode === 'factors' }"
+                  @click="analysisViewMode = 'factors'"
+                >
+                  {{ t('analysisWorkbench.factorsView') }}
                 </button>
                 <button
                   type="button"
@@ -1255,86 +1490,225 @@ watch(
                 >
                   {{ t('analysisWorkbench.pipelineView') }}
                 </button>
+                <button
+                  type="button"
+                  class="analysis-filter-chip"
+                  data-testid="analysis-view-sources"
+                  :class="{ active: analysisViewMode === 'sources' }"
+                  @click="analysisViewMode = 'sources'"
+                >
+                  {{ t('analysisWorkbench.sourcesView') }}
+                </button>
               </div>
 
-              <template v-if="analysisViewMode === 'pipeline' && hasPipelineRoles">
-                <div class="analysis-pipeline">
-                  <div class="analysis-pipeline__summary">
-                    <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.pipelineTitle') }}</p>
-                    <p class="analysis-summary__hint">{{ t('analysisWorkbench.pipelineSubtitle') }}</p>
-                    <div
-                      v-if="reportDecisionMeta.length > 0"
-                      class="analysis-runtime-meta"
-                    >
-                      <span
-                        v-for="metaItem in reportDecisionMeta"
-                        :key="metaItem"
-                        class="analysis-token"
-                      >
-                        {{ metaItem }}
-                      </span>
-                    </div>
+          <template v-if="analysisViewMode === 'events'">
+            <div class="analysis-filter-row">
+              <button
+                v-for="filterOption in eventFilterOptions"
+                :key="filterOption.key"
+                type="button"
+                class="analysis-filter-chip"
+                :class="{ active: selectedEventFilter === filterOption.key }"
+                @click="selectFilter(filterOption.key)"
+              >
+                {{ filterOption.label }}
+              </button>
+            </div>
+
+            <div v-if="visibleEvents.length > 0" class="analysis-event-list">
+              <article
+                v-for="event in visibleEvents"
+                :key="event.event_id"
+                class="analysis-event-card"
+                :class="{ 'analysis-event-card--anchor': event.event_id === eventId }"
+              >
+                <div class="analysis-event-card__header">
+                  <p data-testid="analysis-event-title" class="analysis-event-card__title">
+                    {{ event.title }}
+                  </p>
+                  <span class="analysis-token analysis-token--confidence">
+                    {{ translateConfidence(event.confidence) }}
+                  </span>
+                </div>
+
+                <p class="analysis-event-card__meta">
+                  {{ formatDateTime(event.published_at) }} ·
+                  {{ event.source || t('analysisWorkbench.dataMissing') }}
+                </p>
+
+                <div class="analysis-event-card__tags">
+                  <span v-if="event.macro_topic" class="analysis-token">
+                    {{ event.macro_topic }}
+                  </span>
+                  <span class="analysis-token">
+                    {{ event.event_type || t('analysisWorkbench.noEventType') }}
+                  </span>
+                  <span class="analysis-token">
+                    {{ translateSentiment(event.sentiment_label) }}
+                  </span>
+                </div>
+
+                <div v-if="hasCorrelationMetric(event.correlation_score)" class="analysis-event-card__score">
+                  <div class="analysis-event-card__score-head">
+                    <span>{{ t('analysisWorkbench.correlation') }}</span>
+                    <strong>{{ getCorrelationPercent(event.correlation_score) }}/100</strong>
                   </div>
-                  <div class="analysis-pipeline__roles">
-                    <article
-                      v-for="role in pipelineRoles"
-                      :key="role.role_key"
-                      class="analysis-pipeline-card"
-                    >
-                      <div class="analysis-pipeline-card__header">
-                        <div>
-                          <strong>{{ role.role_label }}</strong>
-                          <p v-if="role.summary" class="analysis-factor-card__reason">{{ role.summary }}</p>
-                        </div>
-                        <span class="analysis-token">
-                          {{ translateRoleStatus(role.status) }}
-                        </span>
-                      </div>
-                      <div class="analysis-pipeline-card__meta">
-                        <span v-if="role.prompt_version" class="analysis-token">{{ role.prompt_version }}</span>
-                        <span v-if="role.model_name" class="analysis-token">{{ role.model_name }}</span>
-                        <span class="analysis-token">
-                          {{ t('analysisWorkbench.roleWebSearch') }} · {{ translateWebSearchStatus(role.web_search_status) }}
-                        </span>
-                      </div>
-                      <div v-if="role.output_payload && Object.keys(role.output_payload).length > 0" class="analysis-pipeline-card__body">
-                        <p class="analysis-pipeline-card__body-title">{{ t('analysisWorkbench.roleOutput') }}</p>
-                        <pre class="analysis-pipeline-card__payload">{{ JSON.stringify(role.output_payload, null, 2) }}</pre>
-                      </div>
-                    </article>
+                  <div class="analysis-score-bar">
+                    <span :style="{ width: `${getCorrelationPercent(event.correlation_score)}%` }" />
                   </div>
                 </div>
-              </template>
 
-              <template v-else-if="reportAvailable">
-                <p v-if="streaming" class="analysis-summary__hint">
-                  {{ streamingHint }}
-                </p>
-                <p v-if="needsFallbackHint" class="analysis-summary__hint">
-                  {{ t('analysisWorkbench.partialHint') }}
-                </p>
-                <p v-if="summary?.event_context_message" class="analysis-summary__hint">
-                  {{ summary.event_context_message }}
-                </p>
                 <div
-                  v-if="selectedReport?.structured_sources?.length"
-                  class="analysis-source-evidence"
+                  v-if="hasVisibleEvidenceMetricGroup && hasVisibleEvidenceMetrics(event)"
+                  class="analysis-event-card__stats"
                 >
-                  <span class="analysis-source-evidence__label">
-                    {{ t('analysisWorkbench.inputSourcesLabel') }}
-                  </span>
+                  <div v-if="visibleEvidenceMetricFlags.windowReturn && typeof event.window_return_pct === 'number'">
+                    <span>{{ t('analysisWorkbench.windowReturn') }}</span>
+                    <strong>{{ formatPercent(event.window_return_pct) }}</strong>
+                  </div>
+                  <div
+                    v-if="visibleEvidenceMetricFlags.windowVolatility && typeof event.window_volatility === 'number'"
+                  >
+                    <span>{{ t('analysisWorkbench.windowVolatility') }}</span>
+                    <strong>{{ formatMetricNumber(event.window_volatility) }}</strong>
+                  </div>
+                  <div
+                    v-if="visibleEvidenceMetricFlags.abnormalVolume && typeof event.abnormal_volume_ratio === 'number'"
+                  >
+                    <span>{{ t('analysisWorkbench.abnormalVolume') }}</span>
+                    <strong>{{ formatMetricNumber(event.abnormal_volume_ratio) }}</strong>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <p v-else class="analysis-empty-note">{{ emptyEventMessage }}</p>
+
+            <div v-if="hasMoreEvents || showAllEvents" class="analysis-factor__actions">
+              <el-button text @click="showAllEvents = !showAllEvents">
+                {{ showAllEvents ? t('analysisWorkbench.showLessEvents') : t('analysisWorkbench.showMoreEvents') }}
+              </el-button>
+            </div>
+          </template>
+
+          <template v-else-if="analysisViewMode === 'factors'">
+            <div v-if="visibleFactors.length > 0" class="analysis-factor-list analysis-factor-list--workspace">
+              <article
+                v-for="factor in visibleFactors"
+                :key="factor.factor_key"
+                class="analysis-factor-card"
+              >
+                <div class="analysis-factor-card__header">
+                  <div>
+                    <p class="analysis-factor-card__title">{{ factor.factor_label }}</p>
+                    <p class="analysis-factor-card__reason">{{ factor.reason }}</p>
+                  </div>
+                  <div class="analysis-factor-card__meta">
+                    <strong>{{ formatWeight(factor.weight) }}</strong>
+                    <span>{{ translateSentiment(factor.direction) }}</span>
+                  </div>
+                </div>
+
+                <div class="analysis-factor-card__bar">
+                  <span :style="{ width: `${Math.max(8, factor.weight * 100)}%` }" />
+                </div>
+
+                <div class="analysis-factor-card__evidence">
                   <span
-                    v-for="sourceItem in selectedReport.structured_sources"
+                    v-for="evidence in factor.evidence"
+                    :key="evidence"
+                    class="analysis-token"
+                  >
+                    {{ evidence }}
+                  </span>
+                </div>
+              </article>
+            </div>
+            <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noFactors') }}</p>
+
+            <div v-if="hasMoreFactors" class="analysis-factor__actions">
+              <el-button text @click="showAllFactors = !showAllFactors">
+                {{ showAllFactors ? t('analysisWorkbench.collapseFactors') : t('analysisWorkbench.expandFactors') }}
+              </el-button>
+            </div>
+          </template>
+
+          <template v-else-if="analysisViewMode === 'pipeline'">
+            <div v-if="hasPipelineRoles" class="analysis-pipeline">
+              <div class="analysis-pipeline__summary">
+                <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.pipelineTitle') }}</p>
+                <p class="analysis-summary__hint">{{ t('analysisWorkbench.pipelineSubtitle') }}</p>
+                <div
+                  v-if="reportDecisionMeta.length > 0"
+                  class="analysis-runtime-meta"
+                >
+                  <span
+                    v-for="metaItem in reportDecisionMeta"
+                    :key="metaItem"
+                    class="analysis-token"
+                  >
+                    {{ metaItem }}
+                  </span>
+                </div>
+              </div>
+              <div class="analysis-pipeline__roles">
+                <article
+                  v-for="role in pipelineRoles"
+                  :key="role.role_key"
+                  class="analysis-pipeline-card"
+                >
+                  <div class="analysis-pipeline-card__header">
+                    <div>
+                      <strong>{{ role.role_label }}</strong>
+                      <p v-if="role.summary" class="analysis-factor-card__reason">{{ role.summary }}</p>
+                    </div>
+                    <span class="analysis-token">
+                      {{ translateRoleStatus(role.status) }}
+                    </span>
+                  </div>
+                  <div class="analysis-pipeline-card__meta">
+                    <span v-if="role.prompt_version" class="analysis-token">{{ role.prompt_version }}</span>
+                    <span v-if="role.model_name" class="analysis-token">{{ role.model_name }}</span>
+                    <span class="analysis-token">
+                      {{ t('analysisWorkbench.roleWebSearch') }} · {{ translateWebSearchStatus(role.web_search_status) }}
+                    </span>
+                  </div>
+                  <div v-if="role.output_payload && Object.keys(role.output_payload).length > 0" class="analysis-pipeline-card__body">
+                    <button
+                      type="button"
+                      class="analysis-inline-toggle"
+                      @click="toggleRolePayload(role.role_key)"
+                    >
+                      {{ expandedRolePayloads[role.role_key] ? t('analysisWorkbench.rawOutputHide') : t('analysisWorkbench.rawOutputToggle') }}
+                    </button>
+                    <pre
+                      v-if="expandedRolePayloads[role.role_key]"
+                      class="analysis-pipeline-card__payload"
+                    >{{ JSON.stringify(role.output_payload, null, 2) }}</pre>
+                  </div>
+                </article>
+              </div>
+            </div>
+            <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.pipelineEmpty') }}</p>
+          </template>
+
+          <template v-else>
+            <div v-if="hasSourcesWorkspace" class="analysis-sources-workspace">
+              <section v-if="structuredSourceItems.length > 0" class="analysis-sources-section">
+                <p class="analysis-sources-section__title">{{ t('analysisWorkbench.inputSourcesLabel') }}</p>
+                <div class="analysis-source-evidence">
+                  <span
+                    v-for="sourceItem in structuredSourceItems"
                     :key="`${sourceItem.provider}-${sourceItem.count}`"
                     class="analysis-token"
                   >
                     {{ `${formatStructuredSourceProvider(sourceItem.provider) ?? 'source'} × ${sourceItem.count ?? 0}` }}
                   </span>
                 </div>
-                <div
-                  v-if="reportRuntimeMeta.length > 0"
-                  class="analysis-runtime-meta"
-                >
+              </section>
+
+              <section v-if="reportRuntimeMeta.length > 0" class="analysis-sources-section">
+                <p class="analysis-sources-section__title">{{ t('analysisWorkbench.reportMetaTitle') }}</p>
+                <div class="analysis-runtime-meta">
                   <span
                     v-for="metaItem in reportRuntimeMeta"
                     :key="metaItem"
@@ -1343,12 +1717,13 @@ watch(
                     {{ metaItem }}
                   </span>
                 </div>
-                <div
-                  v-if="selectedReport?.web_sources?.length"
-                  class="analysis-web-source-list"
-                >
+              </section>
+
+              <section v-if="webSourceItems.length > 0" class="analysis-sources-section">
+                <p class="analysis-sources-section__title">{{ t('analysisWorkbench.sourcesView') }}</p>
+                <div class="analysis-web-source-list">
                   <a
-                    v-for="webSource in selectedReport.web_sources"
+                    v-for="webSource in webSourceItems"
                     :key="`${webSource.url ?? webSource.title}-${webSource.published_at ?? ''}`"
                     class="analysis-web-source-item"
                     :href="webSource.url"
@@ -1368,207 +1743,48 @@ watch(
                     <span v-if="webSource.snippet">{{ webSource.snippet }}</span>
                   </a>
                 </div>
-                <MarkdownContent :source="activeSummaryMarkdown" />
-              </template>
-
-              <template v-else-if="withoutReport">
-                <p v-if="streaming" class="analysis-summary__hint">{{ streamingHint }}</p>
-                <p class="analysis-summary__pending-title">{{ t('analysisWorkbench.pendingTitle') }}</p>
-                <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
-              </template>
-
-              <template v-else>
-                <p v-if="streaming" class="analysis-summary__hint">{{ streamingHint }}</p>
-                <p class="analysis-summary__body">{{ t('analysisWorkbench.pendingDesc') }}</p>
-              </template>
+              </section>
+            </div>
+            <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.sourcesEmpty') }}</p>
+          </template>
             </el-card>
 
-            <el-card class="analysis-panel">
-              <div class="analysis-panel__header">
-                <div>
-                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.historyTitle') }}</p>
-                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.historyTitle') }}</h2>
-                </div>
-              </div>
-
-              <div v-if="reportArchives.length > 0" class="analysis-history-list">
-                <button
-                  v-for="reportItem in reportArchives"
-                  :key="reportItem.id ?? reportItem.generated_at"
-                  type="button"
-                  class="analysis-history-item"
-                  :class="{ active: selectedReportId === reportItem.id }"
-                  @click="selectReport(reportItem.id)"
-                >
-                  <strong>{{ formatDateTime(reportItem.generated_at) }}</strong>
-                  <span>{{ translateTriggerSource(reportItem.trigger_source) }}</span>
-                </button>
-              </div>
-              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.historyEmpty') }}</p>
-            </el-card>
-
-            <el-card class="analysis-panel">
-              <div class="analysis-panel__header">
-                <div>
-                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.factorHeading') }}</p>
-                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.factorSubtitle') }}</h2>
-                </div>
-                <span class="analysis-panel__meta">
-                  {{ t('analysisWorkbench.metricTopFactor') }}
-                </span>
-              </div>
-
-              <div v-if="visibleFactors.length > 0" class="analysis-factor-list">
-                <article
-                  v-for="factor in visibleFactors"
-                  :key="factor.factor_key"
-                  class="analysis-factor-card"
-                >
-                  <div class="analysis-factor-card__header">
-                    <div>
-                      <p class="analysis-factor-card__title">{{ factor.factor_label }}</p>
-                      <p class="analysis-factor-card__reason">{{ factor.reason }}</p>
-                    </div>
-                    <div class="analysis-factor-card__meta">
-                      <strong>{{ formatWeight(factor.weight) }}</strong>
-                      <span>{{ translateSentiment(factor.direction) }}</span>
-                    </div>
+            <section
+              v-if="hasHistoricalReports"
+              class="analysis-history-section"
+              data-testid="analysis-history-section"
+            >
+              <el-card class="analysis-panel">
+                <div class="analysis-panel__header">
+                  <div>
+                    <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.historyTitle') }}</p>
+                    <h2 class="analysis-panel__title">{{ t('analysisWorkbench.historyTitle') }}</h2>
                   </div>
-
-                  <div class="analysis-factor-card__bar">
-                    <span :style="{ width: `${Math.max(8, factor.weight * 100)}%` }" />
-                  </div>
-
-                  <div class="analysis-factor-card__evidence">
-                    <span
-                      v-for="evidence in factor.evidence"
-                      :key="evidence"
-                      class="analysis-token"
-                    >
-                      {{ evidence }}
-                    </span>
-                  </div>
-                </article>
-              </div>
-              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noFactors') }}</p>
-
-              <div v-if="hasMoreFactors" class="analysis-factor__actions">
-                <el-button text @click="showAllFactors = !showAllFactors">
-                  {{ showAllFactors ? t('analysisWorkbench.collapseFactors') : t('analysisWorkbench.expandFactors') }}
-                </el-button>
-              </div>
-            </el-card>
-
-            <el-card class="analysis-panel">
-              <div class="analysis-panel__header">
-                <div>
-                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.riskHeading') }}</p>
-                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.riskSubtitle') }}</h2>
                 </div>
-              </div>
 
-              <ul v-if="selectedReport?.risk_points?.length" class="analysis-risk-list">
-                <li v-for="point in selectedReport?.risk_points" :key="point">
-                  {{ point }}
-                </li>
-              </ul>
-              <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.noRisks') }}</p>
-            </el-card>
-          </div>
-
-          <div class="analysis-side">
-            <el-card class="analysis-panel analysis-panel--sticky">
-              <div class="analysis-panel__header">
-                <div>
-                  <p class="analysis-panel__eyebrow">{{ t('analysisWorkbench.eventsHeading') }}</p>
-                  <h2 class="analysis-panel__title">{{ t('analysisWorkbench.eventsSubtitle') }}</h2>
-                </div>
-                <span class="analysis-panel__meta">
-                  {{ filteredEvents.length }} / {{ activeEvidenceTotal }}
-                </span>
-              </div>
-
-              <div class="analysis-filter-row">
-                <button
-                  v-for="filterOption in eventFilterOptions"
-                  :key="filterOption.key"
-                  type="button"
-                  class="analysis-filter-chip"
-                  :class="{ active: selectedEventFilter === filterOption.key }"
-                  @click="selectFilter(filterOption.key)"
-                >
-                  {{ filterOption.label }}
-                </button>
-              </div>
-
-              <div v-if="filteredEvents.length > 0" class="analysis-event-list">
-                <article
-                  v-for="event in filteredEvents"
-                  :key="event.event_id"
-                  class="analysis-event-card"
-                  :class="{ 'analysis-event-card--anchor': event.event_id === eventId }"
-                >
-                  <div class="analysis-event-card__header">
-                    <p data-testid="analysis-event-title" class="analysis-event-card__title">
-                      {{ event.title }}
-                    </p>
-                    <span class="analysis-token analysis-token--confidence">
-                      {{ translateConfidence(event.confidence) }}
-                    </span>
-                  </div>
-
-                  <p class="analysis-event-card__meta">
-                    {{ formatDateTime(event.published_at) }} ·
-                    {{ event.source || t('analysisWorkbench.dataMissing') }}
+                <div v-if="selectedReport" class="analysis-history-spotlight">
+                  <span class="analysis-overview__label">{{ t('analysisWorkbench.generatedAt') }}</span>
+                  <strong class="analysis-overview__value">{{ formatDateTime(selectedReport.generated_at) }}</strong>
+                  <p class="analysis-history-spotlight__meta">
+                    {{ translateTriggerSource(selectedReport.trigger_source) }} · {{ displayStatus }}
                   </p>
+                </div>
 
-                  <div class="analysis-event-card__tags">
-                    <span v-if="event.macro_topic" class="analysis-token">
-                      {{ event.macro_topic }}
-                    </span>
-                    <span class="analysis-token">
-                      {{ event.event_type || t('analysisWorkbench.noEventType') }}
-                    </span>
-                    <span class="analysis-token">
-                      {{ translateSentiment(event.sentiment_label) }}
-                    </span>
-                  </div>
-
-                  <div v-if="hasCorrelationMetric(event.correlation_score)" class="analysis-event-card__score">
-                    <div class="analysis-event-card__score-head">
-                      <span>{{ t('analysisWorkbench.correlation') }}</span>
-                      <strong>{{ getCorrelationPercent(event.correlation_score) }}/100</strong>
-                    </div>
-                    <div class="analysis-score-bar">
-                      <span :style="{ width: `${getCorrelationPercent(event.correlation_score)}%` }" />
-                    </div>
-                  </div>
-
-                  <div
-                    v-if="hasVisibleEvidenceMetricGroup && hasVisibleEvidenceMetrics(event)"
-                    class="analysis-event-card__stats"
+                <div class="analysis-history-list">
+                  <button
+                    v-for="reportItem in reportArchives"
+                    :key="reportItem.id ?? reportItem.generated_at"
+                    type="button"
+                    class="analysis-history-item"
+                    :class="{ active: selectedReportId === reportItem.id }"
+                    @click="selectReport(reportItem.id)"
                   >
-                    <div v-if="visibleEvidenceMetricFlags.windowReturn && typeof event.window_return_pct === 'number'">
-                      <span>{{ t('analysisWorkbench.windowReturn') }}</span>
-                      <strong>{{ formatPercent(event.window_return_pct) }}</strong>
-                    </div>
-                    <div
-                      v-if="visibleEvidenceMetricFlags.windowVolatility && typeof event.window_volatility === 'number'"
-                    >
-                      <span>{{ t('analysisWorkbench.windowVolatility') }}</span>
-                      <strong>{{ formatMetricNumber(event.window_volatility) }}</strong>
-                    </div>
-                    <div
-                      v-if="visibleEvidenceMetricFlags.abnormalVolume && typeof event.abnormal_volume_ratio === 'number'"
-                    >
-                      <span>{{ t('analysisWorkbench.abnormalVolume') }}</span>
-                      <strong>{{ formatMetricNumber(event.abnormal_volume_ratio) }}</strong>
-                    </div>
-                  </div>
-                </article>
-              </div>
-              <p v-else class="analysis-empty-note">{{ emptyEventMessage }}</p>
-            </el-card>
+                    <strong>{{ formatDateTime(reportItem.generated_at) }}</strong>
+                    <span>{{ translateTriggerSource(reportItem.trigger_source) }}</span>
+                  </button>
+                </div>
+              </el-card>
+            </section>
           </div>
         </div>
       </div>
@@ -1589,10 +1805,8 @@ watch(
 .analysis-panel {
   border-radius: 18px;
   border: 1px solid rgba(123, 197, 255, 0.12);
-  background:
-    linear-gradient(165deg, rgba(15, 23, 38, 0.98), rgba(9, 14, 24, 0.98)),
-    rgba(8, 14, 25, 0.95);
-  box-shadow: 0 20px 44px rgba(2, 8, 18, 0.28);
+  background: var(--terminal-card-strong-bg);
+  box-shadow: var(--terminal-shadow);
 }
 
 .analysis-empty,
@@ -1611,20 +1825,24 @@ watch(
   margin: 0;
   font-size: 1.28rem;
   font-weight: 600;
-  color: #eef6ff;
+  color: var(--terminal-text);
+}
+
+.analysis-panel__meta,
+.analysis-hero__generated,
+.analysis-hero__code,
+.analysis-event-card__stats span,
+.analysis-overview__label {
+  color: var(--terminal-text-secondary);
 }
 
 .analysis-empty__desc,
 .analysis-error__desc,
 .analysis-empty-note,
-.analysis-panel__meta,
-.analysis-hero__generated,
-.analysis-hero__code,
 .analysis-factor-card__reason,
-.analysis-event-card__meta,
-.analysis-event-card__stats span,
-.analysis-overview__label {
-  color: color-mix(in srgb, var(--terminal-muted) 80%, white 20%);
+.analysis-summary__body,
+.analysis-web-source-item {
+  color: var(--terminal-text-body);
 }
 
 .analysis-empty__actions,
@@ -1670,16 +1888,13 @@ watch(
   font-size: 0.76rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--terminal-primary) 84%, white 16%);
+  color: var(--terminal-primary);
 }
 
 .analysis-hero {
   padding: 1.2rem;
   overflow: hidden;
-  background:
-    radial-gradient(circle at top right, rgba(123, 197, 255, 0.12), transparent 36%),
-    radial-gradient(circle at bottom left, rgba(87, 184, 255, 0.08), transparent 28%),
-    linear-gradient(165deg, rgba(15, 23, 38, 0.98), rgba(8, 14, 25, 0.98));
+  background: var(--terminal-hero-bg);
 }
 
 .analysis-hero__header {
@@ -1705,7 +1920,7 @@ watch(
 .analysis-hero__title {
   margin: 0;
   font-size: clamp(1.62rem, 2.8vw, 2.3rem);
-  color: #f5fbff;
+  color: var(--terminal-text);
 }
 
 .analysis-hero__code,
@@ -1722,25 +1937,28 @@ watch(
   padding: 0.38rem 0.8rem;
   border-radius: 999px;
   border: 1px solid rgba(123, 197, 255, 0.18);
-  background: rgba(10, 18, 29, 0.85);
-  color: #eef6ff;
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
+  color: var(--terminal-text);
   white-space: nowrap;
-  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.08);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terminal-primary) 10%, transparent);
 }
 
 .analysis-status-pill[data-status='ready'] {
-  color: #9ff4c2;
-  border-color: rgba(18, 183, 106, 0.35);
+  color: color-mix(in srgb, var(--terminal-success) 84%, var(--terminal-text-primary) 16%);
+  border-color: color-mix(in srgb, var(--terminal-success) 34%, transparent);
+  background: color-mix(in srgb, var(--terminal-success) 10%, var(--terminal-panel) 90%);
 }
 
 .analysis-status-pill[data-status='partial'] {
-  color: #ffd58a;
-  border-color: rgba(247, 181, 0, 0.32);
+  color: color-mix(in srgb, var(--terminal-warning) 84%, var(--terminal-text-primary) 16%);
+  border-color: color-mix(in srgb, var(--terminal-warning) 32%, transparent);
+  background: color-mix(in srgb, var(--terminal-warning) 10%, var(--terminal-panel) 90%);
 }
 
 .analysis-status-pill[data-status='pending'] {
-  color: #a8d5ff;
-  border-color: rgba(123, 197, 255, 0.28);
+  color: color-mix(in srgb, var(--terminal-primary) 82%, var(--terminal-text-primary) 18%);
+  border-color: color-mix(in srgb, var(--terminal-primary) 30%, transparent);
+  background: color-mix(in srgb, var(--terminal-primary) 10%, var(--terminal-panel) 90%);
 }
 
 .analysis-hero__context {
@@ -1757,8 +1975,8 @@ watch(
   padding: 0.2rem 0.6rem;
   border-radius: 999px;
   border: 1px solid rgba(123, 197, 255, 0.16);
-  background: rgba(8, 14, 25, 0.76);
-  color: color-mix(in srgb, var(--terminal-primary) 88%, white 12%);
+  background: var(--terminal-chip-bg);
+  color: var(--terminal-primary);
   font-size: 0.74rem;
 }
 
@@ -1777,8 +1995,8 @@ watch(
   min-width: 0;
   border: 1px solid rgba(123, 197, 255, 0.12);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(10, 18, 32, 0.88), rgba(8, 14, 25, 0.74));
-  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.05);
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terminal-primary) 5%, transparent);
 }
 
 .analysis-hero__action-cluster {
@@ -1789,10 +2007,10 @@ watch(
   min-width: 0;
   border: 1px solid rgba(123, 197, 255, 0.1);
   border-radius: 18px;
-  background: rgba(8, 14, 25, 0.72);
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
   box-shadow:
-    inset 0 0 0 1px rgba(123, 197, 255, 0.04),
-    0 12px 32px rgba(0, 0, 0, 0.14);
+    inset 0 0 0 1px color-mix(in srgb, var(--terminal-primary) 4%, transparent),
+    0 12px 32px color-mix(in srgb, var(--terminal-primary) 8%, transparent);
 }
 
 .analysis-hero__action-rail {
@@ -1818,7 +2036,7 @@ watch(
   width: 100%;
   min-width: 0;
   gap: 0.7rem;
-  color: #d9e8f7;
+  color: var(--terminal-text-body);
 }
 
 .analysis-switch__copy {
@@ -1850,7 +2068,7 @@ watch(
   margin: 0;
   font-size: 0.78rem;
   line-height: 1.55;
-  color: color-mix(in srgb, var(--terminal-primary) 62%, white 38%);
+  color: var(--terminal-text-secondary);
 }
 
 .analysis-action-btn {
@@ -1864,39 +2082,39 @@ watch(
 }
 
 .analysis-action-btn--primary {
-  box-shadow: 0 10px 24px rgba(64, 158, 255, 0.2);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--terminal-primary) 24%, transparent);
 }
 
 .analysis-action-btn--outline.el-button.is-plain {
   border-color: rgba(123, 197, 255, 0.18);
-  background: rgba(10, 18, 32, 0.72);
-  color: #eef6ff;
+  background: var(--terminal-outline-bg);
+  color: var(--terminal-text-body);
   box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.05);
 }
 
 .analysis-action-btn--outline.el-button.is-plain:hover,
 .analysis-action-btn--outline.el-button.is-plain:focus-visible {
   border-color: rgba(123, 197, 255, 0.34);
-  background: rgba(20, 34, 56, 0.9);
-  color: #f5fbff;
+  background: var(--terminal-outline-hover-bg);
+  color: var(--terminal-text-primary);
 }
 
 .analysis-action-btn--outline.el-button.is-plain:active {
   border-color: rgba(87, 184, 255, 0.42);
-  background: rgba(16, 28, 47, 0.96);
+  background: var(--terminal-outline-active-bg);
 }
 
 .analysis-action-btn--outline.el-button.is-disabled,
 .analysis-action-btn--outline.el-button.is-plain.is-disabled {
   border-color: rgba(123, 197, 255, 0.12);
-  background: rgba(10, 18, 32, 0.42);
-  color: rgba(238, 246, 255, 0.52);
+  background: var(--terminal-outline-disabled-bg);
+  color: var(--terminal-outline-disabled-text);
 }
 
 .analysis-overview {
   margin-top: 1rem;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
 }
 
@@ -1906,7 +2124,31 @@ watch(
   padding: 0.78rem 0.85rem;
   border-radius: 14px;
   border: 1px solid rgba(123, 197, 255, 0.08);
-  background: rgba(8, 14, 25, 0.72);
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
+}
+
+.analysis-overview__item--wide {
+  grid-column: 1 / -1;
+}
+
+.analysis-decision-glance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.95rem;
+}
+
+.analysis-decision-glance__item {
+  display: grid;
+  gap: 0.36rem;
+  padding: 0.9rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(123, 197, 255, 0.1);
+  background: color-mix(in srgb, var(--terminal-panel) 94%, var(--terminal-surface) 6%);
+}
+
+.analysis-decision-glance__item--wide {
+  grid-column: 1 / -1;
 }
 
 .analysis-view-toggle {
@@ -1916,6 +2158,11 @@ watch(
   margin-bottom: 0.9rem;
 }
 
+.analysis-view-toggle--workspace {
+  padding-bottom: 0.15rem;
+  border-bottom: 1px solid rgba(123, 197, 255, 0.08);
+}
+
 .analysis-pipeline {
   display: grid;
   gap: 1rem;
@@ -1923,6 +2170,7 @@ watch(
 
 .analysis-pipeline__roles {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.9rem;
 }
 
@@ -1932,7 +2180,8 @@ watch(
   padding: 0.95rem 1rem;
   border-radius: 16px;
   border: 1px solid rgba(123, 197, 255, 0.12);
-  background: rgba(8, 14, 25, 0.66);
+  background: color-mix(in srgb, var(--terminal-panel) 94%, var(--terminal-surface) 6%);
+  box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.04);
 }
 
 .analysis-pipeline-card__header {
@@ -1953,10 +2202,24 @@ watch(
   gap: 0.45rem;
 }
 
-.analysis-pipeline-card__body-title {
-  margin: 0;
-  font-size: 0.82rem;
-  color: color-mix(in srgb, var(--terminal-primary) 72%, white 28%);
+.analysis-inline-toggle {
+  justify-self: flex-start;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(123, 197, 255, 0.16);
+  background: var(--terminal-chip-bg);
+  color: var(--terminal-primary);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.analysis-inline-toggle:hover,
+.analysis-inline-toggle:focus-visible {
+  border-color: rgba(123, 197, 255, 0.3);
+  background: var(--terminal-chip-hover-bg);
+  color: var(--terminal-text-primary);
 }
 
 .analysis-pipeline-card__payload {
@@ -1965,8 +2228,8 @@ watch(
   overflow-x: auto;
   border-radius: 12px;
   border: 1px solid rgba(123, 197, 255, 0.1);
-  background: rgba(6, 11, 20, 0.92);
-  color: #d7e6f5;
+  background: var(--terminal-code-bg);
+  color: var(--terminal-code-text);
   font-size: 0.78rem;
   line-height: 1.55;
   font-family: 'IBM Plex Mono', monospace;
@@ -1975,31 +2238,58 @@ watch(
 }
 
 .analysis-overview__value {
-  color: #f5fbff;
+  color: var(--terminal-text-primary);
   font-size: 1rem;
   line-height: 1.35;
 }
 
 .analysis-content {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.95fr);
-  gap: 1rem;
-  align-items: start;
+  gap: 1.1rem;
 }
 
 .analysis-main,
-.analysis-side {
+.analysis-history-section {
   display: grid;
   gap: 1rem;
 }
 
-.analysis-panel {
-  padding: 1rem;
+.analysis-decision-layout {
+  display: grid;
+  gap: 1rem;
 }
 
-.analysis-panel--sticky {
-  position: sticky;
-  top: 1rem;
+.analysis-decision-side {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.analysis-panel--wide {
+  grid-column: 1 / -1;
+}
+
+.analysis-panel {
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.analysis-panel--summary,
+.analysis-panel--workspace,
+.analysis-panel--spotlight {
+  position: relative;
+  background: var(--terminal-card-muted-bg);
+}
+
+.analysis-panel--summary {
+  min-height: 100%;
+}
+
+.analysis-panel--workspace {
+  border-color: rgba(123, 197, 255, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(123, 197, 255, 0.04),
+    0 18px 40px color-mix(in srgb, var(--terminal-primary) 10%, transparent);
 }
 
 .analysis-panel__header {
@@ -2012,7 +2302,7 @@ watch(
 
 .analysis-panel__title {
   margin: 0;
-  color: #f5fbff;
+  color: var(--terminal-text);
   font-size: 1.05rem;
 }
 
@@ -2021,8 +2311,8 @@ watch(
   padding: 0.7rem 0.8rem;
   border-radius: 12px;
   border: 1px solid rgba(247, 181, 0, 0.18);
-  background: rgba(53, 38, 7, 0.34);
-  color: #ffd58a;
+  background: color-mix(in srgb, var(--terminal-warning) 10%, var(--terminal-panel) 90%);
+  color: color-mix(in srgb, var(--terminal-warning) 84%, var(--terminal-text) 16%);
 }
 
 .analysis-source-evidence {
@@ -2033,7 +2323,7 @@ watch(
 }
 
 .analysis-source-evidence__label {
-  color: var(--terminal-text-soft);
+  color: var(--terminal-text-body);
   font-size: 0.82rem;
 }
 
@@ -2044,9 +2334,31 @@ watch(
   flex-wrap: wrap;
 }
 
+.analysis-sources-workspace {
+  display: grid;
+  gap: 1rem;
+}
+
+.analysis-sources-section {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem;
+  border-radius: 16px;
+  border: 1px solid rgba(123, 197, 255, 0.1);
+  background: color-mix(in srgb, var(--terminal-panel) 92%, var(--terminal-surface) 8%);
+}
+
+.analysis-sources-section__title {
+  margin: 0;
+  color: var(--terminal-text);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .analysis-web-source-list {
   margin-bottom: 0.8rem;
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.6rem;
 }
 
@@ -2056,32 +2368,44 @@ watch(
   padding: 0.75rem 0.85rem;
   border-radius: 12px;
   border: 1px solid rgba(123, 197, 255, 0.14);
-  background: rgba(8, 14, 25, 0.58);
-  color: #d9e8f7;
+  background: color-mix(in srgb, var(--terminal-panel) 94%, var(--terminal-surface) 6%);
+  color: color-mix(in srgb, var(--terminal-text) 82%, var(--terminal-muted) 18%);
   text-decoration: none;
 }
 
 .analysis-web-source-item strong {
-  color: #f5fbff;
+  color: var(--terminal-text);
+}
+
+.analysis-web-source-item span {
+  color: var(--terminal-text-body);
 }
 
 .analysis-summary__body {
   margin: 0;
-  color: #e7f0fb;
   line-height: 1.8;
   font-size: 0.98rem;
 }
 
 .analysis-summary__pending-title {
   margin: 0 0 0.4rem;
-  color: #f5fbff;
+  color: var(--terminal-text);
   font-weight: 600;
 }
 
 .analysis-factor-list,
-.analysis-event-list,
 .analysis-history-list {
   display: grid;
+  gap: 0.75rem;
+}
+
+.analysis-factor-list--workspace {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analysis-event-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
 }
 
@@ -2090,8 +2414,12 @@ watch(
 .analysis-event-card {
   border-radius: 14px;
   border: 1px solid rgba(123, 197, 255, 0.08);
-  background: rgba(8, 14, 25, 0.64);
+  background: color-mix(in srgb, var(--terminal-panel) 94%, var(--terminal-surface) 6%);
   padding: 0.82rem 0.88rem;
+}
+
+.analysis-factor-card--compact {
+  padding: 0.88rem;
 }
 
 .analysis-event-card--anchor {
@@ -2103,12 +2431,33 @@ watch(
   display: grid;
   gap: 0.24rem;
   text-align: left;
-  color: #f5fbff;
+  color: var(--terminal-text);
   cursor: pointer;
+}
+
+.analysis-history-item span {
+  color: var(--terminal-text-body);
 }
 
 .analysis-history-item.active {
   border-color: rgba(123, 197, 255, 0.32);
+  background: color-mix(in srgb, var(--terminal-primary) 14%, var(--terminal-panel) 86%);
+}
+
+.analysis-history-spotlight {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+  padding: 0.85rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(123, 197, 255, 0.1);
+  background: color-mix(in srgb, var(--terminal-panel) 94%, var(--terminal-surface) 6%);
+}
+
+.analysis-history-spotlight__meta {
+  margin: 0;
+  color: var(--terminal-text-body);
+  font-size: 0.82rem;
 }
 
 .analysis-factor-card__header,
@@ -2123,7 +2472,7 @@ watch(
 .analysis-factor-card__title,
 .analysis-event-card__title {
   margin: 0;
-  color: #f5fbff;
+  color: var(--terminal-text);
   font-weight: 600;
 }
 
@@ -2131,13 +2480,14 @@ watch(
 .analysis-event-card__meta {
   margin: 0.25rem 0 0;
   font-size: 0.84rem;
+  color: var(--terminal-text-body);
 }
 
 .analysis-factor-card__meta {
   display: grid;
   justify-items: end;
   gap: 0.2rem;
-  color: #e7f0fb;
+  color: var(--terminal-text-secondary);
   text-align: right;
 }
 
@@ -2146,7 +2496,7 @@ watch(
   margin-top: 0.78rem;
   height: 0.48rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--terminal-progress-track);
   overflow: hidden;
 }
 
@@ -2155,7 +2505,7 @@ watch(
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(87, 184, 255, 0.95), rgba(123, 197, 255, 0.55));
+  background: var(--terminal-progress-fill);
 }
 
 .analysis-factor-card__evidence,
@@ -2183,18 +2533,25 @@ watch(
   border: 1px solid rgba(123, 197, 255, 0.12);
   border-radius: 999px;
   padding: 0.32rem 0.68rem;
-  background: rgba(9, 16, 29, 0.84);
-  color: #d9e8f7;
+  background: var(--terminal-chip-bg);
+  color: var(--terminal-text-body);
   cursor: pointer;
   transition: 0.2s ease;
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.74rem;
 }
 
+.analysis-filter-chip:hover,
+.analysis-filter-chip:focus-visible {
+  border-color: rgba(123, 197, 255, 0.24);
+  background: var(--terminal-chip-hover-bg);
+  color: var(--terminal-text-primary);
+}
+
 .analysis-filter-chip.active {
-  background: linear-gradient(120deg, rgba(87, 184, 255, 0.2), rgba(123, 197, 255, 0.08));
+  background: var(--terminal-chip-active-bg);
   border-color: rgba(123, 197, 255, 0.3);
-  color: #f5fbff;
+  color: var(--terminal-text-primary);
 }
 
 .analysis-event-card__score {
@@ -2215,7 +2572,7 @@ watch(
 
 .analysis-event-card__stats strong,
 .analysis-event-card__score-head strong {
-  color: #f5fbff;
+  color: var(--terminal-text-primary);
 }
 
 .analysis-risk-list {
@@ -2229,12 +2586,12 @@ watch(
 .analysis-risk-list li {
   border-left: 2px solid rgba(247, 181, 0, 0.72);
   padding-left: 0.75rem;
-  color: #eef6ff;
+  color: var(--terminal-text-body);
   line-height: 1.6;
 }
 
 .analysis-token--confidence {
-  color: #eef6ff;
+  color: var(--terminal-text-primary);
 }
 
 @media (max-width: 1040px) {
@@ -2242,12 +2599,8 @@ watch(
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .analysis-content {
+  .analysis-decision-side {
     grid-template-columns: 1fr;
-  }
-
-  .analysis-panel--sticky {
-    position: static;
   }
 }
 
@@ -2286,6 +2639,21 @@ watch(
   }
 
   .analysis-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-decision-glance {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-decision-side,
+  .analysis-event-list,
+  .analysis-factor-list--workspace,
+  .analysis-pipeline__roles {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-web-source-list {
     grid-template-columns: 1fr;
   }
 
