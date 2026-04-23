@@ -42,5 +42,5 @@ docs/*.docx
 .VSCodeCounter/
 
 
-./PROGRESS.md
 ./AGENTS.md
+PROGRESS.md
