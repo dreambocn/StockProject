@@ -3,8 +3,10 @@ import json
 
 from app.schemas.stocks import StockDailySnapshotResponse
 from app.services.stock_cache_service import (
+    _singleflight_locks,
     get_singleflight_lock,
     read_cached_model_rows,
+    singleflight_lock,
     write_cached_model_rows,
 )
 
@@ -47,6 +49,40 @@ def test_singleflight_lock_reused_for_same_key() -> None:
 
         assert lock_a is lock_b
         assert lock_a is not lock_c
+
+    asyncio.run(_run())
+
+
+def test_singleflight_lock_context_cleans_idle_key() -> None:
+    async def _run() -> None:
+        _singleflight_locks.clear()
+
+        async with singleflight_lock("stocks:daily:cleanup"):
+            assert "stocks:daily:cleanup" in _singleflight_locks
+
+        assert "stocks:daily:cleanup" not in _singleflight_locks
+
+    asyncio.run(_run())
+
+
+def test_singleflight_lock_context_serializes_same_key_and_cleans_after_waiters() -> None:
+    async def _run() -> None:
+        _singleflight_locks.clear()
+        active_count = 0
+        max_active_count = 0
+
+        async def run_locked() -> None:
+            nonlocal active_count, max_active_count
+            async with singleflight_lock("stocks:daily:shared"):
+                active_count += 1
+                max_active_count = max(max_active_count, active_count)
+                await asyncio.sleep(0.01)
+                active_count -= 1
+
+        await asyncio.gather(run_locked(), run_locked(), run_locked())
+
+        assert max_active_count == 1
+        assert "stocks:daily:shared" not in _singleflight_locks
 
     asyncio.run(_run())
 

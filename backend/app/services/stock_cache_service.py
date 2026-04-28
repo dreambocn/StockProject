@@ -14,8 +14,29 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 RedisClientGetter = Callable[[], Any]
 
 _singleflight_lock_guard = asyncio.Lock()
-_singleflight_locks: dict[str, asyncio.Lock] = {}
+_singleflight_locks: dict[str, "_SingleflightLockState"] = {}
 LOGGER = get_logger(__name__)
+
+
+class _SingleflightLockState:
+    def __init__(self, cache_key: str) -> None:
+        self.cache_key = cache_key
+        self._lock = asyncio.Lock()
+        self._user_count = 0
+
+    async def __aenter__(self) -> "_SingleflightLockState":
+        async with _singleflight_lock_guard:
+            self._user_count += 1
+        await self._lock.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        self._lock.release()
+        async with _singleflight_lock_guard:
+            self._user_count -= 1
+            if self._user_count == 0 and _singleflight_locks.get(self.cache_key) is self:
+                # 锁空闲后立即回收，避免带参数缓存键长期驻留进程内存。
+                _singleflight_locks.pop(self.cache_key, None)
 
 
 def _log_cache_warning(*, cache_key: str, operation: str, error: Exception) -> None:
@@ -27,14 +48,33 @@ def _log_cache_warning(*, cache_key: str, operation: str, error: Exception) -> N
     )
 
 
-async def get_singleflight_lock(cache_key: str) -> asyncio.Lock:
+class _SingleflightLockContext:
+    def __init__(self, cache_key: str) -> None:
+        self.cache_key = cache_key
+        self._state: _SingleflightLockState | None = None
+
+    async def __aenter__(self) -> _SingleflightLockState:
+        state = await get_singleflight_lock(self.cache_key)
+        self._state = state
+        return await state.__aenter__()
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        if self._state is not None:
+            await self._state.__aexit__(exc_type, exc, traceback)
+
+
+def singleflight_lock(cache_key: str) -> _SingleflightLockContext:
     # 单飞锁避免同一 cache_key 并发回源，保护三方配额与数据库压力。
+    return _SingleflightLockContext(cache_key)
+
+
+async def get_singleflight_lock(cache_key: str) -> _SingleflightLockState:
     async with _singleflight_lock_guard:
-        existing_lock = _singleflight_locks.get(cache_key)
-        if existing_lock is None:
-            existing_lock = asyncio.Lock()
-            _singleflight_locks[cache_key] = existing_lock
-        return existing_lock
+        state = _singleflight_locks.get(cache_key)
+        if state is None:
+            state = _SingleflightLockState(cache_key)
+            _singleflight_locks[cache_key] = state
+        return state
 
 
 async def read_cached_model_rows(

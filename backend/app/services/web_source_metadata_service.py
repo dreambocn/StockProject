@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 import hashlib
+import asyncio
 import json
 import re
 from typing import Any
@@ -20,6 +21,7 @@ DOMAIN_SOURCE_MAP: dict[str, str] = {
     "stcn.com": "证券时报",
     "cninfo.com.cn": "巨潮资讯",
 }
+DEFAULT_METADATA_FETCH_CONCURRENCY = 3
 
 
 def _normalize_domain(url: str | None) -> str | None:
@@ -251,6 +253,48 @@ async def _upsert_metadata_cache(
     return row
 
 
+async def _fetch_source_metadata(
+    *,
+    client: httpx.AsyncClient,
+    raw_source: dict[str, Any],
+    normalized_url: str,
+    domain: str | None,
+    max_bytes: int,
+) -> dict[str, Any]:
+    metadata = {
+        "resolved_title": None,
+        "resolved_source": _resolve_source_from_domain(domain),
+        "resolved_domain": domain,
+        "resolved_published_at": None,
+        "metadata_status": "unavailable",
+    }
+
+    try:
+        response = await client.get(normalized_url)
+        content_type = str(response.headers.get("content-type", "")).lower()
+        if response.status_code >= 400:
+            raise RuntimeError(f"unexpected status: {response.status_code}")
+        if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+            # 非 HTML 资源不解析正文，直接回退为域名来源。
+            raise RuntimeError("non-html response")
+
+        content_bytes = response.content[:max_bytes]
+        html = content_bytes.decode(response.encoding or "utf-8", errors="ignore")
+        metadata = _extract_page_metadata(html, domain)
+    except Exception:
+        if domain:
+            # 失败时回退为域名来源，避免返回空对象。
+            metadata = {
+                "resolved_title": raw_source.get("title"),
+                "resolved_source": _resolve_source_from_domain(domain),
+                "resolved_domain": domain,
+                "resolved_published_at": None,
+                "metadata_status": "unavailable",
+            }
+
+    return metadata
+
+
 def _merge_source_item(
     raw_source: dict[str, Any],
     *,
@@ -283,6 +327,7 @@ async def enrich_web_sources(
     success_ttl_seconds: int = 86400,
     failure_ttl_seconds: int = 7200,
     max_bytes: int = 1024 * 512,
+    fetch_concurrency: int = DEFAULT_METADATA_FETCH_CONCURRENCY,
 ) -> list[dict[str, Any]]:
     now = datetime.now(UTC)
     owns_client = http_client is None
@@ -296,12 +341,13 @@ async def enrich_web_sources(
     )
 
     try:
-        enriched_sources: list[dict[str, Any]] = []
-        for raw_source in raw_sources:
+        enriched_sources: list[dict[str, Any] | None] = [None] * len(raw_sources)
+        fetch_jobs: list[tuple[int, dict[str, Any], str, str | None, str]] = []
+        for index, raw_source in enumerate(raw_sources):
             normalized_url = _normalize_url(str(raw_source.get("url") or ""))
             domain = _normalize_domain(normalized_url)
             if not normalized_url:
-                enriched_sources.append(
+                enriched_sources[index] = (
                     _merge_source_item(
                         raw_source,
                         domain=domain,
@@ -321,7 +367,7 @@ async def enrich_web_sources(
                 now=now,
             )
             if cached_row is not None:
-                enriched_sources.append(
+                enriched_sources[index] = (
                     _merge_source_item(
                         raw_source,
                         domain=cached_row.resolved_domain or domain,
@@ -333,37 +379,32 @@ async def enrich_web_sources(
                 )
                 continue
 
-            metadata = {
-                "resolved_title": None,
-                "resolved_source": _resolve_source_from_domain(domain),
-                "resolved_domain": domain,
-                "resolved_published_at": None,
-                "metadata_status": "unavailable",
-            }
+            fetch_jobs.append((index, raw_source, normalized_url, domain, url_hash))
 
-            try:
-                response = await client.get(normalized_url)
-                content_type = str(response.headers.get("content-type", "")).lower()
-                if response.status_code >= 400:
-                    raise RuntimeError(f"unexpected status: {response.status_code}")
-                if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
-                    # 非 HTML 资源不解析正文，直接回退为域名来源。
-                    raise RuntimeError("non-html response")
+        semaphore = asyncio.Semaphore(max(1, fetch_concurrency))
 
-                content_bytes = response.content[:max_bytes]
-                html = content_bytes.decode(response.encoding or "utf-8", errors="ignore")
-                metadata = _extract_page_metadata(html, domain)
-            except Exception:
-                if domain:
-                    # 失败时回退为域名来源，避免返回空对象。
-                    metadata = {
-                        "resolved_title": raw_source.get("title"),
-                        "resolved_source": _resolve_source_from_domain(domain),
-                        "resolved_domain": domain,
-                        "resolved_published_at": None,
-                        "metadata_status": "unavailable",
-                    }
+        async def run_fetch_job(
+            job: tuple[int, dict[str, Any], str, str | None, str],
+        ) -> tuple[int, dict[str, Any], str, str | None, str, dict[str, Any]]:
+            index, raw_source, normalized_url, domain, url_hash = job
+            async with semaphore:
+                metadata = await _fetch_source_metadata(
+                    client=client,
+                    raw_source=raw_source,
+                    normalized_url=normalized_url,
+                    domain=domain,
+                    max_bytes=max_bytes,
+                )
+            return index, raw_source, normalized_url, domain, url_hash, metadata
 
+        for (
+            index,
+            raw_source,
+            normalized_url,
+            domain,
+            url_hash,
+            metadata,
+        ) in await asyncio.gather(*(run_fetch_job(job) for job in fetch_jobs)):
             cached_row = await _upsert_metadata_cache(
                 session,
                 normalized_url=normalized_url,
@@ -373,19 +414,22 @@ async def enrich_web_sources(
                 success_ttl_seconds=success_ttl_seconds,
                 failure_ttl_seconds=failure_ttl_seconds,
             )
-            enriched_sources.append(
-                _merge_source_item(
-                    raw_source,
-                    domain=cached_row.resolved_domain or domain,
-                    metadata_status=cached_row.metadata_status,
-                    resolved_title=cached_row.resolved_title,
-                    resolved_source=cached_row.resolved_source,
-                    resolved_published_at=cached_row.resolved_published_at,
-                )
+            enriched_sources[index] = _merge_source_item(
+                raw_source,
+                domain=cached_row.resolved_domain or domain,
+                metadata_status=cached_row.metadata_status,
+                resolved_title=cached_row.resolved_title,
+                resolved_source=cached_row.resolved_source,
+                resolved_published_at=cached_row.resolved_published_at,
             )
 
+        resolved_sources = [
+            item
+            for item in enriched_sources
+            if item is not None
+        ]
         await session.flush()
-        return enriched_sources
+        return resolved_sources
     finally:
         if owns_client:
             await client.aclose()

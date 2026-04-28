@@ -49,7 +49,7 @@ from app.services.analysis_runtime_service import (
     cache_fresh_report_id,
     clear_cached_active_session_id,
     event_bus,
-    get_analysis_lock,
+    session_lock,
 )
 from app.services.event_link_service import build_event_link_result
 from app.services.factor_weight_service import calculate_factor_weights
@@ -829,8 +829,7 @@ async def start_analysis_session(
         trigger_source=trigger_source,
         analysis_mode=resolved_analysis_mode,
     )
-    lock = await get_analysis_lock(analysis_key)
-    async with lock:
+    async with session_lock(analysis_key):
         # 关键流程：历史报告按股票/主题维度做 1 小时冷却，优先级高于 force_refresh。
         # 这样可以避免用户重复点击刷新或不同来源重复触发时，在短时间内写入多份归档报告。
         fresh_report = await load_latest_fresh_report(

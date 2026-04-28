@@ -464,6 +464,9 @@ async def stream_llm_text(
         max_output_tokens=max_output_tokens,
         use_web_search=use_web_search,
     )
+    web_search_requested = bool(
+        use_web_search and resolved_settings.llm_web_search_enabled
+    )
 
     queue: asyncio.Queue[tuple[str, object | None]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -494,9 +497,23 @@ async def stream_llm_text(
                 yield str(payload or "")
                 continue
             if kind == "error":
-                raise payload if isinstance(payload, Exception) else RuntimeError(
+                error = payload if isinstance(payload, Exception) else RuntimeError(
                     "llm stream failed"
                 )
+                if not web_search_requested or not _is_web_search_unsupported(error):
+                    raise error
+                # 流式工具不受支持时回退为普通文本请求，保持调用方可继续消费结果。
+                yield await generate_llm_text(
+                    prompt,
+                    client=resolved_client,
+                    settings=resolved_settings,
+                    system_instruction=system_instruction,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
+                    max_output_tokens=max_output_tokens,
+                    use_web_search=False,
+                )
+                break
             break
     finally:
         await worker

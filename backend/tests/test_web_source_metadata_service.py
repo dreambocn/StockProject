@@ -188,3 +188,91 @@ def test_enrich_web_sources_marks_unavailable_for_non_html(tmp_path) -> None:
         await engine.dispose()
 
     asyncio.run(run_test())
+
+
+def test_enrich_web_sources_fetches_uncached_urls_concurrently_and_keeps_order(
+    tmp_path,
+) -> None:
+    db_file = tmp_path / "web-source-concurrency.db"
+    db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
+    engine = create_async_engine(db_url)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    active_requests = {"count": 0, "max": 0}
+    requested_urls: list[str] = []
+
+    async def run_test() -> None:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requested_urls.append(str(request.url))
+            active_requests["count"] += 1
+            active_requests["max"] = max(
+                active_requests["max"],
+                active_requests["count"],
+            )
+            await asyncio.sleep(0.05)
+            active_requests["count"] -= 1
+            title = request.url.path.strip("/")
+            return httpx.Response(
+                status_code=200,
+                headers={"content-type": "text/html; charset=utf-8"},
+                text=(
+                    "<html><head>"
+                    f"<title>{title}</title>"
+                    "<meta property='og:site_name' content='Example News' />"
+                    "</head><body></body></html>"
+                ),
+                request=request,
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            async with session_maker() as session:
+                result = await enrich_web_sources(
+                    session=session,
+                    raw_sources=[
+                        {
+                            "title": None,
+                            "url": "https://news.example.com/first",
+                            "source": None,
+                            "published_at": None,
+                            "snippet": None,
+                        },
+                        {
+                            "title": None,
+                            "url": "https://news.example.com/second",
+                            "source": None,
+                            "published_at": None,
+                            "snippet": None,
+                        },
+                        {
+                            "title": None,
+                            "url": "https://news.example.com/third",
+                            "source": None,
+                            "published_at": None,
+                            "snippet": None,
+                        },
+                    ],
+                    http_client=client,
+                    timeout_seconds=3,
+                    success_ttl_seconds=86400,
+                    failure_ttl_seconds=7200,
+                    max_bytes=1024 * 512,
+                )
+
+                assert [item["title"] for item in result] == [
+                    "first",
+                    "second",
+                    "third",
+                ]
+                assert active_requests["max"] > 1
+                assert requested_urls == [
+                    "https://news.example.com/first",
+                    "https://news.example.com/second",
+                    "https://news.example.com/third",
+                ]
+
+        await engine.dispose()
+
+    asyncio.run(run_test())

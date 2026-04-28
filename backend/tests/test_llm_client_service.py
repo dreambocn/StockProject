@@ -250,3 +250,43 @@ def test_stream_llm_text_yields_incremental_chunks() -> None:
         assert chunks == ["Hello", " Markdown"]
 
     asyncio.run(_run())
+
+
+def test_stream_llm_text_falls_back_when_web_search_stream_is_unsupported() -> None:
+    async def _run() -> None:
+        class _UnsupportedStreamResponsesApi(_FakeResponsesApi):
+            def stream(self, **kwargs):
+                self.calls.append(kwargs)
+                raise RuntimeError("web_search tool unsupported")
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(output_text="fallback text")
+
+        fake_client = _FakeClient()
+        fake_client.responses = _UnsupportedStreamResponsesApi()
+        settings = Settings(
+            _env_file=None,
+            llm_base_url="https://aixj.vip",
+            llm_wire_api="responses",
+            llm_api_key="test-key",
+            llm_model="gpt-5.1-codex-mini",
+            llm_reasoning_effort="high",
+            llm_stream_enabled=True,
+            llm_web_search_enabled=True,
+        )
+
+        chunks: list[str] = []
+        async for chunk in stream_llm_text(
+            "请总结最新消息",
+            client=fake_client,
+            settings=settings,
+            use_web_search=True,
+        ):
+            chunks.append(chunk)
+
+        assert chunks == ["fallback text"]
+        assert fake_client.responses.calls[0]["tools"] == [{"type": "web_search_preview"}]
+        assert "tools" not in fake_client.responses.calls[1]
+
+    asyncio.run(_run())

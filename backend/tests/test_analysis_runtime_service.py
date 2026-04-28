@@ -1,11 +1,13 @@
 import asyncio
 
 from app.services.analysis_runtime_service import (
+    lock_registry,
     cache_active_session_id,
     cache_fresh_report_id,
     clear_cached_active_session_id,
     get_cached_active_session_id,
     get_cached_fresh_report_id,
+    session_lock,
 )
 
 
@@ -63,5 +65,39 @@ def test_analysis_runtime_logs_warning_for_cache_failures(monkeypatch) -> None:
             assert args[0] == "analysis_runtime_cache_failed"
             assert args[1] == "akey"
             assert args[3] == "RuntimeError"
+
+    asyncio.run(_run())
+
+
+def test_analysis_session_lock_context_cleans_idle_key() -> None:
+    async def _run() -> None:
+        lock_registry._locks.clear()
+
+        async with session_lock("analysis-key-cleanup"):
+            assert "analysis-key-cleanup" in lock_registry._locks
+
+        assert "analysis-key-cleanup" not in lock_registry._locks
+
+    asyncio.run(_run())
+
+
+def test_analysis_session_lock_context_serializes_same_key_and_cleans_after_waiters() -> None:
+    async def _run() -> None:
+        lock_registry._locks.clear()
+        active_count = 0
+        max_active_count = 0
+
+        async def run_locked() -> None:
+            nonlocal active_count, max_active_count
+            async with session_lock("analysis-key-shared"):
+                active_count += 1
+                max_active_count = max(max_active_count, active_count)
+                await asyncio.sleep(0.01)
+                active_count -= 1
+
+        await asyncio.gather(run_locked(), run_locked(), run_locked())
+
+        assert max_active_count == 1
+        assert "analysis-key-shared" not in lock_registry._locks
 
     asyncio.run(_run())

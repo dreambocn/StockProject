@@ -41,20 +41,67 @@ class AnalysisSessionEventBus:
 
 class AnalysisSessionLockRegistry:
     def __init__(self) -> None:
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, _ManagedAnalysisSessionLock] = {}
         self._guard = asyncio.Lock()
 
-    async def get_lock(self, analysis_key: str) -> asyncio.Lock:
+    async def get_lock(self, analysis_key: str) -> "_ManagedAnalysisSessionLock":
         # 每个分析 key 共享一把锁，保证同标的分析不会并发重复生成。
         async with self._guard:
             if analysis_key not in self._locks:
-                self._locks[analysis_key] = asyncio.Lock()
+                self._locks[analysis_key] = _ManagedAnalysisSessionLock(
+                    self,
+                    analysis_key,
+                )
             return self._locks[analysis_key]
+
+    async def release_if_idle(
+        self,
+        analysis_key: str,
+        managed_lock: "_ManagedAnalysisSessionLock",
+    ) -> None:
+        async with self._guard:
+            if managed_lock.user_count == 0 and self._locks.get(analysis_key) is managed_lock:
+                self._locks.pop(analysis_key, None)
+
+
+class _ManagedAnalysisSessionLock:
+    def __init__(self, registry: AnalysisSessionLockRegistry, analysis_key: str) -> None:
+        self.registry = registry
+        self.analysis_key = analysis_key
+        self._lock = asyncio.Lock()
+        self.user_count = 0
+
+    async def __aenter__(self) -> "_ManagedAnalysisSessionLock":
+        async with self.registry._guard:
+            self.user_count += 1
+        await self._lock.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        self._lock.release()
+        async with self.registry._guard:
+            self.user_count -= 1
+        # 分析 key 很分散，执行结束后清理空闲锁，避免进程常驻内存持续增长。
+        await self.registry.release_if_idle(self.analysis_key, self)
 
 
 event_bus = AnalysisSessionEventBus()
 lock_registry = AnalysisSessionLockRegistry()
 LOGGER = get_logger(__name__)
+
+
+class _AnalysisSessionLockContext:
+    def __init__(self, analysis_key: str) -> None:
+        self.analysis_key = analysis_key
+        self._managed_lock: _ManagedAnalysisSessionLock | None = None
+
+    async def __aenter__(self) -> _ManagedAnalysisSessionLock:
+        self._managed_lock = await lock_registry.get_lock(self.analysis_key)
+        return await self._managed_lock.__aenter__()
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        if self._managed_lock is not None:
+            await self._managed_lock.__aexit__(exc_type, exc, traceback)
 
 
 def _active_session_cache_key(analysis_key: str) -> str:
@@ -81,8 +128,12 @@ def _log_cache_warning(
     )
 
 
-async def get_analysis_lock(analysis_key: str) -> asyncio.Lock:
+async def get_analysis_lock(analysis_key: str) -> _ManagedAnalysisSessionLock:
     return await lock_registry.get_lock(analysis_key)
+
+
+def session_lock(analysis_key: str) -> _AnalysisSessionLockContext:
+    return _AnalysisSessionLockContext(analysis_key)
 
 
 async def cache_active_session_id(
