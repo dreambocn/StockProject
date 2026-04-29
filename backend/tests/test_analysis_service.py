@@ -1047,6 +1047,40 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
         "app.services.analysis_service.generate_stock_analysis_report",
         fake_generate_stock_analysis_report,
     )
+    async def fail_single_price_window(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("分析生成应批量加载价格窗口")
+
+    async def fake_batch_price_windows(
+        session,
+        *,
+        ts_code: str,
+        anchor_dates,
+        window_size: int = 5,
+        fetch_daily_by_range_fn=None,
+    ):
+        _ = session, ts_code, window_size, fetch_daily_by_range_fn
+        anchor_dates = list(anchor_dates)
+        captured["price_window_anchor_count"] = len(anchor_dates)
+        return {
+            anchor_date: [
+                {
+                    "trade_date": anchor_date,
+                    "close": 1500.0,
+                    "vol": 1000.0,
+                }
+            ]
+            for anchor_date in set(anchor_dates)
+        }
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_price_window_with_completion",
+        fail_single_price_window,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_price_windows_with_completion",
+        fake_batch_price_windows,
+    )
     monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
     monkeypatch.setattr(
         "app.services.analysis_service.cache_fresh_report_id",
@@ -1118,8 +1152,101 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
 
         assert captured["candidate_limit"] == 120
         assert captured["event_count"] == 30
+        assert captured["price_window_anchor_count"] == 30
         assert "event=analysis_session_started session_id=session-1" in caplog.text
         assert "event=analysis_session_completed session_id=session-1" in caplog.text
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_analysis_report_archives_use_inline_evidence_without_per_report_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fail_per_report_roles(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("归档列表不应逐条加载角色")
+
+    async def fail_fallback_events(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("已有内联证据时不应 fallback 查询事件")
+
+    async def fake_batch_roles(session, report_ids):
+        _ = session
+        return {report_id: [] for report_id in report_ids}
+
+    monkeypatch.setattr(
+        "app.services.analysis_service.list_analysis_agent_runs_for_report",
+        fail_per_report_roles,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_analysis_events",
+        fail_fallback_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.list_analysis_agent_runs_for_reports",
+        fake_batch_roles,
+        raising=False,
+    )
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisReport(
+                    id="report-inline-evidence",
+                    ts_code="600519.SH",
+                    status="ready",
+                    summary="历史报告",
+                    risk_points=[],
+                    factor_breakdown=[],
+                    evidence_events=[
+                        {
+                            "event_id": "event-inline",
+                            "scope": "stock",
+                            "title": "内联证据",
+                            "published_at": "2026-03-25T12:00:00Z",
+                            "source": "stock-source",
+                            "macro_topic": "commodity_supply",
+                            "event_type": "news",
+                            "event_tags": [],
+                            "sentiment_label": "neutral",
+                            "sentiment_score": 0.0,
+                            "anchor_trade_date": None,
+                            "window_return_pct": None,
+                            "window_volatility": None,
+                            "abnormal_volume_ratio": None,
+                            "correlation_score": None,
+                            "confidence": "medium",
+                            "link_status": "ready",
+                        }
+                    ],
+                    generated_at=datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc),
+                    analysis_mode="functional_multi_agent",
+                )
+            )
+            await session.commit()
+
+            result = await list_stock_analysis_report_archives(
+                session,
+                "600519.SH",
+                limit=10,
+            )
+
+        assert result["items"][0]["evidence_events"][0]["event_id"] == "event-inline"
 
     try:
         asyncio.run(run_test())
@@ -1330,6 +1457,114 @@ def test_run_analysis_session_by_id_persists_functional_pipeline_roles(
             assert persisted_session.role_count == 2
             assert persisted_session.role_completed_count == 2
             assert persisted_session.active_role_key == "decision_agent"
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_run_analysis_session_by_id_refreshes_heartbeat_during_long_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    observed_heartbeat: dict[str, datetime | None] = {"value": None}
+
+    async def fake_load_recent_news_events(*args, **kwargs):
+        _ = args, kwargs
+        return []
+
+    async def fake_generate_stock_analysis_report(
+        *,
+        ts_code: str,
+        instrument_name: str | None,
+        events,
+        factor_weights,
+        session,
+        use_web_search: bool,
+        on_delta,
+    ):
+        _ = (
+            ts_code,
+            instrument_name,
+            events,
+            factor_weights,
+            session,
+            use_web_search,
+            on_delta,
+        )
+        await asyncio.sleep(0.05)
+        async with session_maker() as verify_session:
+            row = await verify_session.get(AnalysisGenerationSession, "session-heartbeat")
+            observed_heartbeat["value"] = row.heartbeat_at if row else None
+        return AnalysisReportResult(
+            status="ready",
+            summary="测试报告",
+            risk_points=[],
+            factor_breakdown=[],
+            generated_at=datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+            used_web_search=False,
+            web_search_status="disabled",
+            web_sources=[],
+        )
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.ANALYSIS_SESSION_HEARTBEAT_INTERVAL_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.generate_stock_analysis_report",
+        fake_generate_stock_analysis_report,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr(
+        "app.services.analysis_service.cache_fresh_report_id",
+        fake_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test() -> None:
+        old_heartbeat = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="session-heartbeat",
+                    analysis_key="analysis-heartbeat-key",
+                    ts_code="600519.SH",
+                    status="queued",
+                    heartbeat_at=old_heartbeat,
+                )
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("session-heartbeat")
+
+        assert observed_heartbeat["value"] is not None
+        assert observed_heartbeat["value"] > old_heartbeat.replace(tzinfo=None)
 
     try:
         asyncio.run(run_test())

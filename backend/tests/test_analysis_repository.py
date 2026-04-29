@@ -6,10 +6,14 @@ from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
+from app.models.analysis_agent_run import AnalysisAgentRun
 from app.models.analysis_event_link import AnalysisEventLink
+from app.models.analysis_generation_session import AnalysisGenerationSession
+from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.services.analysis_repository import (
     claim_next_analysis_session_for_worker,
+    list_analysis_agent_runs_for_reports,
     load_analysis_events,
     load_recent_news_events,
 )
@@ -358,6 +362,82 @@ def test_load_analysis_events_candidate_limit_supports_summary_oversampling(
         asyncio.run(engine.dispose())
 
 
+def test_list_analysis_agent_runs_for_reports_groups_rows_by_report_id(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            session.add_all(
+                [
+                    AnalysisReport(
+                        id="report-1",
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="报告 1",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        generated_at=datetime(2026, 3, 25, 12, 0, tzinfo=UTC),
+                    ),
+                    AnalysisReport(
+                        id="report-2",
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="报告 2",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        generated_at=datetime(2026, 3, 25, 11, 0, tzinfo=UTC),
+                    ),
+                ]
+            )
+            session.add_all(
+                [
+                    AnalysisAgentRun(
+                        session_id="session-1",
+                        report_id="report-1",
+                        role_key="planner",
+                        role_label="研究规划",
+                        status="completed",
+                        sort_order=1,
+                    ),
+                    AnalysisAgentRun(
+                        session_id="session-1",
+                        report_id="report-1",
+                        role_key="decision",
+                        role_label="最终裁决",
+                        status="completed",
+                        sort_order=6,
+                    ),
+                    AnalysisAgentRun(
+                        session_id="session-2",
+                        report_id="report-2",
+                        role_key="audit",
+                        role_label="证据审计",
+                        status="completed",
+                        sort_order=3,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            grouped = await list_analysis_agent_runs_for_reports(
+                session,
+                ["report-1", "report-2"],
+            )
+
+        assert [row.role_key for row in grouped["report-1"]] == [
+            "planner",
+            "decision",
+        ]
+        assert [row.role_key for row in grouped["report-2"]] == ["audit"]
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
 def test_claim_next_analysis_session_for_worker_allows_only_one_concurrent_winner() -> None:
     class _FakeResult:
         def __init__(self, value):
@@ -436,3 +516,73 @@ def test_claim_next_analysis_session_for_worker_allows_only_one_concurrent_winne
         assert results.count(None) == 1
 
     asyncio.run(run_test())
+
+
+def test_claim_next_analysis_session_for_worker_uses_heartbeat_for_stale_running(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test() -> None:
+        now = datetime.now(UTC)
+        stale_before = now - timedelta(seconds=900)
+        async with session_maker() as session:
+            fresh_running = AnalysisGenerationSession(
+                id="session-running-fresh",
+                analysis_key="600519.SH|||0|manual|functional_multi_agent",
+                ts_code="600519.SH",
+                status="running",
+                trigger_source="manual",
+                trigger_source_group="manual",
+                use_web_search=False,
+                analysis_mode="functional_multi_agent",
+                started_at=now - timedelta(minutes=40),
+                updated_at=now - timedelta(minutes=40),
+                heartbeat_at=now,
+            )
+            expired_running = AnalysisGenerationSession(
+                id="session-running-expired",
+                analysis_key="000001.SZ|||0|manual|functional_multi_agent",
+                ts_code="000001.SZ",
+                status="running",
+                trigger_source="manual",
+                trigger_source_group="manual",
+                use_web_search=False,
+                analysis_mode="functional_multi_agent",
+                started_at=now - timedelta(minutes=40),
+                updated_at=now - timedelta(minutes=40),
+                heartbeat_at=now - timedelta(minutes=40),
+            )
+            session.add_all([fresh_running, expired_running])
+            await session.commit()
+
+        async with session_maker() as session:
+            claimed_id = await claim_next_analysis_session_for_worker(
+                session,
+                stale_before=stale_before,
+            )
+            await session.commit()
+
+        assert claimed_id == "session-running-expired"
+
+        async with session_maker() as session:
+            fresh_after = await session.get(
+                AnalysisGenerationSession,
+                "session-running-fresh",
+            )
+            expired_after = await session.get(
+                AnalysisGenerationSession,
+                "session-running-expired",
+            )
+
+        assert fresh_after is not None
+        assert fresh_after.status == "running"
+        assert fresh_after.heartbeat_at == now.replace(tzinfo=None)
+        assert expired_after is not None
+        assert expired_after.heartbeat_at is not None
+        assert expired_after.heartbeat_at > stale_before.replace(tzinfo=None)
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())

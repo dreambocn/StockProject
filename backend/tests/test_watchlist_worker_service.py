@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.models.analysis_report import AnalysisReport
 from app.models.stock_instrument import StockInstrument
+from app.models.system_job_run import SystemJobRun
 from app.models.user import User
 from app.models.user_watchlist_item import UserWatchlistItem
 from app.services.watchlist_worker_service import (
@@ -209,6 +210,93 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
             assert rows[0].last_daily_analysis_at == now.replace(tzinfo=None)
             assert rows[1].last_daily_analysis_at == now.replace(tzinfo=None)
             assert rows[2].last_daily_analysis_at == now.replace(tzinfo=None)
+
+    try:
+        asyncio.run(run_test())
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test() -> None:
+        async with session_maker() as session:
+            await _seed_watchlist_users(session)
+            session.add(
+                UserWatchlistItem(
+                    user_id="user-1",
+                    ts_code="600519.SH",
+                    web_search_enabled=True,
+                )
+            )
+            await session.commit()
+
+            async def fake_start_analysis_session(
+                session,
+                ts_code: str,
+                *,
+                topic: str | None,
+                force_refresh: bool,
+                use_web_search: bool,
+                trigger_source: str,
+                execute_inline: bool,
+            ):
+                _ = (
+                    session,
+                    ts_code,
+                    topic,
+                    force_refresh,
+                    use_web_search,
+                    trigger_source,
+                    execute_inline,
+                )
+                return {
+                    "session_id": "analysis-session-running",
+                    "report_id": None,
+                    "status": "running",
+                    "reused": True,
+                    "cached": False,
+                }
+
+            now = datetime(2026, 3, 23, 18, 10, tzinfo=UTC)
+            result = await run_daily_watchlist_analysis(
+                session,
+                now=now,
+                start_analysis_session_fn=fake_start_analysis_session,
+                execute_inline=True,
+            )
+
+            assert result == {"processed": 1, "skipped": 0}
+
+            watch_item = (
+                await session.execute(select(UserWatchlistItem))
+            ).scalar_one()
+            assert watch_item.last_daily_analysis_at is None
+
+            job = (
+                await session.execute(
+                    select(SystemJobRun).where(
+                        SystemJobRun.job_type == "watchlist_daily_analysis"
+                    )
+                )
+            ).scalar_one()
+            assert job.status == "partial"
+            assert job.summary == "已挂接运行中的分析会话"
+            assert job.linked_entity_type == "analysis_generation_session"
+            assert job.linked_entity_id == "analysis-session-running"
+            assert job.metrics_json == {
+                "ts_code": "600519.SH",
+                "processed": 1,
+                "skipped": 0,
+                "cached": False,
+                "reused": True,
+                "waiting_for_session": True,
+                "session_id": "analysis-session-running",
+                "status": "running",
+            }
 
     try:
         asyncio.run(run_test())

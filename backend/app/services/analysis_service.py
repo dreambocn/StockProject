@@ -1,4 +1,6 @@
+import asyncio
 import inspect
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlparse
@@ -29,6 +31,7 @@ from app.services.analysis_repository import (
     load_analysis_events,
     load_analysis_report_by_id,
     list_analysis_agent_runs_for_report,
+    list_analysis_agent_runs_for_reports,
     list_analysis_agent_runs_for_session,
     load_analysis_session,
     load_latest_report,
@@ -77,12 +80,14 @@ from app.services.policy_projection_service import (
 )
 from app.services.stock_quote_service import (
     load_price_window_with_completion,
+    load_price_windows_with_completion,
     load_resolved_latest_snapshot,
 )
 from app.services.web_source_metadata_service import enrich_web_sources
 
 
 LOGGER = get_logger(__name__)
+ANALYSIS_SESSION_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 
 def _analysis_logger():
@@ -458,12 +463,54 @@ async def _persist_analysis_session_failure(
     await clear_cached_active_session_id(analysis_key, session_id)
 
 
+async def _touch_analysis_session_heartbeat(
+    *,
+    session_id: str,
+    system_job_id: str | None,
+) -> None:
+    now = datetime.now(UTC)
+    async with SessionLocal() as heartbeat_session:
+        session_row = await load_analysis_session(heartbeat_session, session_id)
+        if session_row is None or session_row.status not in {"queued", "running"}:
+            return
+
+        # 长时间非流式 Agent 调用期间仍需刷新心跳，避免 Worker 误判为 stale。
+        session_row.heartbeat_at = now
+        session_row.updated_at = now
+        if system_job_id:
+            analysis_job = await heartbeat_session.get(SystemJobRun, system_job_id)
+            if analysis_job is not None and analysis_job.status == JOB_STATUS_RUNNING:
+                analysis_job.heartbeat_at = now
+        await heartbeat_session.commit()
+
+
+async def _run_analysis_session_heartbeat_loop(
+    *,
+    session_id: str,
+    system_job_id: str | None,
+) -> None:
+    while True:
+        try:
+            await _touch_analysis_session_heartbeat(
+                session_id=session_id,
+                system_job_id=system_job_id,
+            )
+        except Exception as exc:
+            _analysis_logger().warning(
+                "event=analysis_session_heartbeat_failed session_id=%s error_type=%s message=分析会话心跳刷新失败",
+                session_id,
+                type(exc).__name__,
+            )
+        await asyncio.sleep(ANALYSIS_SESSION_HEARTBEAT_INTERVAL_SECONDS)
+
+
 async def _resolve_report_evidence_payloads(
     session: AsyncSession,
     *,
     report_obj: object | None,
     fallback_limit: int,
     anchor_event_id: str | None,
+    allow_fallback: bool = True,
 ) -> list[dict[str, object]]:
     if report_obj is None:
         return []
@@ -473,6 +520,8 @@ async def _resolve_report_evidence_payloads(
         return _normalize_evidence_event_payloads(
             [dict(item) for item in inline_events if isinstance(item, dict)]
         )
+    if not allow_fallback:
+        return []
 
     fallback_events = await load_analysis_events(
         session,
@@ -740,11 +789,13 @@ async def list_stock_analysis_report_archives(
         )
         report.web_sources = enriched_web_sources
     serialized_items: list[dict[str, object]] = []
+    report_ids = [report.id for report in reports if report.id]
+    role_rows_by_report = await list_analysis_agent_runs_for_reports(
+        session,
+        report_ids,
+    )
     for report in reports:
-        pipeline_role_rows = await list_analysis_agent_runs_for_report(
-            session,
-            report.id,
-        )
+        pipeline_role_rows = role_rows_by_report.get(report.id, [])
         evidence_payloads = await _resolve_report_evidence_payloads(
             session,
             report_obj=report,
@@ -753,6 +804,7 @@ async def list_stock_analysis_report_archives(
                 20,
             ),
             anchor_event_id=report.anchor_event_id,
+            allow_fallback=False,
         )
         serialized_items.append(
             AnalysisReportArchiveItemResponse.model_validate(
@@ -942,6 +994,7 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             if session_row.system_job_id
             else None
         )
+        heartbeat_task: asyncio.Task[None] | None = None
         try:
             session_row.started_at = session_row.started_at or datetime.now(UTC)
             session_row.error_message = None
@@ -966,6 +1019,12 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 summary_preview="",
                 error_message=None,
                 failure_type=None,
+            )
+            heartbeat_task = asyncio.create_task(
+                _run_analysis_session_heartbeat_loop(
+                    session_id=session_id,
+                    system_job_id=session_row.system_job_id,
+                )
             )
             _analysis_logger().info(
                 "event=analysis_session_started session_id=%s ts_code=%s topic=%s use_web_search=%s trigger_source=%s",
@@ -1028,6 +1087,15 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 hot_quota=settings.analysis_generation_hot_quota,
             )
             event_payloads: list[dict[str, object | None]] = []
+            price_windows_by_date = await load_price_windows_with_completion(
+                session,
+                ts_code=session_row.ts_code,
+                anchor_dates=[
+                    raw_event.published_at.date()
+                    for raw_event in raw_events
+                    if raw_event.published_at
+                ],
+            )
             total_progress = max(len(raw_events), 1)
             await _update_session_progress(
                 session,
@@ -1047,12 +1115,12 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     source=raw_event.source,
                     event_tags=event_tags,
                 )
-                price_window = await load_price_window_with_completion(
-                    session,
-                    ts_code=session_row.ts_code,
-                    anchor_from=(
-                        raw_event.published_at.date() if raw_event.published_at else None
-                    ),
+                anchor_date = (
+                    raw_event.published_at.date() if raw_event.published_at else None
+                )
+                # 关键流程：价格窗口已按事件日期批量补齐，这里只做内存取值，避免逐事件外部补全。
+                price_window = (
+                    price_windows_by_date.get(anchor_date, []) if anchor_date else []
                 )
 
                 raw_event.event_type = event_type
@@ -1507,3 +1575,8 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                     "detail": str(exc),
                 },
             )
+        finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task

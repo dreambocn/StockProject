@@ -510,7 +510,13 @@ async def claim_next_analysis_session_for_worker(
         )
         if updated_before is not None:
             candidate_statement = candidate_statement.where(
-                AnalysisGenerationSession.updated_at < updated_before
+                or_(
+                    AnalysisGenerationSession.heartbeat_at < updated_before,
+                    and_(
+                        AnalysisGenerationSession.heartbeat_at.is_(None),
+                        AnalysisGenerationSession.updated_at < updated_before,
+                    ),
+                )
             )
 
         get_bind = getattr(session, "get_bind", None)
@@ -533,6 +539,8 @@ async def claim_next_analysis_session_for_worker(
                 completed_at=None,
                 error_message=None,
                 failure_type=None,
+                heartbeat_at=now,
+                updated_at=now,
             )
             .returning(AnalysisGenerationSession.id)
         )
@@ -626,6 +634,30 @@ async def list_analysis_agent_runs_for_report(
         .order_by(AnalysisAgentRun.sort_order.asc(), AnalysisAgentRun.created_at.asc())
     )
     return (await session.execute(statement)).scalars().all()
+
+
+async def list_analysis_agent_runs_for_reports(
+    session: AsyncSession,
+    report_ids: list[str],
+) -> dict[str, list[AnalysisAgentRun]]:
+    if not report_ids:
+        return {}
+
+    statement = (
+        select(AnalysisAgentRun)
+        .where(AnalysisAgentRun.report_id.in_(report_ids))
+        .order_by(
+            AnalysisAgentRun.report_id.asc(),
+            AnalysisAgentRun.sort_order.asc(),
+            AnalysisAgentRun.created_at.asc(),
+        )
+    )
+    rows = (await session.execute(statement)).scalars().all()
+    grouped: dict[str, list[AnalysisAgentRun]] = {report_id: [] for report_id in report_ids}
+    for row in rows:
+        if row.report_id:
+            grouped.setdefault(row.report_id, []).append(row)
+    return grouped
 
 
 async def list_analysis_agent_runs_for_session(

@@ -25,6 +25,7 @@ from app.services.analysis_service import start_analysis_session
 from app.services.candidate_evidence_service import refresh_candidate_evidence_caches
 from app.services.job_service import (
     JOB_STATUS_FAILED,
+    JOB_STATUS_PARTIAL,
     JOB_STATUS_RUNNING,
     JOB_STATUS_SUCCESS,
     create_job_run,
@@ -571,32 +572,53 @@ async def run_daily_watchlist_analysis(
                 trigger_source="watchlist_daily",
                 execute_inline=execute_inline,
             )
-            await mark_daily_analysis_completed(
-                session,
-                ts_code=target.ts_code,
-                analyzed_at=now,
+            analysis_status = str(analysis_result.get("status") or "")
+            analysis_session_id = (
+                str(analysis_result.get("session_id"))
+                if analysis_result.get("session_id")
+                else None
+            )
+            analysis_completed = (
+                bool(analysis_result.get("cached"))
+                or analysis_status == "completed"
+                or bool(analysis_result.get("report_id"))
+            )
+            if analysis_completed:
+                await mark_daily_analysis_completed(
+                    session,
+                    ts_code=target.ts_code,
+                    analyzed_at=now,
+                )
+            # 运行中复用只代表“已挂接”，不能提前把日报标记为完成。
+            waiting_for_session = (
+                bool(analysis_result.get("reused"))
+                and analysis_status in {"queued", "running"}
+                and not analysis_completed
             )
             await finish_job_run(
                 session,
                 job=watch_job,
-                status=JOB_STATUS_SUCCESS,
-                summary="自选股日分析任务完成",
+                status=JOB_STATUS_PARTIAL if waiting_for_session else JOB_STATUS_SUCCESS,
+                summary=(
+                    "已挂接运行中的分析会话"
+                    if waiting_for_session
+                    else "自选股日分析任务完成"
+                ),
                 linked_entity_type=(
                     "analysis_generation_session"
-                    if analysis_result.get("session_id")
+                    if analysis_session_id
                     else None
                 ),
-                linked_entity_id=(
-                    str(analysis_result.get("session_id"))
-                    if analysis_result.get("session_id")
-                    else None
-                ),
+                linked_entity_id=analysis_session_id,
                 metrics_json={
                     "ts_code": target.ts_code,
                     "processed": 1,
                     "skipped": 0,
                     "cached": bool(analysis_result.get("cached")),
                     "reused": bool(analysis_result.get("reused")),
+                    "waiting_for_session": waiting_for_session,
+                    "session_id": analysis_session_id,
+                    "status": analysis_status,
                 },
             )
             await session.commit()

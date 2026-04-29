@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.routes import analysis as analysis_routes
 from app.db.base import Base
 from app.db.session import get_db_session
 from app.main import app
@@ -56,6 +57,30 @@ def test_analysis_summary_route_returns_pending_when_empty(tmp_path: Path) -> No
     assert payload["events"] == []
     assert payload["report"] is None
     assert payload["status"] in {"pending", "partial"}
+
+
+def test_analysis_sse_status_payload_includes_heartbeat_and_report_id() -> None:
+    row = AnalysisGenerationSession(
+        id="session-sse-1",
+        analysis_key="analysis-key",
+        ts_code="600519.SH",
+        status="running",
+        current_stage="generating_report",
+        stage_message="正在生成分析摘要",
+        report_id="report-1",
+        heartbeat_at=datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc),
+    )
+
+    payload = analysis_routes._build_session_status_event_payload(row)
+
+    assert payload == {
+        "session_id": "session-sse-1",
+        "status": "running",
+        "current_stage": "generating_report",
+        "stage_message": "正在生成分析摘要",
+        "heartbeat_at": datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc),
+        "report_id": "report-1",
+    }
 
 
 def test_analysis_summary_route_supports_event_id_and_returns_anchor_fields(

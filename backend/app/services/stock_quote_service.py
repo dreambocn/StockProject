@@ -78,6 +78,33 @@ def _to_window_rows_from_snapshots(
     ]
 
 
+def _slice_price_windows(
+    rows: list[StockDailySnapshot | StockKlineBar],
+    *,
+    anchor_dates: list[date],
+    window_size: int,
+) -> dict[date, list[dict[str, object]]]:
+    windows: dict[date, list[dict[str, object]]] = {}
+    sorted_rows = sorted(rows, key=lambda row: row.trade_date)
+    for anchor_date in anchor_dates:
+        window_rows = [
+            row
+            for row in sorted_rows
+            if row.trade_date >= anchor_date
+        ][:window_size]
+        windows[anchor_date] = _to_window_rows_from_snapshots(window_rows)
+    return windows
+
+
+def _all_windows_complete(
+    windows: dict[date, list[dict[str, object]]],
+    *,
+    anchor_dates: list[date],
+    window_size: int,
+) -> bool:
+    return all(len(windows.get(anchor_date, [])) >= window_size for anchor_date in anchor_dates)
+
+
 async def fetch_latest_daily_quotes_from_tushare(
     session: AsyncSession,
     *,
@@ -187,30 +214,72 @@ async def load_price_window_with_completion(
     if anchor_from is None:
         return []
 
+    windows = await load_price_windows_with_completion(
+        session,
+        ts_code=ts_code,
+        anchor_dates=[anchor_from],
+        window_size=window_size,
+        fetch_daily_by_range_fn=fetch_daily_by_range_fn,
+    )
+    return windows.get(anchor_from, [])
+
+
+async def load_price_windows_with_completion(
+    session: AsyncSession,
+    *,
+    ts_code: str,
+    anchor_dates: list[date],
+    window_size: int = 5,
+    fetch_daily_by_range_fn: DailyRangeFetcher | None = None,
+) -> dict[date, list[dict[str, object]]]:
+    resolved_anchor_dates = sorted({item for item in anchor_dates if item is not None})
+    if not resolved_anchor_dates:
+        return {}
+
     normalized_ts_code = ts_code.strip().upper()
+    range_start = min(resolved_anchor_dates)
+    range_end = max(resolved_anchor_dates) + timedelta(days=30)
 
     snapshot_statement = (
         select(StockDailySnapshot)
         .where(StockDailySnapshot.ts_code == normalized_ts_code)
-        .where(StockDailySnapshot.trade_date >= anchor_from)
+        .where(StockDailySnapshot.trade_date >= range_start)
+        .where(StockDailySnapshot.trade_date <= range_end)
         .order_by(StockDailySnapshot.trade_date.asc())
-        .limit(window_size)
     )
     snapshot_rows = (await session.execute(snapshot_statement)).scalars().all()
-    if len(snapshot_rows) >= window_size:
-        return _to_window_rows_from_snapshots(snapshot_rows)
+    snapshot_windows = _slice_price_windows(
+        snapshot_rows,
+        anchor_dates=resolved_anchor_dates,
+        window_size=window_size,
+    )
+    if _all_windows_complete(
+        snapshot_windows,
+        anchor_dates=resolved_anchor_dates,
+        window_size=window_size,
+    ):
+        return snapshot_windows
 
     kline_statement = (
         select(StockKlineBar)
         .where(StockKlineBar.ts_code == normalized_ts_code)
         .where(StockKlineBar.period == "daily")
-        .where(StockKlineBar.trade_date >= anchor_from)
+        .where(StockKlineBar.trade_date >= range_start)
+        .where(StockKlineBar.trade_date <= range_end)
         .order_by(StockKlineBar.trade_date.asc())
-        .limit(window_size)
     )
     kline_rows = (await session.execute(kline_statement)).scalars().all()
-    if len(kline_rows) >= window_size:
-        return _to_window_rows_from_snapshots(kline_rows)
+    kline_windows = _slice_price_windows(
+        kline_rows,
+        anchor_dates=resolved_anchor_dates,
+        window_size=window_size,
+    )
+    if _all_windows_complete(
+        kline_windows,
+        anchor_dates=resolved_anchor_dates,
+        window_size=window_size,
+    ):
+        return kline_windows
 
     fetcher = fetch_daily_by_range_fn
     if fetcher is None:
@@ -221,7 +290,7 @@ async def load_price_window_with_completion(
             gateway = None
 
         if gateway is None:
-            return _to_window_rows_from_snapshots(kline_rows or snapshot_rows)
+            return kline_windows if kline_rows else snapshot_windows
 
         async def _default_fetcher(*, ts_code: str, start_date: str, end_date: str):
             return await gateway.fetch_daily_by_range(
@@ -232,13 +301,16 @@ async def load_price_window_with_completion(
 
         fetcher = _default_fetcher
 
-    start_date = anchor_from.strftime("%Y%m%d")
-    end_date = (anchor_from + timedelta(days=30)).strftime("%Y%m%d")
-    remote_rows = await fetcher(
-        ts_code=normalized_ts_code,
-        start_date=start_date,
-        end_date=end_date,
-    )
+    start_date = range_start.strftime("%Y%m%d")
+    end_date = range_end.strftime("%Y%m%d")
+    try:
+        remote_rows = await fetcher(
+            ts_code=normalized_ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except Exception:
+        return kline_windows if kline_rows else snapshot_windows
     if remote_rows:
         await upsert_kline_rows(
             session=session,
@@ -250,6 +322,10 @@ async def load_price_window_with_completion(
 
         kline_rows = (await session.execute(kline_statement)).scalars().all()
         if kline_rows:
-            return _to_window_rows_from_snapshots(kline_rows)
+            return _slice_price_windows(
+                kline_rows,
+                anchor_dates=resolved_anchor_dates,
+                window_size=window_size,
+            )
 
-    return _to_window_rows_from_snapshots(kline_rows or snapshot_rows)
+    return kline_windows if kline_rows else snapshot_windows

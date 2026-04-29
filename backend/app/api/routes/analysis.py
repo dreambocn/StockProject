@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 import json
 
@@ -35,6 +36,7 @@ from app.services.analysis_export_service import (
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+SSE_STATUS_POLL_TIMEOUT_SECONDS = 15.0
 
 
 def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
@@ -217,6 +219,17 @@ def _to_sse_payload(event: str, payload: dict[str, object]) -> str:
     return f"event: {event}\ndata: {serialized}\n\n"
 
 
+def _build_session_status_event_payload(session_row) -> dict[str, object]:
+    return {
+        "session_id": session_row.id,
+        "status": session_row.status,
+        "current_stage": session_row.current_stage,
+        "stage_message": session_row.stage_message,
+        "heartbeat_at": _normalize_utc_datetime(session_row.heartbeat_at),
+        "report_id": session_row.report_id,
+    }
+
+
 @router.get("/sessions/{session_id}/events")
 async def stream_analysis_session_events_route(
     session_id: str,
@@ -231,7 +244,7 @@ async def stream_analysis_session_events_route(
         # 连接建立后先推送现有状态，确保前端有“可用的初始态”。
         yield _to_sse_payload(
             "status",
-            {"session_id": session_id, "status": session_row.status},
+            _build_session_status_event_payload(session_row),
         )
         if reused:
             # reused 表示复用历史会话，前端可以跳过“生成中”动画。
@@ -273,7 +286,37 @@ async def stream_analysis_session_events_route(
 
         async with event_bus.subscribe(session_id) as queue:
             while True:
-                event_name, payload = await queue.get()
+                try:
+                    event_name, payload = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=SSE_STATUS_POLL_TIMEOUT_SECONDS,
+                    )
+                except TimeoutError:
+                    # SSE 是进程内事件总线的增强通道；超时后查库兜底，避免跨进程或漏事件时一直挂住。
+                    await session.refresh(session_row)
+                    status_payload = _build_session_status_event_payload(session_row)
+                    yield _to_sse_payload("status", status_payload)
+                    if session_row.status == "completed":
+                        yield _to_sse_payload(
+                            "completed",
+                            {
+                                "session_id": session_id,
+                                "report_id": session_row.report_id,
+                                "status": "completed",
+                            },
+                        )
+                        return
+                    if session_row.status == "failed":
+                        yield _to_sse_payload(
+                            "error",
+                            {
+                                "session_id": session_id,
+                                "detail": session_row.error_message
+                                or "analysis session failed",
+                            },
+                        )
+                        return
+                    continue
                 yield _to_sse_payload(event_name, payload)
                 if event_name in {"completed", "error"}:
                     # 终态事件到达后主动结束流，释放连接资源。
