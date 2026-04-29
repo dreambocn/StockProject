@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.analysis_report import AnalysisReport
@@ -19,16 +21,8 @@ from app.services.watchlist_worker_service import (
 
 
 def _setup_async_session(tmp_path: Path):
-    db_path = tmp_path / "watchlist-worker.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "watchlist-worker.db")
+    init_sqlite_schema(engine)
     return engine, session_maker
 
 
@@ -117,10 +111,7 @@ def test_run_hourly_watchlist_sync_deduplicates_targets(tmp_path: Path) -> None:
             assert rows[1].last_hourly_sync_at == now.replace(tzinfo=None)
             assert rows[2].last_hourly_sync_at is None
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
@@ -211,10 +202,7 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
             assert rows[1].last_daily_analysis_at == now.replace(tzinfo=None)
             assert rows[2].last_daily_analysis_at == now.replace(tzinfo=None)
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
@@ -298,10 +286,7 @@ def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
                 "status": "running",
             }
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_sync_stock_watch_context_logs_warning_when_announcement_fetch_fails(
@@ -341,10 +326,7 @@ def test_sync_stock_watch_context_logs_warning_when_announcement_fetch_fails(
             now = datetime(2026, 3, 23, 9, 5, tzinfo=UTC)
             await sync_stock_watch_context(session=session, ts_code="600519.SH", now=now)
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
     assert any(
         call_args[:3] == ("600519.SH", "announcement", "RuntimeError")
@@ -389,10 +371,7 @@ def test_sync_stock_watch_context_logs_warning_when_news_fetch_fails(
             now = datetime(2026, 3, 23, 9, 5, tzinfo=UTC)
             await sync_stock_watch_context(session=session, ts_code="600519.SH", now=now)
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
     assert any(
         call_args[:3] == ("600519.SH", "news", "RuntimeError")
@@ -436,10 +415,7 @@ def test_run_hourly_watchlist_sync_logs_warning_for_item_failure(
             assert result["processed"] == 0
             assert result["skipped"] == 1
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
     assert any(
         call_args[:3] == ("600519.SH", "hourly_sync", "RuntimeError")
@@ -483,10 +459,7 @@ def test_run_hourly_watchlist_sync_refreshes_candidate_evidence_on_schedule(
                 (datetime(2026, 3, 23, 12, 5, tzinfo=UTC), True),
             ]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
@@ -541,10 +514,7 @@ def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
             assert result["processed"] == 0
             assert result["skipped"] == 1
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
     assert any(
         call_args[:3] == ("600519.SH", "daily_analysis", "RuntimeError")

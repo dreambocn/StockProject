@@ -3,7 +3,9 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.stock_candidate_evidence_cache import StockCandidateEvidenceCache
@@ -37,8 +39,7 @@ class FakeRedisClient:
 
 def _build_session_factory(tmp_path: Path) -> async_sessionmaker:
     db_path = tmp_path / "candidate-evidence-test.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "candidate-evidence-test.db")
 
     async def _prepare() -> None:
         async with engine.begin() as connection:

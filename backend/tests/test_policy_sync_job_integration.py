@@ -1,7 +1,9 @@
 import asyncio
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.integrations.policy_provider import PolicyDocumentSeed
@@ -37,8 +39,7 @@ class _SingleDocumentProvider:
 
 def test_policy_sync_creates_system_job_and_links_document(tmp_path) -> None:
     db_file = tmp_path / "policy-sync-job.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "policy-sync-job.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -66,6 +67,5 @@ def test_policy_sync_creates_system_job_and_links_document(tmp_path) -> None:
             # 关键断言：主数据要能回溯到本次同步任务，便于后台排障和审计。
             assert document.sync_job_id == job.id
 
-        await engine.dispose()
 
     asyncio.run(run_test())

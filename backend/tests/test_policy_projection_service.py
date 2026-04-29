@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.news_event import NewsEvent
@@ -12,8 +14,7 @@ from app.services.policy_projection_service import project_policy_documents_to_n
 
 def test_policy_documents_project_to_news_events_for_policy_scope(tmp_path) -> None:
     db_file = tmp_path / "policy-projection.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "policy-projection.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -69,6 +70,5 @@ def test_policy_documents_project_to_news_events_for_policy_scope(tmp_path) -> N
             assert projected_row.publisher == "国务院"
             assert projected_row.evidence_kind == "policy_document"
 
-        await engine.dispose()
 
     asyncio.run(run_test())

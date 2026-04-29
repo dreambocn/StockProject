@@ -6,7 +6,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.api.deps.auth import get_current_user
 import app.api.routes.stocks as stocks_routes
@@ -42,8 +44,7 @@ class FakeRedisClient:
 def stock_client(tmp_path: Path) -> TestClient:
     db_path = tmp_path / "stock-test.db"
     db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "stock-test.db")
 
     async def _create_tables() -> None:
         async with engine.begin() as connection:
@@ -159,7 +160,6 @@ def stock_client(tmp_path: Path) -> TestClient:
 
     app.dependency_overrides.clear()
     stocks_routes.get_redis_client = original_get_redis_client
-    asyncio.run(engine.dispose())
 
 
 def test_stocks_list_supports_keyword_search(stock_client: TestClient) -> None:

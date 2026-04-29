@@ -1,14 +1,15 @@
 import asyncio
 
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import create_async_engine
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 
 
 def test_system_job_runs_table_and_links_exist(tmp_path) -> None:
     db_file = tmp_path / "system-job-model.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
+    engine, _ = build_sqlite_test_context(tmp_path, "system-job-model.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -43,6 +44,5 @@ def test_system_job_runs_table_and_links_exist(tmp_path) -> None:
         assert "system_job_id" in analysis_session_columns
         assert "system_job_id" in batch_columns
 
-        await engine.dispose()
 
     asyncio.run(run_test())

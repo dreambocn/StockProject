@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.stock_instrument import StockInstrument
@@ -17,8 +19,7 @@ from app.services.watchlist_worker_service import (
 
 def test_watchlist_workers_create_system_jobs(tmp_path) -> None:
     db_file = tmp_path / "watchlist-job.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "watchlist-job.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -91,6 +92,5 @@ def test_watchlist_workers_create_system_jobs(tmp_path) -> None:
             ]
             assert all(job.status == "success" for job in jobs)
 
-        await engine.dispose()
 
     asyncio.run(run_test())

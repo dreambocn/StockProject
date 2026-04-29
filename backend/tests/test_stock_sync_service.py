@@ -2,7 +2,9 @@ import asyncio
 from datetime import date
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.stock_daily_snapshot import StockDailySnapshot
@@ -163,8 +165,7 @@ class FakeTushareGateway:
 
 def test_sync_recent_trade_days_persists_instruments_and_snapshots(tmp_path) -> None:
     db_file = tmp_path / "stock-sync.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "stock-sync.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -220,15 +221,13 @@ def test_sync_recent_trade_days_persists_instruments_and_snapshots(tmp_path) -> 
             )
             assert snapshot_count == 2
 
-        await engine.dispose()
 
     asyncio.run(run_test())
 
 
 def test_sync_stock_basic_full_persists_all_statuses(tmp_path) -> None:
     db_file = tmp_path / "stock-basic-full.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "stock-basic-full.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -261,6 +260,5 @@ def test_sync_stock_basic_full_persists_all_statuses(tmp_path) -> None:
             assert listed.curr_type == "CNY"
             assert listed.act_ent_type == "中央国有企业"
 
-        await engine.dispose()
 
     asyncio.run(run_test())

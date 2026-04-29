@@ -4,7 +4,9 @@ import asyncio
 
 import httpx
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.services.web_source_metadata_service import (
@@ -15,8 +17,7 @@ from app.services.web_source_metadata_service import (
 def test_enrich_web_sources_extracts_source_and_published_at(tmp_path) -> None:
     db_file = tmp_path / "web-source-metadata.db"
     db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "web-source-metadata.db")
 
     html = """
     <html>
@@ -66,7 +67,6 @@ def test_enrich_web_sources_extracts_source_and_published_at(tmp_path) -> None:
                 assert result[0]["metadata_status"] == "enriched"
                 assert result[0]["published_at"].startswith("2026-03-24")
 
-        await engine.dispose()
 
     asyncio.run(run_test())
 
@@ -74,8 +74,7 @@ def test_enrich_web_sources_extracts_source_and_published_at(tmp_path) -> None:
 def test_enrich_web_sources_falls_back_to_domain_and_uses_cache(tmp_path) -> None:
     db_file = tmp_path / "web-source-cache.db"
     db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "web-source-cache.db")
     call_count = {"count": 0}
 
     async def run_test() -> None:
@@ -138,7 +137,6 @@ def test_enrich_web_sources_falls_back_to_domain_and_uses_cache(tmp_path) -> Non
                 assert second_result[0]["source"] == "unknown.example.com"
                 assert call_count["count"] == 1
 
-        await engine.dispose()
 
     asyncio.run(run_test())
 
@@ -146,8 +144,7 @@ def test_enrich_web_sources_falls_back_to_domain_and_uses_cache(tmp_path) -> Non
 def test_enrich_web_sources_marks_unavailable_for_non_html(tmp_path) -> None:
     db_file = tmp_path / "web-source-unavailable.db"
     db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "web-source-unavailable.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -185,7 +182,6 @@ def test_enrich_web_sources_marks_unavailable_for_non_html(tmp_path) -> None:
                 assert result[0]["source"] == "files.example.com"
                 assert result[0]["published_at"] is None
 
-        await engine.dispose()
 
     asyncio.run(run_test())
 
@@ -195,8 +191,7 @@ def test_enrich_web_sources_fetches_uncached_urls_concurrently_and_keeps_order(
 ) -> None:
     db_file = tmp_path / "web-source-concurrency.db"
     db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "web-source-concurrency.db")
     active_requests = {"count": 0, "max": 0}
     requested_urls: list[str] = []
 
@@ -273,6 +268,5 @@ def test_enrich_web_sources_fetches_uncached_urls_concurrently_and_keeps_order(
                     "https://news.example.com/third",
                 ]
 
-        await engine.dispose()
 
     asyncio.run(run_test())

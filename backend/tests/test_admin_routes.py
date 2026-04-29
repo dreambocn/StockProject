@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
@@ -15,16 +17,8 @@ from app.models.user import User
 
 @pytest.fixture
 def admin_test_context(tmp_path: Path):
-    db_path = tmp_path / "admin-test.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    test_session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, test_session_maker = build_sqlite_test_context(tmp_path, "admin-test.db")
+    init_sqlite_schema(engine)
 
     async def override_get_db_session():
         async with test_session_maker() as session:
@@ -39,7 +33,6 @@ def admin_test_context(tmp_path: Path):
         }
 
     app.dependency_overrides.clear()
-    asyncio.run(engine.dispose())
 
 
 def _create_user(

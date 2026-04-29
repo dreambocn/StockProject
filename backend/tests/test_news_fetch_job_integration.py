@@ -1,7 +1,9 @@
 import asyncio
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.system_job_run import SystemJobRun
@@ -14,8 +16,7 @@ from app.services.news_fetch_batch_service import (
 
 def test_news_fetch_batch_creates_and_finishes_system_job(tmp_path) -> None:
     db_file = tmp_path / "news-fetch-job.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "news-fetch-job.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -47,6 +48,5 @@ def test_news_fetch_batch_creates_and_finishes_system_job(tmp_path) -> None:
             assert job_row.linked_entity_type == "news_fetch_batch"
             assert job_row.metrics_json["row_count_persisted"] == 2
 
-        await engine.dispose()
 
     asyncio.run(run_test())

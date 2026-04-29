@@ -3,7 +3,9 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.api.routes import analysis as analysis_routes
 from app.db.base import Base
@@ -18,16 +20,8 @@ from app.models.stock_instrument import StockInstrument
 
 
 def _prepare_analysis_client(tmp_path: Path):
-    db_path = tmp_path / "analysis-test.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "analysis-test.db")
+    init_sqlite_schema(engine)
 
     async def override_session():
         async with session_maker() as session:
@@ -40,7 +34,6 @@ def _prepare_analysis_client(tmp_path: Path):
 
 def _cleanup_analysis_client(engine):
     app.dependency_overrides.clear()
-    asyncio.run(engine.dispose())
 
 
 def test_analysis_summary_route_returns_pending_when_empty(tmp_path: Path) -> None:

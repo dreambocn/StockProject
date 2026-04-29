@@ -3,7 +3,9 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.stock_daily_snapshot import StockDailySnapshot
@@ -20,16 +22,8 @@ from app.services.stock_repository import (
 
 
 def _with_session_maker(tmp_path: Path):
-    db_path = tmp_path / "stock-repository-test.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "stock-repository-test.db")
+    init_sqlite_schema(engine)
     return session_maker, engine
 
 
@@ -106,10 +100,7 @@ def test_kline_and_snapshot_repository_helpers(tmp_path: Path) -> None:
                 latest_snapshot_map["000001.SZ"].trade_date.isoformat() == "2026-03-02"
             )
 
-    try:
-        asyncio.run(_run())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(_run())
 
 
 def test_trade_calendar_repository_helpers(tmp_path: Path) -> None:
@@ -141,10 +132,7 @@ def test_trade_calendar_repository_helpers(tmp_path: Path) -> None:
             assert rows[0].cal_date.isoformat() == "2026-03-03"
             assert rows[0].is_open == "1"
 
-    try:
-        asyncio.run(_run())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(_run())
 
 
 def test_adj_factor_repository_helpers(tmp_path: Path) -> None:
@@ -186,7 +174,4 @@ def test_adj_factor_repository_helpers(tmp_path: Path) -> None:
             assert len(rows_by_trade_date) == 1
             assert rows_by_trade_date[0].trade_date.isoformat() == "2026-03-03"
 
-    try:
-        asyncio.run(_run())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(_run())

@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.policy_document import PolicyDocument
@@ -10,8 +12,7 @@ from app.models.policy_document import PolicyDocument
 
 def test_policy_document_unique_by_source_and_url_hash(tmp_path) -> None:
     db_file = tmp_path / "policy-models.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "policy-models.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -47,6 +48,5 @@ def test_policy_document_unique_by_source_and_url_hash(tmp_path) -> None:
             with pytest.raises(IntegrityError):
                 await session.commit()
 
-        await engine.dispose()
 
     asyncio.run(run_test())

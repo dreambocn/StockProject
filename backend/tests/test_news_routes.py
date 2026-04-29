@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.db.session import get_db_session
@@ -50,8 +52,7 @@ class FakeRedisClient:
 def news_client(tmp_path: Path) -> TestClient:
     db_path = tmp_path / "news-test.db"
     db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "news-test.db")
 
     async def _create_tables() -> None:
         async with engine.begin() as connection:
@@ -247,7 +248,6 @@ def news_client(tmp_path: Path) -> TestClient:
     news_mapper_service.get_candidate_evidence_snapshots = (
         original_get_candidate_evidence_snapshots
     )
-    asyncio.run(engine.dispose())
 
 
 def _append_news_events(news_client: TestClient, rows: list[NewsEvent]) -> None:

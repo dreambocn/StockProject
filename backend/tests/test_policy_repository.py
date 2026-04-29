@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.policy_document import PolicyDocument
@@ -51,8 +53,7 @@ def _build_policy_document(*, summary: str, content_text: str | None) -> PolicyD
 
 def test_upsert_policy_documents_updates_existing_row_without_duplication(tmp_path) -> None:
     db_file = tmp_path / "policy-repository.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "policy-repository.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -102,6 +103,5 @@ def test_upsert_policy_documents_updates_existing_row_without_duplication(tmp_pa
             assert stored.content_text == "为推动新能源高质量发展，现就电网、储能、示范应用等事项通知如下。"
             assert stored.sync_job_id == "job-2"
 
-        await engine.dispose()
 
     asyncio.run(run_test())

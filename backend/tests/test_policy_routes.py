@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.db.session import get_db_session
@@ -12,15 +14,8 @@ from app.models.policy_document import PolicyDocument
 
 
 def _create_context(tmp_path: Path):
-    db_path = tmp_path / "policy-routes.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "policy-routes.db")
+    init_sqlite_schema(engine)
 
     async def override_get_db_session():
         async with session_maker() as session:
@@ -32,7 +27,6 @@ def _create_context(tmp_path: Path):
 
 def _cleanup_context(engine) -> None:
     app.dependency_overrides.clear()
-    asyncio.run(engine.dispose())
 
 
 def test_policy_documents_route_supports_search_scope_and_pagination(tmp_path: Path) -> None:

@@ -3,7 +3,9 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.stock_instrument import StockInstrument
@@ -37,18 +39,9 @@ def _quote(
 
 @pytest.fixture
 def listing_session_maker(tmp_path: Path):
-    db_path = tmp_path / "stock-listing-service.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "stock-listing-service.db")
+    init_sqlite_schema(engine)
     yield session_maker
-    asyncio.run(engine.dispose())
 
 
 def test_listing_service_applies_snapshot_kline_tushare_fallback_chain(

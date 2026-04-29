@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.db.init_db import ensure_schema_for_engine
@@ -19,16 +21,8 @@ from app.services.news_fetch_batch_service import (
 
 
 def _setup_async_session(tmp_path):
-    db_path = tmp_path / "news-fetch-batch.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "news-fetch-batch.db")
+    init_sqlite_schema(engine)
     return engine, session_maker
 
 
@@ -80,10 +74,7 @@ def test_news_fetch_batch_lifecycle_records_metrics(tmp_path) -> None:
             assert batch.error_type == "RuntimeError"
             assert batch.error_message == "上游服务短暂超时"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_latest_news_fetch_batch_prefers_completed_statuses(tmp_path) -> None:
@@ -159,16 +150,13 @@ def test_load_latest_news_fetch_batch_prefers_completed_statuses(tmp_path) -> No
             assert latest_failed is not None
             assert latest_failed.id == batch_failed.id
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_ensure_schema_adds_news_fetch_batch_structures(tmp_path) -> None:
     db_path = tmp_path / "news-fetch-schema.db"
     db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
+    engine, _ = build_sqlite_test_context(tmp_path, "news-fetch-schema.db")
 
     async def run_test() -> None:
         await ensure_schema_for_engine(engine)
@@ -203,7 +191,4 @@ def test_ensure_schema_adds_news_fetch_batch_structures(tmp_path) -> None:
         assert "ix_news_fetch_batches_status_finished_at" in batch_indexes
         assert "ix_news_fetch_batches_trigger_source_finished_at" in batch_indexes
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())

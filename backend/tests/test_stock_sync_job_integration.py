@@ -1,7 +1,9 @@
 import asyncio
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.system_job_run import SystemJobRun
@@ -25,8 +27,7 @@ class FakeGateway:
 
 def test_stock_sync_full_creates_system_job(tmp_path) -> None:
     db_file = tmp_path / "stock-sync-job.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "stock-sync-job.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -44,6 +45,5 @@ def test_stock_sync_full_creates_system_job(tmp_path) -> None:
             assert job.metrics_json["created"] == 1
             assert job.metrics_json["list_statuses"] == ["L"]
 
-        await engine.dispose()
 
     asyncio.run(run_test())

@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, datetime
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.integrations.policy_provider import PolicyDocumentSeed
@@ -62,8 +64,7 @@ class _FailingPolicyProvider:
 
 def test_policy_sync_service_records_job_metrics(tmp_path) -> None:
     db_file = tmp_path / "policy-sync-service.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "policy-sync-service.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -118,6 +119,5 @@ def test_policy_sync_service_records_job_metrics(tmp_path) -> None:
                 },
             ]
 
-        await engine.dispose()
 
     asyncio.run(run_test())

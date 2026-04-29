@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 import app.services.analysis_service as analysis_service_module
 from app.db.base import Base
@@ -30,16 +32,8 @@ from app.services.analysis_service import (
 
 
 def _setup_async_session(tmp_path: Path):
-    db_path = tmp_path / "analysis-service.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "analysis-service.db")
+    init_sqlite_schema(engine)
     return engine, session_maker
 
 
@@ -102,10 +96,7 @@ def test_analysis_service_aggregates_events_and_report(tmp_path: Path) -> None:
             assert result["events"][0]["event_id"] == "event-1"
             assert result["report"]["status"] == "ready"
             assert result["status"] == "ready"
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_keeps_summary_read_only_before_session_generation(
@@ -173,10 +164,7 @@ def test_analysis_service_keeps_summary_read_only_before_session_generation(
             assert result["report"] is None
             assert result["status"] == "pending"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_build_structured_sources_marks_policy_document_provider() -> None:
@@ -287,10 +275,7 @@ def test_analysis_service_filters_report_by_anchor_event_id(tmp_path: Path) -> N
             assert result["report"]["anchor_event_id"] == "evt-hot-1"
             assert result["report"]["structured_sources"] == [{"provider": "akshare", "count": 1}]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_backfills_web_source_metadata_on_summary_read(
@@ -369,10 +354,7 @@ def test_analysis_service_backfills_web_source_metadata_on_summary_read(
             assert persisted_report.web_sources[0]["source"] == "Reuters"
             assert persisted_report.web_sources[0]["published_at"] == "2026-03-24T09:30:00+00:00"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_forces_domain_source_when_summary_backfill_unavailable(
@@ -455,10 +437,7 @@ def test_analysis_service_forces_domain_source_when_summary_backfill_unavailable
             assert persisted_source["source"] == "finance.example.com"
             assert persisted_source["published_at"] is None
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_summary_backfill_respects_five_url_budget(
@@ -536,10 +515,7 @@ def test_analysis_service_summary_backfill_respects_five_url_budget(
             assert len(result["report"]["web_sources"]) == 8
             assert called_sizes == [5]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_reports_backfill_respects_three_three_ten_budget(
@@ -624,10 +600,7 @@ def test_analysis_service_reports_backfill_respects_three_three_ten_budget(
             assert all(size <= 3 for size in called_sizes)
             assert sum(called_sizes) <= 10
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_skips_reenrichment_for_unavailable_fallback_ready_source(
@@ -705,10 +678,7 @@ def test_analysis_service_skips_reenrichment_for_unavailable_fallback_ready_sour
             assert second["report"] is not None
             assert called_times["count"] == 0
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_summary_dedupes_duplicate_logical_events(tmp_path: Path) -> None:
@@ -815,10 +785,7 @@ def test_analysis_service_summary_dedupes_duplicate_logical_events(tmp_path: Pat
                 "duplicate-new",
             ]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_service_summary_event_limit_defaults_from_settings_but_explicit_value_wins(
@@ -897,10 +864,7 @@ def test_analysis_service_summary_event_limit_defaults_from_settings_but_explici
             assert default_result["event_count"] == 1
             assert explicit_result["event_count"] == 2
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
@@ -1156,10 +1120,7 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
         assert "event=analysis_session_started session_id=session-1" in caplog.text
         assert "event=analysis_session_completed session_id=session-1" in caplog.text
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_analysis_report_archives_use_inline_evidence_without_per_report_fallback(
@@ -1248,10 +1209,7 @@ def test_analysis_report_archives_use_inline_evidence_without_per_report_fallbac
 
         assert result["items"][0]["evidence_events"][0]["event_id"] == "event-inline"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_analysis_session_by_id_persists_functional_pipeline_roles(
@@ -1458,10 +1416,7 @@ def test_run_analysis_session_by_id_persists_functional_pipeline_roles(
             assert persisted_session.role_completed_count == 2
             assert persisted_session.active_role_key == "decision_agent"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_analysis_session_by_id_refreshes_heartbeat_during_long_generation(
@@ -1566,10 +1521,7 @@ def test_run_analysis_session_by_id_refreshes_heartbeat_during_long_generation(
         assert observed_heartbeat["value"] is not None
         assert observed_heartbeat["value"] > old_heartbeat.replace(tzinfo=None)
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_analysis_session_by_id_sanitizes_non_json_pipeline_payloads(
@@ -1778,10 +1730,7 @@ def test_run_analysis_session_by_id_sanitizes_non_json_pipeline_payloads(
                 "stock",
             ]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_run_analysis_session_by_id_marks_session_failed_when_finalizing_flush_breaks(
@@ -2031,7 +1980,4 @@ def test_run_analysis_session_by_id_marks_session_failed_when_finalizing_flush_b
             assert persisted_session.error_message
             assert persisted_reports == []
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())

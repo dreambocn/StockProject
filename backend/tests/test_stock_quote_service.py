@@ -4,7 +4,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.stock_instrument import StockInstrument
@@ -19,14 +21,16 @@ from app.services.stock_quote_service import (
 def _setup_async_session(tmp_path: Path):
     db_path = tmp_path / 'stock-quote-service.db'
     db_url = f'sqlite+aiosqlite:///{db_path.as_posix()}'
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(
+        tmp_path,
+        "stock-quote-service.db",
+    )
 
     async def _create_tables() -> None:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-    asyncio.run(_create_tables())
+    init_sqlite_schema(engine)
     return engine, session_maker
 
 
@@ -82,10 +86,7 @@ def test_load_resolved_latest_snapshot_falls_back_to_daily_kline_db(
             assert snapshot.pct_chg == 0.8356
             assert remote_calls['count'] == 0
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_price_window_with_completion_fetches_and_persists_daily_kline_rows(
@@ -206,10 +207,7 @@ def test_load_price_window_with_completion_fetches_and_persists_daily_kline_rows
             ).scalars().all()
             assert len(persisted_rows) == 5
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_price_windows_with_completion_fetches_once_for_multiple_anchor_dates(
@@ -292,7 +290,4 @@ def test_load_price_windows_with_completion_fetches_once_for_multiple_anchor_dat
                 }
             ]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())

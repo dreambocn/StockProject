@@ -3,7 +3,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.db.session import get_db_session
@@ -14,14 +16,16 @@ from app.models.analysis_generation_session import AnalysisGenerationSession
 def _prepare_client(tmp_path: Path):
     db_path = tmp_path / 'analysis-session-status.db'
     db_url = f'sqlite+aiosqlite:///{db_path.as_posix()}'
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(
+        tmp_path,
+        "analysis-session-status.db",
+    )
 
     async def _create_tables() -> None:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 
-    asyncio.run(_create_tables())
+    init_sqlite_schema(engine)
 
     async def override_session():
         async with session_maker() as session:
@@ -33,7 +37,6 @@ def _prepare_client(tmp_path: Path):
 
 def _cleanup_client(engine) -> None:
     app.dependency_overrides.clear()
-    asyncio.run(engine.dispose())
 
 
 def test_analysis_session_status_route_returns_progress_fields(tmp_path: Path) -> None:

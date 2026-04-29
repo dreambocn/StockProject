@@ -4,7 +4,9 @@ import logging
 
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 import app.api.routes.health as health_routes
 from app.db.base import Base
@@ -215,8 +217,7 @@ def test_health_endpoint_maps_to_readiness(monkeypatch) -> None:
 def test_stocks_endpoint_returns_list_response(tmp_path) -> None:
     db_path = tmp_path / "main-stock-test.db"
     db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "main-stock-test.db")
 
     async def _prepare() -> None:
         async with engine.begin() as connection:
@@ -241,7 +242,6 @@ def test_stocks_endpoint_returns_list_response(tmp_path) -> None:
             assert "name" in payload[0]
     finally:
         app.dependency_overrides.clear()
-        asyncio.run(engine.dispose())
 
 
 def test_cors_allows_whitelisted_origin(monkeypatch) -> None:

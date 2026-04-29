@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.news_event import NewsEvent
@@ -27,16 +29,8 @@ from app.services.news_latest_query_service import (
 
 
 def _setup_async_session(tmp_path: Path):
-    db_path = tmp_path / "news-repository.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "news-repository.db")
+    init_sqlite_schema(engine)
     return engine, session_maker
 
 
@@ -196,10 +190,7 @@ def test_replace_news_rows_archives_batches_but_latest_readers_only_return_lates
             assert [item.title for item in policy_rows] == ["新政策批次"]
             assert [item.title for item in stock_rows] == ["新个股批次"]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_query_news_events_supports_latest_and_all_batch_modes(
@@ -295,10 +286,7 @@ def test_query_news_events_supports_latest_and_all_batch_modes(
             assert stock_all_rows[0].summary == "新批次"
             assert stock_all_rows[1].summary == "旧批次"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_latest_query_service_selects_latest_rows_for_cluster_and_fallback(
@@ -383,10 +371,7 @@ def test_latest_query_service_selects_latest_rows_for_cluster_and_fallback(
             assert [item.id for item in rows] == ["hot-new", "stock-new"]
             assert [item.summary for item in rows] == ["新批次", "新批次"]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_latest_query_service_paginates_after_dedupe(
@@ -458,7 +443,4 @@ def test_latest_query_service_paginates_after_dedupe(
             assert len(paged_rows) == 1
             assert paged_rows[0].id == "evt-a-new"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())

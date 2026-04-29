@@ -3,7 +3,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.analysis_agent_run import AnalysisAgentRun
@@ -20,16 +22,8 @@ from app.services.analysis_repository import (
 
 
 def _setup_async_session(tmp_path: Path):
-    db_path = tmp_path / "analysis-repository.db"
-    db_url = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def _create_tables() -> None:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(_create_tables())
+    engine, session_maker = build_sqlite_test_context(tmp_path, "analysis-repository.db")
+    init_sqlite_schema(engine)
     return engine, session_maker
 
 
@@ -101,10 +95,7 @@ def test_load_recent_news_events_dedupes_archived_batches(tmp_path: Path) -> Non
             assert rows[0].title == "白酒行业监管新规"
             assert rows[1].summary == "新批次"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_recent_news_events_keeps_anchor_event_first(tmp_path: Path) -> None:
@@ -177,10 +168,7 @@ def test_load_recent_news_events_keeps_anchor_event_first(tmp_path: Path) -> Non
             assert rows[0].id == "anchor-old"
             assert rows[1].id == "policy-latest"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_recent_news_events_candidate_limit_returns_larger_candidate_pool(
@@ -225,10 +213,7 @@ def test_load_recent_news_events_candidate_limit_returns_larger_candidate_pool(
 
             assert len(rows) == 3
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_recent_news_events_includes_hot_context_when_topic_missing(
@@ -301,10 +286,7 @@ def test_load_recent_news_events_includes_hot_context_when_topic_missing(
 
             assert {row.scope for row in rows} == {'stock', 'policy', 'hot'}
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_load_analysis_events_candidate_limit_supports_summary_oversampling(
@@ -356,10 +338,7 @@ def test_load_analysis_events_candidate_limit_supports_summary_oversampling(
             assert len(rows) == 3
             assert rows[0]["event_id"] == "event-0"
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_list_analysis_agent_runs_for_reports_groups_rows_by_report_id(
@@ -432,10 +411,7 @@ def test_list_analysis_agent_runs_for_reports_groups_rows_by_report_id(
         ]
         assert [row.role_key for row in grouped["report-2"]] == ["audit"]
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())
 
 
 def test_claim_next_analysis_session_for_worker_allows_only_one_concurrent_winner() -> None:
@@ -582,7 +558,4 @@ def test_claim_next_analysis_session_for_worker_uses_heartbeat_for_stale_running
         assert expired_after.heartbeat_at is not None
         assert expired_after.heartbeat_at > stale_before.replace(tzinfo=None)
 
-    try:
-        asyncio.run(run_test())
-    finally:
-        asyncio.run(engine.dispose())
+    asyncio.run(run_test())

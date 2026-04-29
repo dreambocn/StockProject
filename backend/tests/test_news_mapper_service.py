@@ -2,7 +2,9 @@ import asyncio
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.news_event import NewsEvent
@@ -17,8 +19,7 @@ def test_load_anchor_events_by_topic_only_uses_latest_hot_fetch_window(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "news-mapper-test.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "news-mapper-test.db")
 
     async def _run() -> None:
         async with engine.begin() as connection:
@@ -73,8 +74,7 @@ def test_load_relevant_candidate_instruments_only_returns_matching_rows(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "news-mapper-candidate-test.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "news-mapper-candidate-test.db")
 
     async def _run() -> None:
         async with engine.begin() as connection:

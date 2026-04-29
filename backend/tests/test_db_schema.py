@@ -2,7 +2,9 @@ import asyncio
 
 from sqlalchemy import select
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.core.settings import Settings
 from app.db.init_db import (
@@ -17,7 +19,7 @@ from app.models.user import User
 def test_ensure_schema_creates_required_tables(tmp_path) -> None:
     db_file = tmp_path / "schema-check.db"
     db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
-    engine = create_async_engine(db_url)
+    engine, _ = build_sqlite_test_context(tmp_path, "schema-check.db")
 
     async def run_test() -> None:
         async with engine.begin() as connection:
@@ -87,7 +89,6 @@ def test_ensure_schema_creates_required_tables(tmp_path) -> None:
 
         assert "anchor_event_id" in session_columns
 
-        await engine.dispose()
 
     asyncio.run(run_test())
 
@@ -163,8 +164,7 @@ def test_ensure_postgres_schema_exists_creates_missing_schema() -> None:
 def test_ensure_initial_admin_user_creates_seed_admin(tmp_path) -> None:
     db_file = tmp_path / "seed-admin.db"
     db_url = f"sqlite+aiosqlite:///{db_file.as_posix()}"
-    engine = create_async_engine(db_url)
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "seed-admin.db")
 
     settings = Settings(
         postgres_jdbc_url="jdbc:postgresql://127.0.0.1:5432/DreamBoDB.stockdb",
@@ -191,6 +191,5 @@ def test_ensure_initial_admin_user_creates_seed_admin(tmp_path) -> None:
         assert admin.email == "admin-root@example.com"
         assert admin.user_level == "admin"
 
-        await engine.dispose()
 
     asyncio.run(run_test())

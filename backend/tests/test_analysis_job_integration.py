@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from conftest import build_sqlite_test_context, init_sqlite_schema
 
 from app.db.base import Base
 from app.models.analysis_generation_session import AnalysisGenerationSession
@@ -13,8 +15,7 @@ from app.services.analysis_service import run_analysis_session_by_id, start_anal
 
 def test_analysis_session_creates_and_completes_system_job(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_file = tmp_path / "analysis-job.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    engine, session_maker = build_sqlite_test_context(tmp_path, "analysis-job.db")
     monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
 
     async def run_test() -> None:
@@ -68,6 +69,5 @@ def test_analysis_session_creates_and_completes_system_job(tmp_path, monkeypatch
             assert job_row.linked_entity_id == session_row.id
             assert job_row.status in {"success", "partial"}
 
-        await engine.dispose()
 
     asyncio.run(run_test())
