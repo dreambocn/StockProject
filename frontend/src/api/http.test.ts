@@ -4,7 +4,31 @@ import { ApiError, requestJson } from './http'
 
 describe('requestJson', () => {
   afterEach(() => {
+    vi.unstubAllEnvs()
     vi.unstubAllGlobals()
+  })
+
+  it('does not duplicate api prefix when base url already points to api root', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', '/api')
+    vi.resetModules()
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: () => 'application/json',
+      },
+      json: async () => ({ ok: true }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { requestJson: requestWithDockerBase } = await import('./http')
+
+    await requestWithDockerBase('/api/auth/login', { method: 'POST', body: {} })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/login',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 
   it('keeps error payload on ApiError', async () => {

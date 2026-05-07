@@ -99,6 +99,20 @@ PROGRESS.md 迭代进度记录
 
 ## 快速开始
 
+### Docker 单机部署
+
+如果是在服务器上部署，并且 PostgreSQL / Redis 已经由服务器现有服务提供，可以直接使用 Docker Compose 拉起前端、后端 API 与两个 Worker。该方式只对外暴露 `frontend-nginx` 的单端口，默认访问入口为 `http://服务器IP:8080`。
+
+```powershell
+Set-Location 'E:\Development\Project\StockProject'
+Copy-Item '.\.env.production.example' '.\.env.production'
+# 修改 .env.production 中的数据库、Redis、JWT、CORS、LLM/SMTP 等生产配置后再启动。
+# 如果密码或密钥包含 $，请在 .env.production 中用单引号包住完整值，避免 Compose 变量插值。
+docker compose --env-file .\.env.production up -d --build
+```
+
+Docker 部署会先通过 `backend-migrate` 执行 `uv run alembic upgrade head`，再启动 API 与 Worker；生产环境固定使用 `DB_SCHEMA_BOOTSTRAP_MODE=validate_only`，服务启动时只校验迁移状态，不隐式改表。完整说明见 `docs/deploy/docker-deploy.md`。
+
 ### 1. 准备依赖
 
 - Python `3.14+`
