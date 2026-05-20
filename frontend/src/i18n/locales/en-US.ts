@@ -253,6 +253,18 @@ export default {
       domain_inferred: 'Domain inferred',
       unavailable: 'Unavailable',
     },
+    sourceKindText: {
+      structured_event: 'Structured Event',
+      policy_document: 'Policy Source',
+      web_reference: 'Web Citation',
+      market_data: 'Market Data',
+    },
+    sourceQualityText: {
+      verified: 'Verified',
+      enriched: 'Enriched',
+      domain_inferred: 'Domain inferred',
+      unavailable: 'Unavailable',
+    },
     error: 'Failed to load analysis data. Please try again later.',
   },
   watchlist: {
@@ -399,6 +411,10 @@ export default {
       jobs: {
         title: 'Job Center',
         note: 'Inspect analysis, news, watchlist and sync task runs in one place.',
+      },
+      evaluations: {
+        title: 'Research Evaluation Center',
+        note: 'Compare production and evidence-first profiles across citation, evidence, risk, and stability metrics.',
       },
       policy: {
         title: 'Policy Center',

@@ -262,10 +262,12 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         "selected_hypothesis": "VARCHAR(64)",
         "decision_confidence": "VARCHAR(16)",
         "decision_reason_summary": "TEXT",
+        "research_plan": "JSON",
         "anchor_event_id": "VARCHAR(36)",
         "anchor_event_title": "VARCHAR(255)",
         "structured_sources": "JSON",
         "web_sources": "JSON",
+        "source_items": "JSON",
     }
     for column_name, column_type in required_column_sql.items():
         if column_name in existing_columns:
@@ -294,6 +296,7 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         "role_count": "INTEGER",
         "role_completed_count": "INTEGER",
         "active_role_key": "VARCHAR(64)",
+        "research_plan": "JSON",
     }
     for column_name, column_type in required_session_column_sql.items():
         if column_name in session_columns:

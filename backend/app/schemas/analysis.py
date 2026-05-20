@@ -65,6 +65,54 @@ class AnalysisPipelineRoleResponse(BaseModel):
     failure_type: str | None = None
 
 
+class ResearchPlanRequest(BaseModel):
+    topic: str | None = None
+    event_id: str | None = None
+    use_web_search: bool = False
+    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+
+
+class ResearchFocusBucketResponse(BaseModel):
+    key: str
+    label: str
+    count: int = 0
+
+
+class ResearchPlanResponse(BaseModel):
+    ts_code: str
+    summary: str
+    focus_buckets: list[ResearchFocusBucketResponse]
+    priority_questions: list[str]
+    source_scope: dict[str, object] = {}
+    web_search_recommended: bool = False
+    estimated_steps: list[str]
+    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+
+
+class AnalysisSourceItemResponse(BaseModel):
+    id: str
+    source_kind: Literal[
+        "structured_event",
+        "policy_document",
+        "web_reference",
+        "market_data",
+    ]
+    title: str
+    source_name: str | None = None
+    url: str | None = None
+    snippet: str | None = None
+    quality_status: Literal[
+        "verified",
+        "enriched",
+        "domain_inferred",
+        "unavailable",
+    ] = "unavailable"
+    published_at: datetime | None = None
+    domain: str | None = None
+    metadata_status: str | None = None
+    evidence_id: str | None = None
+
+
 class AnalysisReportResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -93,10 +141,12 @@ class AnalysisReportResponse(BaseModel):
     anchor_event_id: str | None = None
     anchor_event_title: str | None = None
     # structured_sources/web_sources 用于前端来源展示，允许为空数组。
+    research_plan: dict[str, object] | None = None
     structured_sources: list[dict[str, object]] = []
     evidence_event_count: int = 0
     evidence_events: list[AnalysisEventLinkResponse] = []
     web_sources: list[dict[str, object]] = []
+    source_items: list[AnalysisSourceItemResponse] = []
     pipeline_roles: list[AnalysisPipelineRoleResponse] = []
     prompt_version: str | None = None
     model_name: str | None = None
@@ -131,6 +181,7 @@ class AnalysisSessionCreateRequest(BaseModel):
     use_web_search: bool = False
     trigger_source: Literal["manual", "watchlist_daily"] = "manual"
     analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+    research_plan: dict[str, object] | None = None
 
 
 class AnalysisSessionCreateResponse(BaseModel):

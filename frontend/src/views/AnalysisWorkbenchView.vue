@@ -9,6 +9,8 @@ import {
   type AnalysisReportResponse,
   type AnalysisEventResponse,
   type AnalysisPipelineRoleResponse,
+  type AnalysisSourceItem,
+  type ResearchPlanResponse,
   type StockAnalysisSummaryResponse,
 } from '../api/analysis'
 import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
@@ -41,8 +43,12 @@ const streamingStageMessage = ref('')
 const lastHeartbeatValue = ref('')
 const lastHeartbeatObservedAt = ref<number | null>(null)
 const exportLoading = ref(false)
+const copySummaryMessage = ref('')
 const useWebSearch = ref(false)
 const analysisViewMode = ref<AnalysisViewMode>('events')
+const researchPlanPreview = ref<ResearchPlanResponse | null>(null)
+const researchPlanLoading = ref(false)
+const researchPlanSkipped = ref(false)
 const webSearchInherited = ref(false)
 const webSearchSeededTsCode = ref('')
 const watchlistLoading = ref(false)
@@ -53,6 +59,7 @@ const workbenchLoadVersion = ref(0)
 const reportEvidenceCache = ref<Record<string, ReportEvidencePayload>>({})
 const activeEvidenceEvents = ref<AnalysisEventResponse[]>([])
 const activeEvidenceTotal = ref(0)
+const focusedEvidenceId = ref<string | null>(null)
 
 let stopSessionStream: (() => void) | null = null
 let sessionPollTimer: ReturnType<typeof window.setTimeout> | null = null
@@ -227,6 +234,15 @@ const translateWebSourceMetadataStatus = (value: string | null | undefined) => {
   return t(`analysisWorkbench.webSourceStatusText.${normalizedValue}`, normalizedValue)
 }
 
+const translateSourceKind = (value: AnalysisSourceItem['source_kind']) => {
+  return t(`analysisWorkbench.sourceKindText.${value}`, value)
+}
+
+const translateSourceQuality = (value: string | null | undefined) => {
+  const normalizedValue = value || 'unavailable'
+  return t(`analysisWorkbench.sourceQualityText.${normalizedValue}`, normalizedValue)
+}
+
 const confidenceRank = (value: string | null | undefined) => {
   if (value === 'high') {
     return 3
@@ -354,6 +370,38 @@ const highlightFactors = computed(() => sortedFactors.value.slice(0, 2))
 const riskHighlights = computed(() => (selectedReport.value?.risk_points ?? []).slice(0, 3))
 // 只有存在可切换的真实历史报告时才展示历史区，避免单报告场景浪费首屏空间。
 const hasHistoricalReports = computed(() => reportArchives.value.length >= 2)
+const selectedReportIndex = computed(() => {
+  if (!selectedReport.value?.id) {
+    return -1
+  }
+  return reportArchives.value.findIndex((item) => item.id === selectedReport.value?.id)
+})
+const previousReportForDiff = computed(() => {
+  const currentIndex = selectedReportIndex.value
+  if (currentIndex < 0) {
+    return reportArchives.value.find((item) => item.id !== selectedReport.value?.id) ?? null
+  }
+  return reportArchives.value[currentIndex + 1] ?? reportArchives.value[currentIndex - 1] ?? null
+})
+const historyDiffHints = computed(() => {
+  const current = selectedReport.value
+  const previous = previousReportForDiff.value
+  if (!current || !previous) {
+    return []
+  }
+  const currentConfidence = current.decision_confidence || '--'
+  const previousConfidence = previous.decision_confidence || '--'
+  const currentHypothesis = current.selected_hypothesis || '--'
+  const previousHypothesis = previous.selected_hypothesis || '--'
+  const currentEventCount = current.evidence_event_count ?? current.evidence_events?.length ?? 0
+  const previousEventCount = previous.evidence_event_count ?? previous.evidence_events?.length ?? 0
+  return [
+    `生成时间：${formatDateTime(previous.generated_at)} → ${formatDateTime(current.generated_at)}`,
+    `事件数：${previousEventCount} → ${currentEventCount}`,
+    `采纳假设：${previousHypothesis} → ${currentHypothesis}`,
+    `置信度：${previousConfidence} → ${currentConfidence}`,
+  ]
+})
 // 因子区与风险区共用第二行双列位，若其中一块无数据则让另一块自动占满整行。
 const showFactorSpotlight = computed(() => highlightFactors.value.length > 0 || riskHighlights.value.length === 0)
 const showRiskSpotlight = computed(() => riskHighlights.value.length > 0 || highlightFactors.value.length === 0)
@@ -450,8 +498,75 @@ const hasMoreEvents = computed(() => filteredEvents.value.length > 4)
 
 const structuredSourceItems = computed(() => selectedReport.value?.structured_sources ?? [])
 const webSourceItems = computed(() => selectedReport.value?.web_sources ?? [])
+const fallbackSourceItems = computed<AnalysisSourceItem[]>(() => {
+  const eventItems = activeEvidenceEvents.value.map((event) => ({
+    id: `event-${event.event_id}`,
+    source_kind: event.scope === 'policy' || event.event_type === 'policy'
+      ? 'policy_document'
+      : 'structured_event',
+    title: event.title,
+    source_name: event.source,
+    quality_status: event.link_status === 'linked' ? 'verified' : 'unavailable',
+    published_at: event.published_at,
+    metadata_status: event.published_at ? 'enriched' : 'unavailable',
+    evidence_id: event.event_id,
+  }) satisfies AnalysisSourceItem)
+  const webItems = webSourceItems.value.map((item, index) => ({
+    id: `web-${item.url || index}`,
+    source_kind: 'web_reference',
+    title: item.title || item.url || t('analysisWorkbench.dataMissing'),
+    source_name: item.source || item.domain || null,
+    url: item.url || null,
+    snippet: item.snippet || null,
+    quality_status: item.metadata_status === 'enriched'
+      ? 'enriched'
+      : item.metadata_status === 'domain_inferred'
+        ? 'domain_inferred'
+        : 'unavailable',
+    published_at: item.published_at ?? null,
+    domain: item.domain ?? null,
+    metadata_status: item.metadata_status ?? null,
+  }) satisfies AnalysisSourceItem)
+  return [...eventItems, ...webItems]
+})
+const unifiedSourceItems = computed<AnalysisSourceItem[]>(() => {
+  const explicitItems = selectedReport.value?.source_items ?? []
+  const items = explicitItems.length > 0 ? explicitItems : fallbackSourceItems.value
+  const kindRank: Record<AnalysisSourceItem['source_kind'], number> = {
+    policy_document: 0,
+    structured_event: 1,
+    market_data: 2,
+    web_reference: 3,
+  }
+  const qualityRank: Record<string, number> = {
+    verified: 0,
+    enriched: 1,
+    domain_inferred: 2,
+    unavailable: 3,
+  }
+  return [...items].sort((left, right) => {
+    const leftKindRank = kindRank[left.source_kind] ?? 9
+    const rightKindRank = kindRank[right.source_kind] ?? 9
+    const kindDelta = leftKindRank - rightKindRank
+    if (kindDelta !== 0) {
+      return kindDelta
+    }
+    const leftQualityRank = qualityRank[left.quality_status || 'unavailable'] ?? 9
+    const rightQualityRank = qualityRank[right.quality_status || 'unavailable'] ?? 9
+    const qualityDelta =
+      leftQualityRank - rightQualityRank
+    if (qualityDelta !== 0) {
+      return qualityDelta
+    }
+    return (right.published_at ? 1 : 0) - (left.published_at ? 1 : 0)
+  })
+})
 const hasSourcesWorkspace = computed(
-  () => structuredSourceItems.value.length > 0 || webSourceItems.value.length > 0 || reportRuntimeMeta.value.length > 0,
+  () =>
+    structuredSourceItems.value.length > 0
+    || webSourceItems.value.length > 0
+    || unifiedSourceItems.value.length > 0
+    || reportRuntimeMeta.value.length > 0,
 )
 
 const hotNewsAnchorEvent = computed(() => {
@@ -880,6 +995,62 @@ const selectReport = (reportId: string | null | undefined) => {
   expandedRolePayloads.value = {}
 }
 
+const beginAnalysisSession = async (plan: ResearchPlanResponse | null) => {
+  if (!tsCode.value) {
+    return
+  }
+
+  stopStreaming()
+  streaming.value = true
+  streamingMarkdown.value = ''
+  streamingStageMessage.value = ''
+  researchPlanPreview.value = null
+
+  try {
+    const session = await analysisApi.createAnalysisSession(tsCode.value, {
+      topic: topicContext.value || null,
+      event_id: eventId.value || null,
+      force_refresh: true,
+      use_web_search: useWebSearch.value,
+      trigger_source: 'manual',
+      analysis_mode: 'functional_multi_agent',
+      research_plan: plan,
+    })
+    if (session.cached || !session.session_id) {
+      // 缓存命中或未分配流式会话时，直接回拉最新数据即可。
+      streaming.value = false
+      await loadWorkbench()
+      return
+    }
+
+    activePollingToken += 1
+    const pollingToken = activePollingToken
+    await pollAnalysisSession(session.session_id, pollingToken)
+  } catch {
+    streaming.value = false
+    errorMessage.value = t('analysisWorkbench.error')
+  }
+}
+
+const confirmResearchPlan = async () => {
+  await beginAnalysisSession(researchPlanPreview.value)
+}
+
+const cancelResearchPlan = () => {
+  researchPlanPreview.value = null
+}
+
+const focusSourceItem = (sourceItem: AnalysisSourceItem, event?: Event) => {
+  if (!sourceItem.evidence_id) {
+    return
+  }
+  event?.preventDefault()
+  focusedEvidenceId.value = sourceItem.evidence_id
+  analysisViewMode.value = 'events'
+  selectedEventFilter.value = 'all'
+  showAllEvents.value = true
+}
+
 const toggleRolePayload = (roleKey: string) => {
   expandedRolePayloads.value = {
     ...expandedRolePayloads.value,
@@ -990,33 +1161,21 @@ const refreshAnalysis = async () => {
     return
   }
 
-  stopStreaming()
-  streaming.value = true
-  streamingMarkdown.value = ''
-  streamingStageMessage.value = ''
-
+  researchPlanSkipped.value = false
+  researchPlanLoading.value = true
   try {
-    const session = await analysisApi.createAnalysisSession(tsCode.value, {
+    const plan = await analysisApi.getResearchPlan(tsCode.value, {
       topic: topicContext.value || null,
       event_id: eventId.value || null,
-      force_refresh: true,
       use_web_search: useWebSearch.value,
-      trigger_source: 'manual',
       analysis_mode: 'functional_multi_agent',
     })
-    if (session.cached || !session.session_id) {
-      // 缓存命中或未分配流式会话时，直接回拉最新数据即可。
-      streaming.value = false
-      await loadWorkbench()
-      return
-    }
-
-    activePollingToken += 1
-    const pollingToken = activePollingToken
-    await pollAnalysisSession(session.session_id, pollingToken)
+    researchPlanPreview.value = plan
   } catch {
-    streaming.value = false
-    errorMessage.value = t('analysisWorkbench.error')
+    researchPlanSkipped.value = true
+    await beginAnalysisSession(null)
+  } finally {
+    researchPlanLoading.value = false
   }
 }
 
@@ -1046,7 +1205,7 @@ const triggerReportDownload = (content: string, fileName: string, mimeType: stri
   }, 0)
 }
 
-const exportSelectedReport = async (format: 'markdown' | 'html') => {
+const exportSelectedReport = async (format: 'markdown' | 'html' | 'package') => {
   if (!selectedReport.value?.id) {
     return
   }
@@ -1056,16 +1215,32 @@ const exportSelectedReport = async (format: 'markdown' | 'html') => {
     if (!content.trim()) {
       throw new Error('empty_export_content')
     }
-    const suffix = format === 'html' ? 'html' : 'md'
+    const suffix = format === 'html' || format === 'package' ? 'html' : 'md'
+    const fileStem = format === 'package'
+      ? `${tsCode.value || 'analysis-report'}-${selectedReport.value.id}-research-package`
+      : `${tsCode.value || 'analysis-report'}-${selectedReport.value.id}`
     triggerReportDownload(
       content,
-      `${tsCode.value || 'analysis-report'}-${selectedReport.value.id}.${suffix}`,
-      format === 'html' ? 'text/html;charset=utf-8' : 'text/markdown;charset=utf-8',
+      `${fileStem}.${suffix}`,
+      format === 'markdown' ? 'text/markdown;charset=utf-8' : 'text/html;charset=utf-8',
     )
   } catch {
     errorMessage.value = '导出报告失败，请稍后重试'
   } finally {
     exportLoading.value = false
+  }
+}
+
+const copySelectedReportSummary = async () => {
+  const content = activeSummaryMarkdown.value.trim()
+  if (!content) {
+    return
+  }
+  try {
+    await navigator.clipboard?.writeText(content)
+    copySummaryMessage.value = '摘要已复制'
+  } catch {
+    copySummaryMessage.value = '复制摘要失败'
   }
 }
 
@@ -1114,6 +1289,10 @@ watch(
     reportEvidenceCache.value = {}
     activeEvidenceEvents.value = []
     activeEvidenceTotal.value = 0
+    focusedEvidenceId.value = null
+    researchPlanPreview.value = null
+    researchPlanSkipped.value = false
+    copySummaryMessage.value = ''
     activeEvidenceLoadToken += 1
     expandedRolePayloads.value = {}
     showAllEvents.value = false
@@ -1235,7 +1414,7 @@ watch(
                     <el-button
                       class="analysis-action-btn analysis-action-btn--primary"
                       type="primary"
-                      :loading="loading || streaming"
+                      :loading="loading || streaming || researchPlanLoading"
                       @click="refreshAnalysis"
                     >
                       {{ t('analysisWorkbench.refreshAction') }}
@@ -1275,6 +1454,23 @@ watch(
                     <el-button
                       class="analysis-action-btn analysis-action-btn--outline"
                       plain
+                      :disabled="!selectedReport?.id"
+                      :loading="exportLoading"
+                      @click="exportSelectedReport('package')"
+                    >
+                      导出研究包
+                    </el-button>
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      plain
+                      :disabled="!activeSummaryMarkdown.trim()"
+                      @click="copySelectedReportSummary"
+                    >
+                      复制摘要
+                    </el-button>
+                    <el-button
+                      class="analysis-action-btn analysis-action-btn--outline"
+                      plain
                       :loading="watchlistLoading"
                       @click="toggleWatchlist"
                     >
@@ -1304,6 +1500,53 @@ watch(
               <span class="analysis-overview__label">{{ item.label }}</span>
               <strong class="analysis-overview__value">{{ item.value }}</strong>
             </article>
+          </div>
+          <p v-if="researchPlanSkipped" class="analysis-summary__hint">
+            已跳过计划预览
+          </p>
+          <p v-if="copySummaryMessage" class="analysis-summary__hint">
+            {{ copySummaryMessage }}
+          </p>
+        </el-card>
+
+        <el-card
+          v-if="researchPlanPreview"
+          class="analysis-panel analysis-research-plan"
+          data-testid="analysis-research-plan-preview"
+        >
+          <div class="analysis-panel__header">
+            <div>
+              <p class="analysis-panel__eyebrow">研究计划预览</p>
+              <h2 class="analysis-panel__title">{{ researchPlanPreview.summary }}</h2>
+            </div>
+            <span class="analysis-token">
+              {{ researchPlanPreview.web_search_recommended ? '建议联网增强' : '本地证据优先' }}
+            </span>
+          </div>
+          <div class="analysis-source-evidence">
+            <span
+              v-for="bucket in researchPlanPreview.focus_buckets"
+              :key="bucket.key"
+              class="analysis-token"
+            >
+              {{ `${bucket.label} × ${bucket.count}` }}
+            </span>
+          </div>
+          <ul class="analysis-risk-list">
+            <li
+              v-for="question in researchPlanPreview.priority_questions"
+              :key="question"
+            >
+              {{ question }}
+            </li>
+          </ul>
+          <div class="analysis-hero__secondary-actions">
+            <el-button type="primary" :loading="streaming" @click="confirmResearchPlan">
+              确认并生成
+            </el-button>
+            <el-button plain @click="cancelResearchPlan">
+              稍后再说
+            </el-button>
           </div>
         </el-card>
 
@@ -1520,7 +1763,11 @@ watch(
                 v-for="event in visibleEvents"
                 :key="event.event_id"
                 class="analysis-event-card"
-                :class="{ 'analysis-event-card--anchor': event.event_id === eventId }"
+                :data-testid="`analysis-event-card-${event.event_id}`"
+                :class="{
+                  'analysis-event-card--anchor': event.event_id === eventId,
+                  'analysis-event-card--focused': event.event_id === focusedEvidenceId,
+                }"
               >
                 <div class="analysis-event-card__header">
                   <p data-testid="analysis-event-title" class="analysis-event-card__title">
@@ -1719,6 +1966,38 @@ watch(
                 </div>
               </section>
 
+              <section v-if="unifiedSourceItems.length > 0" class="analysis-sources-section">
+                <p class="analysis-sources-section__title">来源工作区</p>
+                <div class="analysis-web-source-list">
+                  <component
+                    :is="sourceItem.url ? 'a' : 'button'"
+                    v-for="sourceItem in unifiedSourceItems"
+                    :key="sourceItem.id"
+                    class="analysis-web-source-item analysis-source-item"
+                    :data-testid="`analysis-source-item-${sourceItem.id}`"
+                    :href="sourceItem.url || undefined"
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    type="button"
+                    @click="focusSourceItem(sourceItem, $event)"
+                  >
+                    <strong>{{ sourceItem.title }}</strong>
+                    <span>
+                      {{ translateSourceKind(sourceItem.source_kind) }}
+                      ·
+                      {{ sourceItem.source_name || sourceItem.domain || t('analysisWorkbench.dataMissing') }}
+                    </span>
+                    <span>
+                      {{ sourceItem.published_at ? formatDateTime(sourceItem.published_at) : t('analysisWorkbench.webSourceMissingTime') }}
+                    </span>
+                    <span class="analysis-token">
+                      {{ translateSourceQuality(sourceItem.quality_status) }}
+                    </span>
+                    <span v-if="sourceItem.snippet">{{ sourceItem.snippet }}</span>
+                  </component>
+                </div>
+              </section>
+
               <section v-if="webSourceItems.length > 0" class="analysis-sources-section">
                 <p class="analysis-sources-section__title">{{ t('analysisWorkbench.sourcesView') }}</p>
                 <div class="analysis-web-source-list">
@@ -1768,6 +2047,14 @@ watch(
                   <p class="analysis-history-spotlight__meta">
                     {{ translateTriggerSource(selectedReport.trigger_source) }} · {{ displayStatus }}
                   </p>
+                  <div v-if="historyDiffHints.length > 0" class="analysis-history-diff">
+                    <span
+                      v-for="hint in historyDiffHints"
+                      :key="hint"
+                    >
+                      {{ hint }}
+                    </span>
+                  </div>
                 </div>
 
                 <div class="analysis-history-list">
@@ -2381,6 +2668,17 @@ watch(
   color: var(--terminal-text-body);
 }
 
+.analysis-source-item {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.analysis-research-plan {
+  border-color: rgba(123, 197, 255, 0.28);
+}
+
 .analysis-summary__body {
   margin: 0;
   line-height: 1.8;
@@ -2427,6 +2725,11 @@ watch(
   box-shadow: inset 0 0 0 1px rgba(123, 197, 255, 0.08);
 }
 
+.analysis-event-card--focused {
+  border-color: var(--terminal-primary);
+  box-shadow: 0 0 0 2px rgba(123, 197, 255, 0.18);
+}
+
 .analysis-history-item {
   display: grid;
   gap: 0.24rem;
@@ -2458,6 +2761,21 @@ watch(
   margin: 0;
   color: var(--terminal-text-body);
   font-size: 0.82rem;
+}
+
+.analysis-history-diff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.analysis-history-diff span {
+  border: 1px solid var(--terminal-border);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  color: var(--terminal-muted);
+  font-size: 0.78rem;
 }
 
 .analysis-factor-card__header,

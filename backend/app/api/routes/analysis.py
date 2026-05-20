@@ -10,6 +10,8 @@ from app.db.session import get_db_session
 from app.schemas.analysis import (
     AnalysisReportArchiveListResponse,
     AnalysisReportEvidenceResponse,
+    ResearchPlanRequest,
+    ResearchPlanResponse,
     AnalysisSessionCreateRequest,
     AnalysisSessionCreateResponse,
     AnalysisSessionStatusResponse,
@@ -23,6 +25,7 @@ from app.services.analysis_runtime_service import event_bus
 from app.services.analysis_service import (
     AnalysisNotFoundError,
     AnalysisReportNotFoundError,
+    build_research_plan,
     get_analysis_report_evidence,
     get_stock_analysis_summary,
     list_stock_analysis_report_archives,
@@ -33,6 +36,7 @@ from app.services.analysis_export_service import (
     load_analysis_report_for_export,
     render_report_html,
     render_report_markdown,
+    render_report_package_html,
 )
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -89,10 +93,34 @@ async def create_analysis_session_route(
             use_web_search=request.use_web_search,
             trigger_source=request.trigger_source,
             analysis_mode=request.analysis_mode,
+            research_plan=request.research_plan,
         )
     except AnalysisNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return AnalysisSessionCreateResponse.model_validate(payload)
+
+
+@router.post(
+    "/stocks/{ts_code}/research-plan",
+    response_model=ResearchPlanResponse,
+)
+async def create_research_plan_route(
+    ts_code: str,
+    request: ResearchPlanRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> ResearchPlanResponse:
+    try:
+        payload = await build_research_plan(
+            session,
+            ts_code,
+            topic=request.topic,
+            event_id=request.event_id,
+            use_web_search=request.use_web_search,
+            analysis_mode=request.analysis_mode,
+        )
+    except AnalysisNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ResearchPlanResponse.model_validate(payload)
 
 
 @router.get(
@@ -166,7 +194,7 @@ async def export_analysis_report_route(
     session: AsyncSession = Depends(get_db_session),
 ) -> Response:
     normalized_format = format.strip().lower() or "markdown"
-    if normalized_format not in {"markdown", "html"}:
+    if normalized_format not in {"markdown", "html", "package"}:
         raise HTTPException(status_code=422, detail="invalid export format")
 
     try:
@@ -182,6 +210,17 @@ async def export_analysis_report_route(
             headers={
                 "Content-Disposition": (
                     f'attachment; filename="{report.ts_code}-{report.id}.html"'
+                )
+            },
+        )
+    if normalized_format == "package":
+        package_content = render_report_package_html(report)
+        return Response(
+            content=package_content,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{report.ts_code}-{report.id}-research-package.html"'
                 )
             },
         )

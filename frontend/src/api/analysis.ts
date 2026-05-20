@@ -61,6 +61,21 @@ export type AnalysisPipelineRoleResponse = {
   failure_type?: string | null
 }
 
+export type ResearchPlanResponse = {
+  ts_code: string
+  summary: string
+  focus_buckets: Array<{
+    key: string
+    label: string
+    count: number
+  }>
+  priority_questions: string[]
+  source_scope: Record<string, unknown>
+  web_search_recommended: boolean
+  estimated_steps: string[]
+  analysis_mode: AnalysisMode
+}
+
 export type AnalysisRoleProgressResponse = {
   role_key: string
   role_label?: string | null
@@ -97,8 +112,10 @@ export type AnalysisReportResponse = {
   token_usage_output?: number | null
   cost_estimate?: number | null
   failure_type?: string | null
+  research_plan?: ResearchPlanResponse | Record<string, unknown> | null
   evidence_event_count?: number
   evidence_events?: AnalysisEventResponse[]
+  source_items?: AnalysisSourceItem[]
   pipeline_roles?: AnalysisPipelineRoleResponse[]
   web_sources?: Array<{
     title?: string
@@ -109,6 +126,20 @@ export type AnalysisReportResponse = {
     domain?: string | null
     metadata_status?: 'enriched' | 'domain_inferred' | 'unavailable'
   }>
+}
+
+export type AnalysisSourceItem = {
+  id: string
+  source_kind: 'structured_event' | 'policy_document' | 'web_reference' | 'market_data'
+  title: string
+  source_name?: string | null
+  url?: string | null
+  snippet?: string | null
+  quality_status?: 'verified' | 'enriched' | 'domain_inferred' | 'unavailable'
+  published_at?: string | null
+  domain?: string | null
+  metadata_status?: string | null
+  evidence_id?: string | null
 }
 
 export type StockAnalysisSummaryResponse = {
@@ -234,6 +265,7 @@ export const analysisApi = {
       use_web_search?: boolean
       trigger_source?: 'manual' | 'watchlist_daily'
       analysis_mode?: AnalysisMode
+      research_plan?: ResearchPlanResponse | Record<string, unknown> | null
     },
   ) {
     // force_refresh 与 use_web_search 由后端控制真正行为，这里仅透传。
@@ -268,13 +300,31 @@ export const analysisApi = {
     })
   },
 
+  async getResearchPlan(
+    tsCode: string,
+    payload: {
+      topic?: string | null
+      event_id?: string | null
+      use_web_search?: boolean
+      analysis_mode?: AnalysisMode
+    },
+  ) {
+    return requestJson<ResearchPlanResponse>(
+      `/api/analysis/stocks/${encodeURIComponent(tsCode)}/research-plan`,
+      {
+        method: 'POST',
+        body: payload,
+      },
+    )
+  },
+
   async getAnalysisSessionStatus(sessionId: string) {
     return requestJson<AnalysisSessionStatusResponse>(
       `/api/analysis/sessions/${encodeURIComponent(sessionId)}`,
     )
   },
 
-  async exportReport(reportId: string, format: 'markdown' | 'html') {
+  async exportReport(reportId: string, format: 'markdown' | 'html' | 'package') {
     const response = await fetch(
       `/api/analysis/reports/${encodeURIComponent(reportId)}/export?format=${format}`,
       {

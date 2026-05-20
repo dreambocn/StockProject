@@ -859,7 +859,7 @@ describe('AnalysisWorkbenchView', () => {
     )
     expect(toolbar.find('[data-testid="analysis-source-action"]').classes()).toContain('is-plain')
     expect(toolbar.find('[data-testid="analysis-source-action"]').classes()).not.toContain('is-text')
-    expect(toolbar.findAll('.analysis-action-btn--outline')).toHaveLength(5)
+    expect(toolbar.findAll('.analysis-action-btn--outline')).toHaveLength(7)
 
     const orderedButtons = toolbar
       .findAll('button')
@@ -870,6 +870,8 @@ describe('AnalysisWorkbenchView', () => {
       '查看个股详情',
       '导出 Markdown',
       '导出 HTML',
+      '导出研究包',
+      '复制摘要',
       expect.stringContaining('关注'),
       '返回热点主题',
     ])
@@ -1315,6 +1317,301 @@ describe('AnalysisWorkbenchView', () => {
     expect(statusSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('实时更新')
     expect(wrapper.text()).toContain('第一条')
+  })
+
+  it('shows research plan preview before creating a manual analysis session', async () => {
+    vi.useFakeTimers()
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', topic: 'regulation_policy', event_id: 'evt-policy' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ...createMinimalSummary('600519.SH', '## 当前解读'),
+      topic: 'regulation_policy',
+    })
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+    vi.spyOn(analysisApi, 'getResearchPlan').mockResolvedValue({
+      ts_code: '600519.SH',
+      summary: '先核对政策原文，再验证公告和行情。',
+      focus_buckets: [{ key: 'policy', label: '政策原文', count: 1 }],
+      priority_questions: ['政策是否改变风险偏好？'],
+      source_scope: {
+        event_count: 2,
+        policy_count: 1,
+        web_search: true,
+      },
+      web_search_recommended: true,
+      estimated_steps: ['确认锚点事件', '整理证据来源'],
+      analysis_mode: 'functional_multi_agent',
+    })
+    const createSessionSpy = vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
+      session_id: null,
+      report_id: 'report-current',
+      status: 'completed',
+      reused: false,
+      cached: true,
+    })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const refreshButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('刷新分析'))
+    expect(refreshButton).toBeDefined()
+    await refreshButton!.trigger('click')
+    await flushPromises()
+
+    expect(createSessionSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="analysis-research-plan-preview"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('研究计划预览')
+    expect(wrapper.text()).toContain('政策是否改变风险偏好？')
+
+    const confirmButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('确认并生成'))
+    expect(confirmButton).toBeDefined()
+    await confirmButton!.trigger('click')
+    await flushPromises()
+
+    expect(createSessionSpy).toHaveBeenCalledWith(
+      '600519.SH',
+      expect.objectContaining({
+        research_plan: expect.objectContaining({
+          summary: '先核对政策原文，再验证公告和行情。',
+        }),
+      }),
+    )
+  })
+
+  it('allows refresh when research plan preview fails and shows fallback notice', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 当前解读'),
+    )
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+    vi.spyOn(analysisApi, 'getResearchPlan').mockRejectedValue(new Error('计划接口失败'))
+    const createSessionSpy = vi.spyOn(analysisApi, 'createAnalysisSession').mockResolvedValue({
+      session_id: null,
+      report_id: 'report-current',
+      status: 'completed',
+      reused: false,
+      cached: true,
+    })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const refreshButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('刷新分析'))
+    expect(refreshButton).toBeDefined()
+    await refreshButton!.trigger('click')
+    await flushPromises()
+
+    expect(createSessionSpy).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('已跳过计划预览')
+  })
+
+  it('highlights matching evidence when clicking a unified source item', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ...createMinimalSummary('600519.SH', '## 摘要'),
+      event_count: 1,
+      events: [
+        {
+          event_id: 'evt-source-policy',
+          scope: 'policy',
+          title: '政策原文事件',
+          published_at: '2026-03-23T08:00:00Z',
+          source: 'gov_cn',
+          macro_topic: 'regulation_policy',
+          event_type: 'policy',
+          event_tags: ['政策'],
+          sentiment_label: 'positive',
+          sentiment_score: 0.7,
+          anchor_trade_date: '2026-03-24',
+          window_return_pct: 1.2,
+          window_volatility: 0.8,
+          abnormal_volume_ratio: 1.1,
+          correlation_score: 0.91,
+          confidence: 'high',
+          link_status: 'linked',
+        },
+      ],
+      report: {
+        ...createMinimalSummary('600519.SH', '## 摘要').report!,
+        id: 'report-source-items',
+        evidence_event_count: 1,
+        source_items: [
+          {
+            id: 'source-policy-1',
+            source_kind: 'policy_document',
+            title: '政策原文事件',
+            source_name: 'gov_cn',
+            quality_status: 'verified',
+            metadata_status: 'enriched',
+            published_at: '2026-03-23T08:00:00Z',
+            evidence_id: 'evt-source-policy',
+          },
+        ],
+      },
+    } as unknown as StockAnalysisSummaryResponse)
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const sourcesToggle = wrapper.get('[data-testid="analysis-view-sources"]')
+    await sourcesToggle.trigger('click')
+    await flushPromises()
+
+    const sourceButton = wrapper.get('[data-testid="analysis-source-item-source-policy-1"]')
+    await sourceButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="analysis-view-events"]').classes()).toContain('active')
+    expect(wrapper.get('[data-testid="analysis-event-card-evt-source-policy"]').classes()).toContain(
+      'analysis-event-card--focused',
+    )
+  })
+
+  it('copies current report summary to clipboard', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH' },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 可复制摘要'),
+    )
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    const copyButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('复制摘要'))
+    expect(copyButton).toBeDefined()
+    await copyButton!.trigger('click')
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('可复制摘要'))
+    expect(wrapper.text()).toContain('摘要已复制')
+  })
+
+  it('shows history diff hints and exports research package', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', source: 'stock_detail' },
+    })
+    await router.isReady()
+    const currentReport = {
+      ...createMinimalSummary('600519.SH', '## 当前报告').report!,
+      id: 'report-current',
+      generated_at: '2026-05-20T10:00:00Z',
+      selected_hypothesis: '政策改善',
+      decision_confidence: 'high',
+      evidence_event_count: 3,
+    }
+    const previousReport = {
+      ...createMinimalSummary('600519.SH', '## 上次报告').report!,
+      id: 'report-previous',
+      generated_at: '2026-05-19T10:00:00Z',
+      selected_hypothesis: '估值修复',
+      decision_confidence: 'medium',
+      evidence_event_count: 1,
+    }
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ...createMinimalSummary('600519.SH', '## 当前报告'),
+      report: currentReport,
+    })
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [currentReport, previousReport],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+    vi.spyOn(analysisApi, 'exportReport').mockResolvedValue('<html>source_manifest.json</html>')
+    const click = vi.fn()
+    const appendChild = vi.spyOn(document.body, 'appendChild').mockImplementation((node) => node)
+    const removeChild = vi.spyOn(document.body, 'removeChild').mockImplementation((node) => node)
+    const originalCreateElement = document.createElement.bind(document)
+    const createElement = vi.spyOn(document, 'createElement').mockImplementation((tagName) => {
+      if (tagName === 'a') {
+        let hrefValue = ''
+        return {
+          click,
+          set href(value: string) {
+            hrefValue = value
+          },
+          get href() {
+            return hrefValue
+          },
+          download: '',
+        } as unknown as HTMLElement
+      }
+      return originalCreateElement(tagName)
+    })
+
+    const { wrapper } = await mountWorkbench(router)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="analysis-history-section"]').text()).toContain('事件数：1 → 3')
+    expect(wrapper.get('[data-testid="analysis-history-section"]').text()).toContain('估值修复 → 政策改善')
+
+    const packageButton = wrapper
+      .findAll('button')
+      .find((item) => item.text().includes('导出研究包'))
+    expect(packageButton).toBeDefined()
+    await packageButton!.trigger('click')
+    await flushPromises()
+
+    expect(analysisApi.exportReport).toHaveBeenCalledWith('report-current', 'package')
+    expect(click).toHaveBeenCalled()
+
+    appendChild.mockRestore()
+    removeChild.mockRestore()
+    createElement.mockRestore()
   })
 
   it('stops active polling and clears preview markdown before loading next ts_code', async () => {

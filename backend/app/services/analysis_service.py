@@ -221,6 +221,134 @@ def _build_structured_sources(events: list[dict[str, object | None]]) -> list[di
     ]
 
 
+def _classify_event_source_kind(event: dict[str, object | None]) -> str:
+    scope = str(event.get("scope") or "").lower()
+    source = str(event.get("source") or "").lower()
+    event_type = str(event.get("event_type") or "").lower()
+    if scope == "policy" or event_type == "policy" or source in {
+        "gov_cn",
+        "ndrc",
+        "miit",
+        "pbc",
+        "csrc",
+        "policy_document",
+    }:
+        return "policy_document"
+    return "structured_event"
+
+
+def _build_source_items(
+    *,
+    events: list[dict[str, object | None]] | list[dict[str, object]],
+    structured_sources: list[dict[str, object]] | None = None,
+    web_sources: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    source_items: list[dict[str, object]] = []
+    seen_ids: set[str] = set()
+
+    for event in events:
+        event_id = str(event.get("event_id") or "").strip()
+        if not event_id:
+            continue
+        source_kind = _classify_event_source_kind(event)
+        source_id = f"event-{event_id}"
+        seen_ids.add(source_id)
+        source_items.append(
+            {
+                "id": source_id,
+                "source_kind": source_kind,
+                "title": str(event.get("title") or event_id),
+                "source_name": str(event.get("source") or "") or None,
+                "quality_status": (
+                    "verified"
+                    if event.get("link_status") == "linked"
+                    else "unavailable"
+                ),
+                "published_at": event.get("published_at"),
+                "metadata_status": "enriched" if event.get("published_at") else "unavailable",
+                "evidence_id": event_id,
+            }
+        )
+
+    for index, item in enumerate(structured_sources or [], start=1):
+        provider = str(item.get("provider") or "structured").strip()
+        source_id = f"structured-{provider}-{index}"
+        if source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+        source_items.append(
+            {
+                "id": source_id,
+                "source_kind": (
+                    "policy_document"
+                    if provider == "policy_document"
+                    else "market_data"
+                    if provider == "tushare"
+                    else "structured_event"
+                ),
+                "title": f"{provider} × {item.get('count') or 0}",
+                "source_name": provider,
+                "quality_status": "verified",
+                "metadata_status": "enriched",
+            }
+        )
+
+    for index, raw_source in enumerate(web_sources or [], start=1):
+        normalized = _apply_web_source_fallback(dict(raw_source))
+        url = str(normalized.get("url") or "").strip()
+        source_id = f"web-{url or index}"
+        if source_id in seen_ids:
+            continue
+        seen_ids.add(source_id)
+        metadata_status = str(normalized.get("metadata_status") or "unavailable")
+        quality_status = (
+            "enriched"
+            if metadata_status == "enriched"
+            else "domain_inferred"
+            if metadata_status == "domain_inferred"
+            else "unavailable"
+        )
+        source_items.append(
+            {
+                "id": source_id,
+                "source_kind": "web_reference",
+                "title": str(normalized.get("title") or url or "未命名联网来源"),
+                "source_name": str(
+                    normalized.get("source") or normalized.get("domain") or ""
+                )
+                or None,
+                "url": url or None,
+                "snippet": normalized.get("snippet"),
+                "quality_status": quality_status,
+                "published_at": normalized.get("published_at"),
+                "domain": normalized.get("domain"),
+                "metadata_status": metadata_status,
+            }
+        )
+
+    source_rank = {
+        "policy_document": 0,
+        "structured_event": 1,
+        "market_data": 2,
+        "web_reference": 3,
+    }
+    quality_rank = {
+        "verified": 0,
+        "enriched": 1,
+        "domain_inferred": 2,
+        "unavailable": 3,
+    }
+    return sorted(
+        source_items,
+        key=lambda item: (
+            source_rank.get(str(item.get("source_kind")), 9),
+            quality_rank.get(str(item.get("quality_status")), 9),
+            0 if item.get("published_at") else 1,
+            str(item.get("title") or ""),
+        ),
+    )
+
+
 def _derive_domain_from_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -547,6 +675,18 @@ def _serialize_report(
     if report_obj is None:
         return None
 
+    raw_structured_sources = getattr(report_obj, "structured_sources", None) or []
+    raw_web_sources = getattr(report_obj, "web_sources", None) or []
+    raw_source_items = getattr(report_obj, "source_items", None) or []
+    resolved_source_items = (
+        raw_source_items
+        if raw_source_items
+        else _build_source_items(
+            events=evidence_payloads or [],
+            structured_sources=raw_structured_sources,
+            web_sources=raw_web_sources,
+        )
+    )
     report = AnalysisReportResponse.model_validate(
         {
             "id": getattr(report_obj, "id", None),
@@ -577,14 +717,16 @@ def _serialize_report(
                 "decision_reason_summary",
                 None,
             ),
-            "structured_sources": getattr(report_obj, "structured_sources", None) or [],
+            "research_plan": getattr(report_obj, "research_plan", None),
+            "structured_sources": raw_structured_sources,
             "evidence_event_count": (
                 int(getattr(report_obj, "evidence_event_count"))
                 if getattr(report_obj, "evidence_event_count", None) is not None
                 else len(evidence_payloads or [])
             ),
             "evidence_events": evidence_payloads or [],
-            "web_sources": getattr(report_obj, "web_sources", None) or [],
+            "web_sources": raw_web_sources,
+            "source_items": resolved_source_items,
             "pipeline_roles": pipeline_roles or [],
             "prompt_version": getattr(report_obj, "prompt_version", None),
             "model_name": getattr(report_obj, "model_name", None),
@@ -846,6 +988,128 @@ async def get_analysis_report_evidence(
     }
 
 
+def _count_events_by_kind(events: list[object]) -> dict[str, int]:
+    counts = {
+        "policy": 0,
+        "announcement": 0,
+        "stock": 0,
+        "hot": 0,
+        "news": 0,
+    }
+    for event in events:
+        scope = str(getattr(event, "scope", "") or "").lower()
+        event_type = str(getattr(event, "event_type", "") or "").lower()
+        source = str(getattr(event, "source", "") or "").lower()
+        if scope == "policy" or event_type == "policy":
+            counts["policy"] += 1
+        elif source == "cninfo_announcement" or event_type == "announcement":
+            counts["announcement"] += 1
+        elif scope == "stock":
+            counts["stock"] += 1
+        elif scope == "hot":
+            counts["hot"] += 1
+        else:
+            counts["news"] += 1
+    return counts
+
+
+async def build_research_plan(
+    session: AsyncSession,
+    ts_code: str,
+    *,
+    topic: str | None,
+    event_id: str | None,
+    use_web_search: bool,
+    analysis_mode: str = "single",
+) -> dict[str, object]:
+    normalized_ts_code = ts_code.strip().upper()
+    instrument = await load_stock_instrument(session, normalized_ts_code)
+    if instrument is None:
+        raise AnalysisNotFoundError("stock not found")
+
+    settings = get_settings()
+    generation_limit = _resolve_generation_event_limit(settings, 20)
+    candidate_pool_limit = max(
+        generation_limit * settings.analysis_generation_candidate_pool_multiplier,
+        generation_limit + 20,
+    )
+    events = await load_recent_news_events(
+        session,
+        normalized_ts_code,
+        topic=topic,
+        anchor_event_id=event_id,
+        published_from=None,
+        published_to=None,
+        limit=generation_limit,
+        candidate_limit=candidate_pool_limit,
+    )
+    selected_events = select_generation_analysis_events(
+        events,
+        anchor_event_id=event_id,
+        total_limit=generation_limit,
+        stock_quota=settings.analysis_generation_stock_quota,
+        policy_quota=settings.analysis_generation_policy_quota,
+        hot_quota=settings.analysis_generation_hot_quota,
+    )
+    counts = _count_events_by_kind(selected_events)
+    focus_buckets = [
+        {"key": "policy", "label": "政策原文", "count": counts["policy"]},
+        {"key": "announcement", "label": "公告事件", "count": counts["announcement"]},
+        {"key": "stock", "label": "个股事件", "count": counts["stock"]},
+        {"key": "hot", "label": "热点事件", "count": counts["hot"]},
+        {"key": "market_data", "label": "行情数据", "count": 1},
+    ]
+    focus_buckets = [item for item in focus_buckets if item["count"] > 0]
+    if not focus_buckets:
+        focus_buckets = [{"key": "market_data", "label": "行情数据", "count": 1}]
+
+    priority_questions = [
+        "锚点事件是否足以解释近期波动？" if event_id else "近期主要驱动事件是什么？",
+        "结构化事件、政策原文与行情窗口是否相互印证？",
+        "现有证据是否存在来源不足、时间滞后或结论冲突？",
+    ]
+    if use_web_search:
+        priority_questions.append("联网引用能否补足公开来源和发布时间？")
+
+    estimated_steps = [
+        "确认股票、主题与锚点事件范围",
+        "整理结构化事件、政策原文与行情窗口",
+        "按证据强弱生成假设并进行风险审计",
+        "输出核心判断、风险提示和来源清单",
+    ]
+    if analysis_mode == ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT:
+        estimated_steps.insert(2, "分配研究规划、取证、假设、质询和裁决角色")
+
+    source_scope = {
+        "event_count": len(selected_events),
+        "policy_count": counts["policy"],
+        "announcement_count": counts["announcement"],
+        "stock_event_count": counts["stock"],
+        "hot_event_count": counts["hot"],
+        "web_search": use_web_search,
+        "anchor_event_id": event_id,
+        "topic": topic,
+    }
+    summary = (
+        f"将围绕 {normalized_ts_code} "
+        f"{('的 ' + topic) if topic else '的近期事件'}，先核对"
+        f"{len(selected_events)} 条候选证据，再生成可追溯结论。"
+    )
+    return {
+        "ts_code": normalized_ts_code,
+        "summary": summary,
+        "focus_buckets": focus_buckets,
+        "priority_questions": priority_questions,
+        "source_scope": source_scope,
+        "web_search_recommended": bool(use_web_search or counts["policy"] == 0),
+        "estimated_steps": estimated_steps,
+        "analysis_mode": normalize_analysis_mode(
+            analysis_mode,
+            trigger_source="manual",
+        ),
+    }
+
+
 async def start_analysis_session(
     session: AsyncSession,
     ts_code: str,
@@ -856,6 +1120,7 @@ async def start_analysis_session(
     use_web_search: bool,
     trigger_source: str,
     analysis_mode: str = "single",
+    research_plan: dict[str, object] | None = None,
     execute_inline: bool = False,
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
@@ -953,6 +1218,7 @@ async def start_analysis_session(
             model_name=settings.llm_model,
             reasoning_effort=settings.llm_reasoning_effort,
             orchestrator_version=orchestrator_version,
+            research_plan=research_plan,
         )
         analysis_job.linked_entity_type = "analysis_generation_session"
         analysis_job.linked_entity_id = session_row.id
@@ -1366,6 +1632,21 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             )
             safe_evidence_events = _normalize_json_list(event_payloads)
             safe_report_web_sources = _normalize_json_list(report_web_sources)
+            safe_source_items = _normalize_json_list(
+                _build_source_items(
+                    events=safe_evidence_events,
+                    structured_sources=[
+                        item
+                        for item in safe_structured_sources
+                        if isinstance(item, dict)
+                    ],
+                    web_sources=[
+                        item
+                        for item in safe_report_web_sources
+                        if isinstance(item, dict)
+                    ],
+                )
+            )
             report = await create_analysis_report(
                 session,
                 ts_code=session_row.ts_code,
@@ -1398,10 +1679,12 @@ async def run_analysis_session_by_id(session_id: str) -> None:
                 selected_hypothesis=selected_hypothesis,
                 decision_confidence=decision_confidence,
                 decision_reason_summary=decision_reason_summary,
+                research_plan=session_row.research_plan,
                 structured_sources=safe_structured_sources,
                 evidence_event_count=len(event_payloads),
                 evidence_events=safe_evidence_events,
                 web_sources=safe_report_web_sources,
+                source_items=safe_source_items,
                 prompt_version=report_prompt_version,
                 model_name=report_model_name or session_row.model_name,
                 reasoning_effort=(

@@ -252,6 +252,18 @@ export default {
       domain_inferred: '域名推断',
       unavailable: '信息缺失',
     },
+    sourceKindText: {
+      structured_event: '结构化事件',
+      policy_document: '政策原文',
+      web_reference: '联网引用',
+      market_data: '行情数据',
+    },
+    sourceQualityText: {
+      verified: '已核验',
+      enriched: '已补全',
+      domain_inferred: '域名推断',
+      unavailable: '信息缺失',
+    },
     error: '分析数据拉取失败，请稍后重试',
   },
   watchlist: {
@@ -398,6 +410,10 @@ export default {
       jobs: {
         title: '任务中心',
         note: '统一查看分析、新闻、自选与同步任务的执行轨迹。',
+      },
+      evaluations: {
+        title: '研究评估中心',
+        note: '对比生产口径与证据优先口径，查看引用、证据、风险和稳定性指标。',
       },
       policy: {
         title: '政策中心',

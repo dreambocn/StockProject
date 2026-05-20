@@ -72,6 +72,8 @@ def test_alembic_upgrade_head_stamps_legacy_baseline_then_applies_followup_revis
         assert "evidence_event_count" in report_columns
         assert "evidence_events" in report_columns
         assert "analysis_mode" in report_columns
-        assert current_version == "20260412_0008"
+        assert "research_plan" in report_columns
+        assert "source_items" in report_columns
+        assert current_version == "20260520_0009"
 
     asyncio.run(run_test())

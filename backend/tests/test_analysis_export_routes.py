@@ -43,6 +43,10 @@ def test_analysis_export_route_returns_markdown_and_html(tmp_path: Path) -> None
                         summary="## 核心判断\n测试摘要",
                         risk_points=["风险一"],
                         factor_breakdown=[{"factor_label": "景气", "weight": 0.5, "reason": "景气上行"}],
+                        research_plan={
+                            "summary": "先看政策，再核对行情。",
+                            "priority_questions": ["政策是否影响风险偏好？"],
+                        },
                         structured_sources=[{"provider": "akshare", "count": 2}],
                         web_sources=[{"title": "外部来源", "url": "https://example.com/a"}],
                         generated_at=datetime(2026, 3, 31, 10, 0, tzinfo=UTC),
@@ -54,6 +58,10 @@ def test_analysis_export_route_returns_markdown_and_html(tmp_path: Path) -> None
 
         markdown_response = client.get("/api/analysis/reports/report-1/export?format=markdown")
         assert markdown_response.status_code == 200
+        assert "## 研究计划" in markdown_response.text
+        assert "## 关键证据" in markdown_response.text
+        assert "## 来源列表" in markdown_response.text
+        assert "## 运行元数据" in markdown_response.text
         assert "## 风险提示" in markdown_response.text
         assert "外部来源" in markdown_response.text
 
@@ -61,6 +69,12 @@ def test_analysis_export_route_returns_markdown_and_html(tmp_path: Path) -> None
         assert html_response.status_code == 200
         assert "<html" in html_response.text
         assert "结构化来源" in html_response.text
+
+        package_response = client.get("/api/analysis/reports/report-1/export?format=package")
+        assert package_response.status_code == 200
+        assert "研究包" in package_response.text
+        assert "report.md" in package_response.text
+        assert "source_manifest.json" in package_response.text
     finally:
         client.close()
         _cleanup_export_context(engine)

@@ -14,6 +14,7 @@ from app.db.session import get_db_session
 from app.main import app
 from app.models.analysis_generation_session import AnalysisGenerationSession
 from app.models.analysis_report import AnalysisReport
+from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
 from app.services import analysis_repository
@@ -49,6 +50,49 @@ async def _seed_instrument(session_maker, *, ts_code: str) -> None:
                     list_status="L",
                 )
             )
+        await session.commit()
+
+
+async def _seed_research_plan_events(session_maker, *, ts_code: str) -> None:
+    async with session_maker() as session:
+        session.add_all(
+            [
+                NewsEvent(
+                    id="evt-plan-policy",
+                    scope="policy",
+                    ts_code=None,
+                    symbol=None,
+                    title="国务院发布资本市场长期资金政策",
+                    summary="政策强调长期资金入市和风险偏好修复。",
+                    published_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+                    url="https://www.gov.cn/policy",
+                    publisher="国务院",
+                    source="gov_cn",
+                    provider="policy",
+                    macro_topic="regulation_policy",
+                    event_type="policy",
+                    event_tags="policy,regulation",
+                    fetched_at=datetime(2026, 5, 18, 10, 0, tzinfo=UTC),
+                ),
+                NewsEvent(
+                    id="evt-plan-stock",
+                    scope="stock",
+                    ts_code=ts_code,
+                    symbol=ts_code.split(".")[0],
+                    title="公司公告提示订单改善",
+                    summary="公告显示订单节奏边际改善。",
+                    published_at=datetime(2026, 5, 17, 9, 0, tzinfo=UTC),
+                    url="https://example.com/notice",
+                    publisher="巨潮资讯",
+                    source="cninfo_announcement",
+                    provider="cninfo",
+                    macro_topic="announcement",
+                    event_type="announcement",
+                    event_tags="announcement",
+                    fetched_at=datetime(2026, 5, 17, 10, 0, tzinfo=UTC),
+                ),
+            ]
+        )
         await session.commit()
 
 
@@ -133,6 +177,82 @@ def test_create_analysis_session_reuses_active_session(tmp_path: Path) -> None:
     assert first_payload["session_id"]
     assert first_payload["session_id"] == second_payload["session_id"]
     assert second_payload["reused"] is True
+
+
+def test_research_plan_route_returns_stable_preview_without_creating_session(
+    tmp_path: Path,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(_seed_instrument(session_maker, ts_code="600519.SH"))
+        asyncio.run(_seed_research_plan_events(session_maker, ts_code="600519.SH"))
+
+        response = client.post(
+            "/api/analysis/stocks/600519.SH/research-plan",
+            json={
+                "topic": "regulation_policy",
+                "event_id": "evt-plan-policy",
+                "use_web_search": True,
+                "analysis_mode": "functional_multi_agent",
+            },
+        )
+
+        async def _count_sessions() -> int:
+            async with session_maker() as session:
+                result = await session.execute(select(AnalysisGenerationSession))
+                return len(result.scalars().all())
+
+        session_count = asyncio.run(_count_sessions())
+    finally:
+        _cleanup_client(engine)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ts_code"] == "600519.SH"
+    assert payload["summary"]
+    assert payload["web_search_recommended"] is True
+    assert "政策原文" in " ".join(item["label"] for item in payload["focus_buckets"])
+    assert payload["source_scope"]["event_count"] == 2
+    assert payload["estimated_steps"]
+    assert session_count == 0
+
+
+def test_create_analysis_session_persists_confirmed_research_plan(
+    tmp_path: Path,
+) -> None:
+    client, engine, session_maker = _prepare_client(tmp_path)
+    try:
+        asyncio.run(_seed_instrument(session_maker, ts_code="600519.SH"))
+        plan_payload = {
+            "summary": "先核对政策原文，再验证公告与行情。",
+            "focus_buckets": [{"key": "policy", "label": "政策原文", "count": 1}],
+            "priority_questions": ["政策是否改变风险偏好？"],
+            "source_scope": {"event_count": 1},
+            "web_search_recommended": True,
+            "estimated_steps": ["确认锚点事件"],
+        }
+        response = client.post(
+            "/api/analysis/stocks/600519.SH/sessions",
+            json={
+                "force_refresh": True,
+                "use_web_search": True,
+                "trigger_source": "manual",
+                "analysis_mode": "functional_multi_agent",
+                "research_plan": plan_payload,
+            },
+        )
+
+        async def _load_session_plan(session_id: str) -> dict[str, object] | None:
+            async with session_maker() as session:
+                row = await session.get(AnalysisGenerationSession, session_id)
+                return row.research_plan if row else None
+
+        persisted_plan = asyncio.run(_load_session_plan(response.json()["session_id"]))
+    finally:
+        _cleanup_client(engine)
+
+    assert response.status_code == 200
+    assert persisted_plan == plan_payload
 
 
 def test_create_analysis_session_uses_fresh_report_cache(tmp_path: Path) -> None:

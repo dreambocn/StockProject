@@ -47,6 +47,8 @@ class AnalysisReport(Base):
     selected_hypothesis: Mapped[str | None] = mapped_column(String(64), nullable=True)
     decision_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
     decision_reason_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # research_plan/source_items 是研究型体验的追溯字段，旧报告允许为空。
+    research_plan: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     # anchor_event_* 用于把报告锚定到关键事件，便于跨页面跳转。
     anchor_event_id: Mapped[str | None] = mapped_column(
         String(36), nullable=True, index=True
@@ -62,6 +64,9 @@ class AnalysisReport(Base):
         JSON, nullable=True
     )
     web_sources: Mapped[list[dict[str, object]] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    source_items: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSON, nullable=True
     )
     prompt_version: Mapped[str | None] = mapped_column(String(32), nullable=True)

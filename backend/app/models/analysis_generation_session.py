@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -44,6 +44,8 @@ class AnalysisGenerationSession(Base):
     role_count: Mapped[int | None] = mapped_column(nullable=True)
     role_completed_count: Mapped[int | None] = mapped_column(nullable=True)
     active_role_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # research_plan 保存用户确认过的计划预览，供后续报告归档与流水线追溯。
+    research_plan: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     system_job_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("system_job_runs.id"),
