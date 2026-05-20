@@ -108,6 +108,64 @@ export type AdminJobDetail = AdminJobListItem & {
   error_message: string | null
 }
 
+export type EvaluationMetricBreakdown = {
+  citation_completeness: number
+  evidence_coverage: number
+  risk_notice_coverage: number
+  conclusion_stability: number
+  failure_rate: number
+}
+
+export type EvaluationDatasetOption = {
+  dataset: string
+  title: string
+  case_count: number
+  event_types: string[]
+  topics: string[]
+  case_tags: string[]
+}
+
+export type EvaluationRunSummary = {
+  total_cases: number
+  profiles: string[]
+  metric_breakdown: Record<string, EvaluationMetricBreakdown>
+}
+
+export type EvaluationRunListItem = {
+  run_id: string
+  dataset: string
+  profiles: string[]
+  status: 'success' | 'partial' | 'failed'
+  started_at: string
+  completed_at: string | null
+  summary: EvaluationRunSummary
+}
+
+export type EvaluationCaseResult = {
+  case_id: string
+  dataset: string
+  ts_code: string
+  topic: string
+  event_type: string
+  case_tags: string[]
+  prompt_profile: string
+  conclusion: string
+  citations: string[]
+  evidence_kinds: string[]
+  risk_notices: string[]
+  metric_breakdown: EvaluationMetricBreakdown
+  failure_reason: string | null
+}
+
+export type EvaluationRunDetail = EvaluationRunListItem & {
+  case_results: EvaluationCaseResult[]
+}
+
+export type CreateEvaluationRunPayload = {
+  dataset: string
+  profiles: string[]
+}
+
 export const adminApi = {
   listUsers: (accessToken: string) =>
     // 管理员接口必须携带 access token，权限校验由后端统一处理。
@@ -194,6 +252,50 @@ export const adminApi = {
       method: 'GET',
       accessToken,
     }),
+
+  listEvaluationDatasets: (accessToken: string) =>
+    requestJson<EvaluationDatasetOption[]>('/api/admin/evaluations/datasets', {
+      method: 'GET',
+      accessToken,
+    }),
+
+  createEvaluationRun: (accessToken: string, payload: CreateEvaluationRunPayload) =>
+    // 评估运行会在后端写入本地结果文件，前端只提交数据集和 prompt profile。
+    requestJson<EvaluationRunDetail>('/api/admin/evaluations/runs', {
+      method: 'POST',
+      body: payload,
+      accessToken,
+    }),
+
+  listEvaluationRuns: (
+    accessToken: string,
+    filters?: {
+      dataset?: string
+      promptProfile?: string
+      eventType?: string
+      topic?: string
+    },
+  ) => {
+    const query = buildQueryString({
+      dataset: filters?.dataset,
+      prompt_profile: filters?.promptProfile,
+      event_type: filters?.eventType,
+      topic: filters?.topic,
+    })
+    return requestJson<EvaluationRunListItem[]>(`/api/admin/evaluations/runs${query}`, {
+      method: 'GET',
+      accessToken,
+    })
+  },
+
+  getEvaluationRun: (accessToken: string, runId: string) =>
+    requestJson<EvaluationRunDetail>(
+      `/api/admin/evaluations/runs/${encodeURIComponent(runId)}`,
+      {
+        method: 'GET',
+        accessToken,
+      },
+    ),
 
   createUser: (accessToken: string, payload: CreateAdminUserPayload) =>
     requestJson<AdminUser>('/api/admin/users', {

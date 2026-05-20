@@ -17,6 +17,7 @@ const mountAdminConsole = async () => {
       { path: '/admin/users', component: { template: '<div>users</div>' } },
       { path: '/admin/stocks', component: { template: '<div>stocks</div>' } },
       { path: '/admin/jobs', component: { template: '<div>jobs</div>' } },
+      { path: '/admin/evaluations', component: { template: '<div>evaluations</div>' } },
       { path: '/policy/documents', component: { template: '<div>policy</div>' } },
     ],
   })
@@ -31,17 +32,19 @@ const mountAdminConsole = async () => {
 }
 
 describe('AdminConsoleView', () => {
-  it('shows four admin feature entries', async () => {
+  it('shows admin feature entries', async () => {
     const wrapper = await mountAdminConsole()
 
     expect(wrapper.text()).toContain('后台管理中心')
     expect(wrapper.text()).toContain('用户管理中心')
     expect(wrapper.text()).toContain('股票管理中心')
     expect(wrapper.text()).toContain('任务中心')
+    expect(wrapper.text()).toContain('研究评估中心')
     expect(wrapper.text()).toContain('政策中心')
     expect(wrapper.html()).toContain('/admin/users')
     expect(wrapper.html()).toContain('/admin/stocks')
     expect(wrapper.html()).toContain('/admin/jobs')
+    expect(wrapper.html()).toContain('/admin/evaluations')
     expect(wrapper.html()).toContain('/policy/documents')
   })
 })

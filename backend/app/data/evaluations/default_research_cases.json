@@ -1,0 +1,112 @@
+[
+  {
+    "case_id": "policy-energy-storage-001",
+    "dataset": "default_research_cases",
+    "ts_code": "300750.SZ",
+    "topic": "政策支持新型储能",
+    "event_type": "政策驱动",
+    "case_tags": ["政策", "新能源", "证据优先"],
+    "expected_evidence_kinds": ["政策原文", "结构化事件", "行情数据"],
+    "expected_risk_keywords": ["补贴退坡", "产能", "估值"],
+    "baseline_context": "国家能源主管部门发布新型储能建设指引，市场关注电池龙头订单弹性。"
+  },
+  {
+    "case_id": "policy-ai-computing-002",
+    "dataset": "default_research_cases",
+    "ts_code": "000977.SZ",
+    "topic": "算力基础设施政策",
+    "event_type": "政策驱动",
+    "case_tags": ["政策", "算力", "国产替代"],
+    "expected_evidence_kinds": ["政策原文", "联网引用", "行情数据"],
+    "expected_risk_keywords": ["兑现节奏", "资本开支", "竞争"],
+    "baseline_context": "地方发布智算中心扶持方案，服务器与数据中心链条出现资金关注。"
+  },
+  {
+    "case_id": "announcement-contract-003",
+    "dataset": "default_research_cases",
+    "ts_code": "601012.SH",
+    "topic": "重大订单公告",
+    "event_type": "公告驱动",
+    "case_tags": ["公告", "订单", "光伏"],
+    "expected_evidence_kinds": ["结构化事件", "公告原文", "行情数据"],
+    "expected_risk_keywords": ["毛利率", "交付", "价格"],
+    "baseline_context": "公司公告签署长期组件订单，市场需要区分收入确认节奏与盈利弹性。"
+  },
+  {
+    "case_id": "announcement-earnings-004",
+    "dataset": "default_research_cases",
+    "ts_code": "600519.SH",
+    "topic": "业绩快报超预期",
+    "event_type": "公告驱动",
+    "case_tags": ["公告", "业绩", "消费"],
+    "expected_evidence_kinds": ["结构化事件", "公告原文", "行情数据"],
+    "expected_risk_keywords": ["高基数", "渠道库存", "估值"],
+    "baseline_context": "公司发布业绩快报，收入利润均高于市场预期。"
+  },
+  {
+    "case_id": "hot-news-export-control-005",
+    "dataset": "default_research_cases",
+    "ts_code": "002371.SZ",
+    "topic": "海外出口管制升级",
+    "event_type": "热点事件驱动",
+    "case_tags": ["热点", "半导体", "外部冲击"],
+    "expected_evidence_kinds": ["联网引用", "结构化事件", "行情数据"],
+    "expected_risk_keywords": ["供应链", "制裁", "不确定性"],
+    "baseline_context": "海外扩大半导体设备出口限制，国产替代方向活跃但事件影响存在分化。"
+  },
+  {
+    "case_id": "hot-news-weather-006",
+    "dataset": "default_research_cases",
+    "ts_code": "000998.SZ",
+    "topic": "极端天气影响农产品",
+    "event_type": "热点事件驱动",
+    "case_tags": ["热点", "农业", "供给扰动"],
+    "expected_evidence_kinds": ["联网引用", "结构化事件", "行情数据"],
+    "expected_risk_keywords": ["持续性", "价格回落", "政策调控"],
+    "baseline_context": "极端天气影响主产区播种进度，种业与农产品价格预期升温。"
+  },
+  {
+    "case_id": "conflict-policy-demand-007",
+    "dataset": "default_research_cases",
+    "ts_code": "002594.SZ",
+    "topic": "政策支持与需求放缓冲突",
+    "event_type": "证据冲突",
+    "case_tags": ["冲突证据", "汽车", "谨慎结论"],
+    "expected_evidence_kinds": ["政策原文", "联网引用", "行情数据"],
+    "expected_risk_keywords": ["需求放缓", "价格战", "库存"],
+    "baseline_context": "新能源车政策支持延续，但终端价格战和库存压力同时存在。"
+  },
+  {
+    "case_id": "conflict-earnings-valuation-008",
+    "dataset": "default_research_cases",
+    "ts_code": "300124.SZ",
+    "topic": "业绩改善但估值偏高",
+    "event_type": "证据冲突",
+    "case_tags": ["冲突证据", "医药", "估值"],
+    "expected_evidence_kinds": ["结构化事件", "联网引用", "行情数据"],
+    "expected_risk_keywords": ["估值", "集采", "研发失败"],
+    "baseline_context": "公司季度业绩改善，但估值已反映较高成长预期。"
+  },
+  {
+    "case_id": "insufficient-source-009",
+    "dataset": "default_research_cases",
+    "ts_code": "603000.SH",
+    "topic": "社媒传闻缺少来源",
+    "event_type": "来源不足",
+    "case_tags": ["来源不足", "传闻", "降级"],
+    "expected_evidence_kinds": ["联网引用"],
+    "expected_risk_keywords": ["传闻", "未证实", "流动性"],
+    "baseline_context": "市场流传公司涉及某热点概念，但缺少公告或权威来源验证。"
+  },
+  {
+    "case_id": "no-clear-event-010",
+    "dataset": "default_research_cases",
+    "ts_code": "601318.SH",
+    "topic": "无明显新增事件",
+    "event_type": "无明显事件",
+    "case_tags": ["无事件", "金融", "基线"],
+    "expected_evidence_kinds": ["行情数据"],
+    "expected_risk_keywords": ["宏观", "利率", "资产质量"],
+    "baseline_context": "个股近期没有明确新增催化，更多受行业估值和宏观预期影响。"
+  }
+]

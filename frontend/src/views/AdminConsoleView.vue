@@ -26,6 +26,13 @@ const adminEntries = [
     noteKey: 'adminConsole.entries.jobs.note',
   },
   {
+    key: 'evaluations',
+    to: '/admin/evaluations',
+    icon: '🧪',
+    titleKey: 'adminConsole.entries.evaluations.title',
+    noteKey: 'adminConsole.entries.evaluations.note',
+  },
+  {
     key: 'policy',
     to: '/policy/documents',
     icon: '📜',

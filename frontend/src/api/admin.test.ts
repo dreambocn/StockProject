@@ -105,4 +105,46 @@ describe('adminApi', () => {
     expect(summaryCall[0]).toContain('/api/admin/jobs/summary')
     expect(detailCall[0]).toContain('/api/admin/jobs/job-1')
   })
+
+  it('requests evaluation datasets, runs and detail with admin token', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ run_id: 'eval-1' }))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ run_id: 'eval-1', case_results: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await adminApi.listEvaluationDatasets('admin-access-token')
+    await adminApi.createEvaluationRun('admin-access-token', {
+      dataset: 'default_research_cases',
+      profiles: ['production_current', 'evidence_first_v2'],
+    })
+    await adminApi.listEvaluationRuns('admin-access-token', {
+      dataset: 'default_research_cases',
+      promptProfile: 'evidence_first_v2',
+      eventType: '政策驱动',
+      topic: '政策',
+    })
+    await adminApi.getEvaluationRun('admin-access-token', 'eval-1')
+
+    const datasetsCall = fetchMock.mock.calls[0] as [string, RequestInit]
+    const createCall = fetchMock.mock.calls[1] as [string, RequestInit]
+    const runsCall = fetchMock.mock.calls[2] as [string, RequestInit]
+    const detailCall = fetchMock.mock.calls[3] as [string, RequestInit]
+    expect(datasetsCall[0]).toContain('/api/admin/evaluations/datasets')
+    expect(createCall[0]).toContain('/api/admin/evaluations/runs')
+    expect(createCall[1].method).toBe('POST')
+    expect(createCall[1].body).toBe(
+      JSON.stringify({
+        dataset: 'default_research_cases',
+        profiles: ['production_current', 'evidence_first_v2'],
+      }),
+    )
+    expect(runsCall[0]).toContain('dataset=default_research_cases')
+    expect(runsCall[0]).toContain('prompt_profile=evidence_first_v2')
+    expect(runsCall[0]).toContain('event_type=%E6%94%BF%E7%AD%96%E9%A9%B1%E5%8A%A8')
+    expect(runsCall[0]).toContain('topic=%E6%94%BF%E7%AD%96')
+    expect(detailCall[0]).toContain('/api/admin/evaluations/runs/eval-1')
+  })
 })

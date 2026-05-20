@@ -23,6 +23,12 @@ from app.schemas.admin_jobs import (
     AdminJobPageResponse,
     AdminJobSummaryResponse,
 )
+from app.schemas.evaluations import (
+    EvaluationDatasetOption,
+    EvaluationRun,
+    EvaluationRunListItem,
+    EvaluationRunRequest,
+)
 from app.schemas.policy import AdminPolicySyncResponse, PolicySyncRequest
 from app.schemas.stocks import (
     AdminStockPageResponse,
@@ -42,6 +48,10 @@ from app.services.job_query_service import (
     get_job_type_counts,
     list_job_runs,
     list_recent_failed_jobs,
+)
+from app.services.evaluation_service import (
+    EvaluationServiceError,
+    get_evaluation_service,
 )
 
 
@@ -341,3 +351,63 @@ async def get_job_detail(
         error_type=job.error_type,
         error_message=job.error_message,
     )
+
+
+@router.get("/evaluations/datasets", response_model=list[EvaluationDatasetOption])
+async def list_evaluation_datasets(
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+) -> list[EvaluationDatasetOption]:
+    # 评估集第一版使用本地 JSON，路由只暴露只读目录信息，避免后台页直接读文件。
+    return get_evaluation_service().list_datasets()
+
+
+@router.post(
+    "/evaluations/runs",
+    response_model=EvaluationRun,
+    status_code=status.HTTP_201_CREATED,
+)
+async def run_evaluation(
+    payload: EvaluationRunRequest,
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+) -> EvaluationRun:
+    try:
+        # 关键流程：评估同步执行并写入本地结果文件，便于 CLI 与后台页复用同一份运行记录。
+        return get_evaluation_service().run_evaluation(
+            dataset=payload.dataset,
+            profiles=list(payload.profiles),
+        )
+    except EvaluationServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/evaluations/runs", response_model=list[EvaluationRunListItem])
+async def list_evaluation_runs(
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+    dataset: str | None = Query(default=None),
+    prompt_profile: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    topic: str | None = Query(default=None),
+) -> list[EvaluationRunListItem]:
+    return get_evaluation_service().list_runs(
+        dataset=dataset,
+        prompt_profile=prompt_profile,
+        event_type=event_type,
+        topic=topic,
+    )
+
+
+@router.get("/evaluations/runs/{run_id}", response_model=EvaluationRun)
+async def get_evaluation_run(
+    run_id: str,
+    _current_admin: Annotated[User, Depends(get_current_admin)],
+) -> EvaluationRun:
+    try:
+        return get_evaluation_service().get_run(run_id)
+    except EvaluationServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc

@@ -12,6 +12,8 @@ describe('router lazy routes', () => {
       'admin-console',
       'admin-users',
       'admin-stocks',
+      'admin-jobs',
+      'admin-evaluations',
       'profile',
       'change-password',
       'stock-detail',
@@ -38,4 +40,11 @@ it('registers the watchlist route', () => {
   const route = router.getRoutes().find((item) => item.name === 'watchlist')
   expect(route).toBeDefined()
   expect(route?.path).toBe('/watchlist')
+})
+
+it('registers the admin evaluations route', () => {
+  const route = router.getRoutes().find((item) => item.name === 'admin-evaluations')
+  expect(route).toBeDefined()
+  expect(route?.path).toBe('/admin/evaluations')
+  expect(route?.meta.requiresAdmin).toBe(true)
 })
