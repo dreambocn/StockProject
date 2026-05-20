@@ -411,48 +411,59 @@ const goToAnalysis = async (tsCode: string, profile: MacroImpactProfile) => {
                   </el-button>
                 </div>
                 <p class="impact-candidate-reason">{{ candidate.evidence_summary }}</p>
-                <p
-                  v-if="(candidate.theme_matches?.length ?? 0) > 0"
-                  class="impact-candidate-breakdown"
+                <details
+                  v-if="
+                    (candidate.theme_matches?.length ?? 0) > 0
+                    || (candidate.theme_evidence?.length ?? 0) > 0
+                    || (candidate.source_breakdown?.length ?? 0) > 0
+                    || (candidate.evidence_items?.length ?? 0) > 0
+                  "
+                  class="impact-candidate-details"
                 >
-                  <strong>主题命中：</strong>
-                  {{ candidate.theme_matches.join(' / ') }}
-                </p>
-                <p
-                  v-if="(candidate.theme_evidence?.length ?? 0) > 0"
-                  class="impact-candidate-breakdown"
-                >
-                  <strong>主题证据：</strong>
-                  {{ candidate.theme_evidence.join('；') }}
-                </p>
-                <p
-                  v-if="(candidate.source_breakdown?.length ?? 0) > 0"
-                  class="impact-candidate-breakdown"
-                >
-                  <strong>{{ t('hotNews.candidateSourceBreakdown') }}:</strong>
-                  {{ formatCandidateSourceBreakdown(candidate.source_breakdown) }}
-                </p>
-                <div
-                  v-if="(candidate.evidence_items?.length ?? 0) > 0"
-                  class="impact-candidate-evidence-list"
-                >
-                  <article
-                    v-for="item in candidate.evidence_items ?? []"
-                    :key="`${candidate.ts_code}-${item.evidence_kind}-${item.title}`"
-                    class="impact-candidate-evidence-card"
+                  <summary>详细证据</summary>
+                  <p
+                    v-if="(candidate.theme_matches?.length ?? 0) > 0"
+                    class="impact-candidate-breakdown"
                   >
-                    <div class="impact-candidate-evidence-head">
-                      <span class="analysis-token">
-                        {{ formatCandidateEvidenceKind(item.evidence_kind) }}
-                      </span>
-                      <span class="impact-candidate-evidence-time">
-                        {{ formatCandidateEvidenceTime(item.published_at) }}
-                      </span>
-                    </div>
-                    <p class="impact-candidate-evidence-title">{{ item.title }}</p>
-                    <p v-if="item.summary" class="impact-candidate-evidence-summary">{{ item.summary }}</p>
-                  </article>
-                </div>
+                    <strong>主题命中：</strong>
+                    {{ candidate.theme_matches.join(' / ') }}
+                  </p>
+                  <p
+                    v-if="(candidate.theme_evidence?.length ?? 0) > 0"
+                    class="impact-candidate-breakdown"
+                  >
+                    <strong>主题证据：</strong>
+                    {{ candidate.theme_evidence.join('；') }}
+                  </p>
+                  <p
+                    v-if="(candidate.source_breakdown?.length ?? 0) > 0"
+                    class="impact-candidate-breakdown"
+                  >
+                    <strong>{{ t('hotNews.candidateSourceBreakdown') }}:</strong>
+                    {{ formatCandidateSourceBreakdown(candidate.source_breakdown) }}
+                  </p>
+                  <div
+                    v-if="(candidate.evidence_items?.length ?? 0) > 0"
+                    class="impact-candidate-evidence-list"
+                  >
+                    <article
+                      v-for="item in candidate.evidence_items ?? []"
+                      :key="`${candidate.ts_code}-${item.evidence_kind}-${item.title}`"
+                      class="impact-candidate-evidence-card"
+                    >
+                      <div class="impact-candidate-evidence-head">
+                        <span class="analysis-token">
+                          {{ formatCandidateEvidenceKind(item.evidence_kind) }}
+                        </span>
+                        <span class="impact-candidate-evidence-time">
+                          {{ formatCandidateEvidenceTime(item.published_at) }}
+                        </span>
+                      </div>
+                      <p class="impact-candidate-evidence-title">{{ item.title }}</p>
+                      <p v-if="item.summary" class="impact-candidate-evidence-summary">{{ item.summary }}</p>
+                    </article>
+                  </div>
+                </details>
               </article>
             </div>
             <span v-else>--</span>
@@ -673,6 +684,22 @@ h1 {
 
 .impact-candidate-breakdown {
   margin: 0;
+}
+
+.impact-candidate-details {
+  margin-top: 0.35rem;
+}
+
+.impact-candidate-details summary {
+  cursor: pointer;
+  color: var(--terminal-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.impact-candidate-details[open] {
+  display: grid;
+  gap: 0.4rem;
 }
 
 .impact-candidate-evidence-list {

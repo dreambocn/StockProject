@@ -1,0 +1,246 @@
+# Project Progress
+
+Last update: 2026-05-20
+
+## Completed
+
+- Upgraded AI analysis workbench into a research-oriented flow:
+  - Added research plan preview and persisted `research_plan` for analysis sessions/reports
+  - Added unified source workspace and `source_items` compatibility for old reports
+  - Added fixed Markdown/HTML export sections and HTML research package export
+  - Added lightweight evaluation dataset, CLI workflow, admin evaluation APIs, and admin evaluation page
+  - Added history report diff hints and folded hot-news candidate evidence details
+- Established frontend-backend separated scaffold.
+- Frontend: Vue 3 + Vite + TypeScript + Element Plus + VueUse Motion.
+- Backend: FastAPI with uv-managed environment and tests.
+- Added backend configuration loading from `.env` for PostgreSQL and Redis JDBC-style values.
+- Refactored backend into layered structure under `backend/app/`.
+- Added centralized logging module and request logging middleware.
+- Improved logging lifecycle with guaranteed usage:
+  - request started log
+  - request finished log
+  - request failed log
+  - per-request `X-Request-ID` response header
+- Implemented Auth V1 backend features:
+  - register
+  - login (username or email)
+  - refresh token rotation
+  - change password
+  - logout
+  - current user info (`/api/auth/me`)
+- Added auth infrastructure:
+  - SQLAlchemy async user model/session
+  - Redis refresh-token store
+  - JWT + password hashing security module
+  - auth route integration tests
+- Implemented frontend auth experience with unified Neo Terminal design language:
+  - Login / Register / Profile pages
+  - Vue Router auth guards (guest-only + requires-auth)
+  - Pinia auth store with token persistence and session hydration
+  - Route-level redirect handling after login
+- Added password UX/security enhancements:
+  - Register page now requires password confirmation
+  - Password strength bars (weak/medium/strong) for register and change-password flows
+  - Profile page now navigates to a dedicated change-password page instead of inline form
+- Backend startup now auto-checks and creates required tables (`users`) if missing.
+- Backend startup now also supports auto-creating missing target database before schema creation.
+- PostgreSQL config now supports `database.schema` target (example: `DreamBoDB.stockdb`) and auto-creates missing schema.
+- Added adaptive login captcha protection:
+  - After repeated login failures, backend requires captcha
+  - New captcha challenge API (`GET /api/auth/captcha`)
+  - Login supports optional captcha fields (`captcha_id`, `captcha_code`)
+  - Frontend login page now shows captcha challenge with fade transition and refresh action
+  - Added backend/frontend test coverage for captcha flow and error payload handling
+- Added frontend i18n foundation:
+  - Introduced `vue-i18n` with `zh-CN` + `en-US` locale packs
+  - Default locale is Chinese (`zh-CN`)
+  - Added top-nav language switch with persisted locale preference (`app.locale`)
+  - Migrated App/Home/Login/Register/Profile/ChangePassword UI strings to i18n keys
+- Implemented email verification for account security:
+  - Register now requires an email verification code before user creation
+  - Change-password now requires current password + email verification code
+  - Added email-code send endpoints for register/change-password flows
+  - Added password-changed email notice after successful password updates
+  - Added frontend email-code UX (send action, countdown, localized errors)
+- Implemented forgot-password reset flow:
+  - Added reset-password email-code send endpoint
+  - Added reset-password endpoint with email code + new password
+  - Added dedicated frontend reset-password view and login-page entry
+- Hardened refresh-token session revocation for credential security events:
+  - Password change now revokes all existing refresh tokens of that user
+  - Password reset now revokes all existing refresh tokens of that user
+  - Added integration tests to verify old refresh tokens return `401` after both flows
+- Upgraded health endpoint to real probes:
+  - Added `GET /api/health/liveness` for process-level alive checks
+  - Added `GET /api/health/readiness` for PostgreSQL/Redis/SMTP readiness checks
+  - Introduced readiness status grading (`ok | degraded | fail`) with per-service latency and error type
+- Implemented stock data closed-loop (real data instead of mock):
+  - Added stock tables: `stock_instruments`, `stock_daily_snapshots`, `stock_sync_cursors`
+  - Integrated Tushare gateway and sync service for recent trade-day incremental sync
+  - Added internal sync command: `uv run python scripts/sync_stocks.py`
+  - Added stock APIs for list/search, detail, and daily snapshots
+  - Replaced frontend home mock cards with backend data and keyword search
+  - Added stock detail page with latest snapshot and recent daily rows
+  - Added backend/frontend test coverage for stock routes, sync service, and stock views
+- Added user-level RBAC and admin control surface:
+  - Added `user_level` (`user/admin`) to user model and auth payloads
+  - Added admin-only APIs for listing users and creating users with target level
+  - Added startup seed flow for first admin via `INIT_ADMIN_*` env configuration
+  - Added frontend admin route guard (`requiresAdmin`) and admin console page
+  - Added backend/frontend test coverage for admin auth boundaries and navigation
+- Added admin stock management surface:
+  - Added admin-only full stock sync endpoint `POST /api/admin/stocks/full` with `list_status` filter
+  - Added admin-only default stock query endpoint `GET /api/admin/stocks` with DB pagination
+  - Added admin control hub page (`/admin`) to route into user/stock management
+  - Updated stock admin center: full-fetch button now syncs to DB, default query uses paged DB API
+  - Added frontend admin stock management page and top-nav entry to admin hub for quick access
+  - Kept existing `/api/stocks` public dashboard API unchanged for compatibility
+- Upgraded stock basic library model and sync strategy:
+  - Expanded `stock_instruments` fields based on Tushare `stock_basic` (fullname/enname/cnspell/curr_type/act_name/act_ent_type)
+  - Full stock basic sync now covers explicit `L/D/P/G` statuses
+  - `GET /api/stocks` now defaults to `L` and supports explicit `list_status` filter (`ALL` or `L,D,P,G`)
+  - Added authenticated trigger endpoint `POST /api/stocks/sync/full` for full stock basic refresh
+  - Added compatibility schema patch step for legacy databases to auto-add newly required stock columns
+- Upgraded dashboard stock browsing experience:
+  - Added infinite scrolling on the home waterfall/grid with prefetch-trigger (`IntersectionObserver`)
+  - Stabilized card rendering by deduplicating appended pages by `ts_code` to avoid old-card mutation on scroll
+  - Reworked home stock cards to horizontal list arrangement while keeping vertical content flow inside each card
+  - Reduced scroll repaint cost by simplifying fixed background layers and removing heavy visual effects
+- Upgraded stock detail history source and frequency control:
+  - `GET /api/stocks/{ts_code}/daily` now fetches Tushare `daily` history data
+  - Added 10-minute Redis cache + singleflight lock to reduce third-party request frequency
+  - Added fallback to local `stock_daily_snapshots` when third-party fetch fails
+- Upgraded kline persistence and period query strategy:
+  - Added `stock_kline_bars` table for period-based historical bars (`daily/weekly/monthly`)
+  - `GET /api/stocks/{ts_code}/daily` now supports `period` and applies DB-first read before Tushare fallback
+  - Successful third-party responses are persisted to DB for subsequent direct DB hits
+  - Frontend stock detail period switches now trigger real backend period requests
+- Added DB-first persistence for shared stock metadata endpoints:
+  - Added `stock_trade_calendars` and `stock_adj_factors` tables for long-term storage
+  - Added `GET /api/stocks/trade-cal` with DB-first + Tushare fallback + write-through persistence
+  - Added `GET /api/stocks/{ts_code}/adj-factor` with DB-first + Tushare fallback + write-through persistence
+  - Added route tests covering fallback and second-request DB hit behavior
+- Completed home-card quote completion enhancement:
+  - `GET /api/stocks` now backfills missing `close/trade_date/pct_chg` via DB-first chain (`stock_daily_snapshots` -> `stock_kline_bars(daily)` -> Tushare `daily`)
+  - Tushare list fallback now persists latest available daily quotes into `stock_kline_bars` for subsequent direct DB hits
+  - Home view adds lightweight missing-card quote patching (`daily?limit=1`) to reduce `--` in price/date display
+  - Added backend/frontend tests for quote backfill and card-display completion behavior
+- Completed structure-first optimization Phase 1:
+  - Backend now shares `list_status` parsing via `app.services.stock_list_status`, removing duplicate logic in `admin` and `stocks` routes
+  - Frontend now shares query-string builder via `src/api/query.ts` for `stocksApi` and `adminApi`
+  - Frontend router switched to lazy-loaded page components to reduce eager entry imports
+  - Auth store startup initialization now uses in-flight dedupe to avoid duplicate concurrent `me` requests
+  - Added focused regression tests for parser extraction, query builder, lazy routes, and auth initialize dedupe
+- Completed backend boundary cleanup Phase 2 (in progress roadmap):
+  - Added `app.services.stock_listing_service` to host stock list query + quote completion orchestration (snapshot -> kline -> Tushare)
+  - `GET /api/stocks` route now delegates list query assembly to service layer, reducing route-level mixed responsibilities
+  - Added `app.services.stock_daily_service` to host daily kline cache/db/remote fallback orchestration
+  - `GET /api/stocks/{ts_code}/daily` now delegates orchestration to service layer while preserving existing fallback semantics
+  - Added `app.services.stock_repository` as repository layer for stock DB read/write and response mapping helpers
+  - `stocks` route DB helpers (`kline/trade-cal/adj-factor/snapshot`) now delegate to repository layer to reduce route-level data-access logic
+  - Removed transitional DB wrapper implementations from `stocks` route, directly using repository functions in route orchestration flows
+  - Added `app.services.stock_cache_service` for shared model-cache read/write and singleflight lock management
+  - `stocks` route now delegates daily/trade-cal/adj-factor cache serialization and singleflight behavior to cache service helpers
+  - Added `app.services.stock_query_policy` for stock query parameter policy (period/is_open), date-window resolution, and cache-key composition
+  - `stocks` route now maps query-policy validation errors to HTTP 422 at the route boundary while reusing shared policy helpers
+  - Added `app.services.stock_tushare_mapper` for Tushare daily-row parsing and snapshot mapping
+  - `stocks` route now delegates Tushare daily row -> snapshot conversion to mapper service, reducing route-level parsing logic
+  - Added `app.services.auth_risk_service` for login identity hashing, trusted proxy IP resolution, and email-code IP risk checks
+  - Auth route risk-control helpers now delegate to service layer and keep HTTP mapping in route boundary
+  - Added `app.services.stock_reference_data_service` to host trade-calendar and adj-factor cache/db/remote fallback orchestration
+  - `GET /api/stocks/trade-cal` and `GET /api/stocks/{ts_code}/adj-factor` now delegate orchestration to service layer
+  - Added focused unit tests for stock listing orchestration and auth risk-control service behavior
+  - Added focused unit tests for reference-data orchestration service behavior
+  - Added focused unit tests for stock daily orchestration service behavior
+  - Added focused unit tests for stock repository helper behavior
+  - Added focused unit tests for stock cache service behavior
+  - Added focused unit tests for stock query policy behavior
+  - Added focused unit tests for stock Tushare mapper behavior
+- Added multi-source news access and split-display strategy:
+  - Added AkShare news integration gateway for global hot news (`stock_info_global_em`), stock news (`stock_news_em`), and stock announcements (`stock_zh_a_disclosure_report_cninfo`)
+  - Added backend `GET /api/news/hot` endpoint for global hot news feed
+  - Added backend `GET /api/stocks/{ts_code}/news` endpoint for stock-related news (news + announcements)
+  - Added frontend hot news page (`/news/hot`) with dashboard/nav jump entries
+  - Stock detail page now shows only stock-related news via stock-scoped endpoint and keeps global hot news isolated from detail context
+  - Added backend/frontend tests for hot news route, stock news route, router entry, hot-news page rendering, and stock-detail related-news section
+- Completed macro impact mapping phase for hot news:
+  - Added macro impact profile endpoint `GET /api/news/impact-map` for topic -> asset/sector/target mapping
+  - Extended hot news API with `macro_topic` tagging + topic filter compatibility
+  - Added hot-news impact panel UI with topic-synced mapping cards (affected assets, beneficiary sectors, pressure sectors, A-share targets)
+  - Added regression tests for impact map endpoint and hot-news topic/impact panel behavior
+- Completed macro impact mapping phase 4 (dynamic candidates):
+  - Impact map endpoint now attaches dynamic A-share candidate stocks from `stock_instruments` based on topic-specific industry keyword matching
+  - Added candidate-limit control in API (`candidate_limit`) and graceful fallback to empty candidates on query errors
+  - Hot-news impact panel now renders "A股动态候选" with `name(ts_code)` entries for faster drill-down
+  - Added backend test coverage for dynamic candidate output and frontend regression for candidate rendering
+- Completed unified news persistence + analysis query access:
+  - Added `news_events` table to persist both global hot news and stock-related news (including announcements)
+  - Upgraded `GET /api/news/hot` and `GET /api/stocks/{ts_code}/news` to `Redis -> DB -> upstream` with 1-hour refresh window
+  - Added `GET /api/news/events` for direct historical querying by scope/stock/topic/time range to support AI analysis workflows
+  - Stock detail page now renders related news after kline panel and avoids refetching news on period switching
+  - Added backend/frontend tests covering persistence, cache window behavior, and detail-page request decoupling
+- Completed analysis workbench UX optimization for professional research:
+  - Reworked `/analysis` into a professional dual-column workbench with overview, summary, factor ranking, event evidence, and risk sections
+  - Added translated human-readable analysis status, sentiment, and confidence labels instead of raw enum values
+  - Added source-aware return actions, refresh action, empty-state guidance, and event filter chips for faster drill-down
+  - Hot news page now reads `topic` from route query and keeps candidate entry aligned with the analysis workflow
+  - Added backend optimization notes document for follow-up P1/P2 analysis service refactors
+- Completed streamed analysis + watchlist automation foundation:
+  - Added session-based analysis generation with archive history, SSE event stream, latest-summary read model, and active-session de-duplication
+  - Added Markdown report rendering, streamed summary updates, and report-history playback on `/analysis`
+  - Added watchlist APIs, `/watchlist` page, stock-detail/analysis watch actions, and per-item automation toggles
+  - Added `analysis_generation_sessions`, `user_watchlist_items`, and `stock_watch_snapshots` persistence models
+  - Added watchlist worker orchestration service and standalone worker script for hourly news/snapshot sync plus daily analysis
+  - Added backend/frontend regression coverage for analysis sessions, watchlist routes, worker de-duplication, streamed UI, and watchlist interactions
+- Updated local startup automation:
+  - Root `start-dev.bat` now launches backend API, watchlist worker, and frontend dev server together
+  - Local development can verify watchlist hourly sync and daily analysis without manually opening a third terminal
+
+- Completed Phase 5 multi-source hot-event enhancement:
+  - Added hot-news event metadata (`event_id/cluster_key/providers/source_coverage`) and optional Tushare major-news merge with graceful fallback
+  - Upgraded impact map with `anchor_event`, deterministic candidate relevance scoring, Chinese match reasons, and stable ranked output
+  - Extended analysis persistence and session keys with `anchor_event_id/anchor_event_title/structured_sources`
+  - `summary/reports/sessions` now support `topic + event_id`, with topic-level fallback hint when the anchor event is unavailable
+  - Hot-news candidates now route to stock detail with event context; stock detail preserves event context into analysis workbench
+  - Analysis workbench now requests event-scoped data, pins anchor events to top, and shows structured source evidence chips
+  - Added backend/frontend regression coverage for event metadata, anchor-event impact map, event-scoped analysis lookup, and routed UI context preservation
+- Completed Phase 5 follow-up for persistence and citations:
+  - Hot-news page now persists per-topic anchor-event selection in local storage, so refresh/re-entry keeps the user's last manual anchor choice
+  - LLM response handling now parses `url_citation` annotations into structured `web_sources`
+  - Streamed analysis generation now keeps web citations by reading the final Responses payload after stream completion
+  - Analysis workbench now renders web citations as a separate structured source list instead of mixing them into Markdown正文
+  - Added regression tests for anchor persistence, citation extraction, streamed citation retention, and citation rendering
+- Completed citation metadata enrichment enhancement:
+  - Added `web_source_metadata_cache` table and service-side best-effort metadata enrichment for citation URLs
+  - Citation enrichment now resolves `source/published_at/domain/metadata_status` from `og:*`、JSON-LD、`time[datetime]` and domain fallback rules
+  - New analysis reports persist enriched citation metadata instead of only raw `url_citation` output
+  - Analysis workbench citation cards now show source, formatted publish time, domain, snippet, and enrichment status
+  - Added backend/frontend regression tests for metadata extraction, cache reuse, non-HTML fallback, and richer citation rendering
+- Completed candidate-quality enhancement and historical report citation backfill:
+  - Added `stock_candidate_evidence_cache` table plus hot-search / research-report aggregation service for candidate enhancement evidence
+  - `GET /api/news/impact-map` now adds candidate `source_breakdown/freshness_score/candidate_confidence/evidence_items` and supports `candidate_evidence_limit`
+  - Hot-news candidate cards now render industry, confidence, freshness, source breakdown, and short evidence cards while keeping existing anchor-event routing intact
+  - `GET /api/analysis/stocks/{ts_code}/summary` and `GET /api/analysis/stocks/{ts_code}/reports` now perform read-time best-effort citation metadata backfill for legacy `web_sources`
+  - Historical report reads now write enriched `source/published_at/domain/metadata_status` back to `analysis_reports.web_sources`
+  - Added backend/frontend regression tests for candidate evidence caching, impact-map enhancement output, summary/reports read-time citation backfill, and history-report citation rendering
+- Completed admin evaluation center for thesis/demo experiments:
+  - Added `analysis_evaluation_datasets / cases / runs / case_results` four-table persistence for labeled experiment data
+  - Added dataset import script `backend/scripts/import_analysis_evaluation_dataset.py` and batch run script `backend/scripts/run_analysis_evaluation.py`
+  - Added fixed Prompt Profile comparison flow: `production_current` vs `evidence_first_v2`
+  - Added admin-only APIs `/api/admin/evaluations/catalog|overview|cases/{case_key}` for read-only experiment browsing
+  - Added frontend admin evaluation page `/admin/evaluations` with four metric cards, ECharts comparison, improved/regressed cases, empty-state CLI guidance, and case detail drawer
+  - Added default labeled dataset file `backend/data/evaluations/analysis_eval_dataset_v1.json`
+  - Added backend/frontend regression coverage for schema bootstrap, repository aggregation, admin routes, scripts, API client, admin console entry, and evaluation page rendering
+
+## In Progress
+
+- Feature branch `codex/evaluation-experiment-page`:
+  - Admin evaluation center V1 has been implemented on the feature branch and pushed for review, but it is **not finished and not merged**.
+  - Current branch status is archived in `docs/plans/2026-03-25-evaluation-experiment-page-branch-status.md`.
+  - Recommended next steps: refine labeled cases after the first evaluation run, add announcement-heavy cases, and polish thesis/demo export presentation.
+
+## Next Suggested Items
+
+- 为实验页补“运行批次筛选排序 / 更多历史 run 对比”与“截图导出模板”，提升答辩材料复用效率。
+- 视数据质量决定是否引入 THS 概念成分股增强，继续提升热点候选股的结构化证据覆盖。
+- 评估是否补充报告导出与实验结果导出（Markdown / PDF / PPT）作为交付阶段功能。

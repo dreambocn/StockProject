@@ -769,8 +769,8 @@ describe('HotNewsView', () => {
     expect(wrapper.text()).toContain('高')
     expect(wrapper.text()).toContain('85')
     expect(wrapper.text()).toContain('热搜 1 / 研报 2')
-    expect(wrapper.text()).toContain('中国海油进入百度热搜')
-    expect(wrapper.text()).toContain('油价上行驱动盈利改善')
+    expect(wrapper.find('.impact-candidate-details').exists()).toBe(true)
+    expect(wrapper.find('.impact-candidate-details').attributes('open')).toBeUndefined()
   })
 
   it('renders theme matches and theme evidence for candidates', async () => {
