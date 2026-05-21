@@ -1,12 +1,14 @@
 export class ApiError extends Error {
   status: number
   payload?: unknown
+  requestId?: string | null
 
-  constructor(message: string, status: number, payload?: unknown) {
+  constructor(message: string, status: number, payload?: unknown, requestId?: string | null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.payload = payload
+    this.requestId = requestId ?? null
   }
 }
 
@@ -21,7 +23,7 @@ function normalizeApiBaseUrl(value: string | undefined) {
   return value.trim().replace(/\/+$/, '')
 }
 
-function buildApiUrl(path: string) {
+export function buildApiUrl(path: string) {
   const normalizedPath = path.startsWith('/') ? path : `/${path}`
   if (!apiBaseUrl) {
     return normalizedPath
@@ -63,6 +65,8 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
 
   const contentType =
     typeof response.headers?.get === 'function' ? response.headers.get('content-type') : null
+  const requestId =
+    typeof response.headers?.get === 'function' ? response.headers.get('x-request-id') : null
   // 部分异常响应可能不是 JSON，避免强行解析导致二次错误。
   const isJson = contentType?.includes('application/json') ?? true
   const payload = isJson ? await response.json() : null
@@ -77,7 +81,7 @@ export const requestJson = async <T>(path: string, options: RequestOptions = {})
           ? String(detailValue.message)
         : `Request failed with status ${response.status}`
 
-    throw new ApiError(detail, response.status, payload)
+    throw new ApiError(detail, response.status, payload, requestId)
   }
 
   return payload as T

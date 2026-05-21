@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, requestJson } from './http'
+import { ApiError, buildApiUrl, requestJson } from './http'
 
 describe('requestJson', () => {
   afterEach(() => {
@@ -38,7 +38,7 @@ describe('requestJson', () => {
         ok: false,
         status: 401,
         headers: {
-          get: () => 'application/json',
+          get: (name: string) => (name === 'x-request-id' ? 'req-001' : 'application/json'),
         },
         json: async () => ({
           detail: {
@@ -64,5 +64,12 @@ describe('requestJson', () => {
         captcha_required: true,
       },
     })
+    expect((captured as ApiError).requestId).toBe('req-001')
+  })
+
+  it('exports API URL builder for direct download requests', () => {
+    expect(buildApiUrl('/api/analysis/reports/r-1/export?format=package')).toContain(
+      '/api/analysis/reports/r-1/export?format=package',
+    )
   })
 })

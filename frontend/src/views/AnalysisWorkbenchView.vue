@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import MarkdownContent from '../components/MarkdownContent.vue'
+import ResearchPlanPreview from './analysisWorkbench/ResearchPlanPreview.vue'
+import SourceWorkspace from './analysisWorkbench/SourceWorkspace.vue'
 import {
   analysisApi,
   type AnalysisReportResponse,
@@ -14,7 +16,15 @@ import {
   type StockAnalysisSummaryResponse,
 } from '../api/analysis'
 import { watchlistApi, type WatchlistItemResponse } from '../api/watchlist'
+import { ApiError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
+import {
+  buildFallbackSourceItems,
+  buildHistoryDiffHints,
+  buildReportRuntimeMeta,
+  buildUnifiedSourceItems,
+} from './analysisWorkbench/reportPresentation'
+import { useReportActions } from './analysisWorkbench/useReportActions'
 
 type EventFilterKey = 'all' | 'high-related' | 'policy' | 'announcement' | 'news' | 'pending'
 type SourceKind = 'watchlist' | 'hot_news' | 'stock_detail' | 'direct'
@@ -171,6 +181,13 @@ const getCorrelationPercent = (value: number | null | undefined) => {
   return Math.max(0, Math.min(100, Math.round(value * 100)))
 }
 
+const formatApiErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof ApiError && error.requestId) {
+    return `${error.message || fallback}（请求 ${error.requestId}）`
+  }
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 const hasCorrelationMetric = (value: number | null | undefined) => typeof value === 'number'
 
 const resolveRoundedMetricSignature = (value: number, fractionDigits = 2) => value.toFixed(fractionDigits)
@@ -294,6 +311,17 @@ const selectedReport = computed(() => {
 })
 const displayedReportId = computed(() => selectedReport.value?.id ?? null)
 const activeSummaryMarkdown = computed(() => streamingMarkdown.value || selectedReport.value?.summary || '')
+const {
+  exportSelectedReport,
+  copySelectedReportSummary,
+} = useReportActions({
+  selectedReport,
+  activeSummaryMarkdown,
+  tsCode,
+  exportLoading,
+  copySummaryMessage,
+  errorMessage,
+})
 const reportAvailable = computed(() => Boolean(activeSummaryMarkdown.value))
 const withoutReport = computed(() => Boolean(summary.value && !summary.value.report && !streamingMarkdown.value))
 const streamingHint = computed(() => streamingStageMessage.value || t('analysisWorkbench.streamHint'))
@@ -306,31 +334,7 @@ const currentReportWebSearchStatus = computed(() =>
     ? translateWebSearchStatus('used')
     : translateWebSearchStatus(selectedReport.value?.web_search_status),
 )
-const reportRuntimeMeta = computed(() => {
-  if (!selectedReport.value) {
-    return []
-  }
-  return [
-    selectedReport.value.prompt_version
-      ? `Prompt ${selectedReport.value.prompt_version}`
-      : null,
-    selectedReport.value.model_name
-      ? `模型 ${selectedReport.value.model_name}`
-      : null,
-    selectedReport.value.reasoning_effort
-      ? `推理 ${selectedReport.value.reasoning_effort}`
-      : null,
-    typeof selectedReport.value.token_usage_input === 'number'
-      ? `输入 Token ${selectedReport.value.token_usage_input}`
-      : null,
-    typeof selectedReport.value.token_usage_output === 'number'
-      ? `输出 Token ${selectedReport.value.token_usage_output}`
-      : null,
-    selectedReport.value.failure_type
-      ? `失败类型 ${selectedReport.value.failure_type}`
-      : null,
-  ].filter((item): item is string => Boolean(item))
-})
+const reportRuntimeMeta = computed(() => buildReportRuntimeMeta(selectedReport.value))
 const pipelineRoles = computed<AnalysisPipelineRoleResponse[]>(() => {
   const roles = selectedReport.value?.pipeline_roles ?? []
   return [...roles].sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
@@ -383,25 +387,9 @@ const previousReportForDiff = computed(() => {
   }
   return reportArchives.value[currentIndex + 1] ?? reportArchives.value[currentIndex - 1] ?? null
 })
-const historyDiffHints = computed(() => {
-  const current = selectedReport.value
-  const previous = previousReportForDiff.value
-  if (!current || !previous) {
-    return []
-  }
-  const currentConfidence = current.decision_confidence || '--'
-  const previousConfidence = previous.decision_confidence || '--'
-  const currentHypothesis = current.selected_hypothesis || '--'
-  const previousHypothesis = previous.selected_hypothesis || '--'
-  const currentEventCount = current.evidence_event_count ?? current.evidence_events?.length ?? 0
-  const previousEventCount = previous.evidence_event_count ?? previous.evidence_events?.length ?? 0
-  return [
-    `生成时间：${formatDateTime(previous.generated_at)} → ${formatDateTime(current.generated_at)}`,
-    `事件数：${previousEventCount} → ${currentEventCount}`,
-    `采纳假设：${previousHypothesis} → ${currentHypothesis}`,
-    `置信度：${previousConfidence} → ${currentConfidence}`,
-  ]
-})
+const historyDiffHints = computed(() =>
+  buildHistoryDiffHints(selectedReport.value, previousReportForDiff.value, formatDateTime),
+)
 // 因子区与风险区共用第二行双列位，若其中一块无数据则让另一块自动占满整行。
 const showFactorSpotlight = computed(() => highlightFactors.value.length > 0 || riskHighlights.value.length === 0)
 const showRiskSpotlight = computed(() => riskHighlights.value.length > 0 || highlightFactors.value.length === 0)
@@ -498,69 +486,16 @@ const hasMoreEvents = computed(() => filteredEvents.value.length > 4)
 
 const structuredSourceItems = computed(() => selectedReport.value?.structured_sources ?? [])
 const webSourceItems = computed(() => selectedReport.value?.web_sources ?? [])
-const fallbackSourceItems = computed<AnalysisSourceItem[]>(() => {
-  const eventItems = activeEvidenceEvents.value.map((event) => ({
-    id: `event-${event.event_id}`,
-    source_kind: event.scope === 'policy' || event.event_type === 'policy'
-      ? 'policy_document'
-      : 'structured_event',
-    title: event.title,
-    source_name: event.source,
-    quality_status: event.link_status === 'linked' ? 'verified' : 'unavailable',
-    published_at: event.published_at,
-    metadata_status: event.published_at ? 'enriched' : 'unavailable',
-    evidence_id: event.event_id,
-  }) satisfies AnalysisSourceItem)
-  const webItems = webSourceItems.value.map((item, index) => ({
-    id: `web-${item.url || index}`,
-    source_kind: 'web_reference',
-    title: item.title || item.url || t('analysisWorkbench.dataMissing'),
-    source_name: item.source || item.domain || null,
-    url: item.url || null,
-    snippet: item.snippet || null,
-    quality_status: item.metadata_status === 'enriched'
-      ? 'enriched'
-      : item.metadata_status === 'domain_inferred'
-        ? 'domain_inferred'
-        : 'unavailable',
-    published_at: item.published_at ?? null,
-    domain: item.domain ?? null,
-    metadata_status: item.metadata_status ?? null,
-  }) satisfies AnalysisSourceItem)
-  return [...eventItems, ...webItems]
-})
-const unifiedSourceItems = computed<AnalysisSourceItem[]>(() => {
-  const explicitItems = selectedReport.value?.source_items ?? []
-  const items = explicitItems.length > 0 ? explicitItems : fallbackSourceItems.value
-  const kindRank: Record<AnalysisSourceItem['source_kind'], number> = {
-    policy_document: 0,
-    structured_event: 1,
-    market_data: 2,
-    web_reference: 3,
-  }
-  const qualityRank: Record<string, number> = {
-    verified: 0,
-    enriched: 1,
-    domain_inferred: 2,
-    unavailable: 3,
-  }
-  return [...items].sort((left, right) => {
-    const leftKindRank = kindRank[left.source_kind] ?? 9
-    const rightKindRank = kindRank[right.source_kind] ?? 9
-    const kindDelta = leftKindRank - rightKindRank
-    if (kindDelta !== 0) {
-      return kindDelta
-    }
-    const leftQualityRank = qualityRank[left.quality_status || 'unavailable'] ?? 9
-    const rightQualityRank = qualityRank[right.quality_status || 'unavailable'] ?? 9
-    const qualityDelta =
-      leftQualityRank - rightQualityRank
-    if (qualityDelta !== 0) {
-      return qualityDelta
-    }
-    return (right.published_at ? 1 : 0) - (left.published_at ? 1 : 0)
-  })
-})
+const fallbackSourceItems = computed<AnalysisSourceItem[]>(() =>
+  buildFallbackSourceItems(
+    activeEvidenceEvents.value,
+    webSourceItems.value,
+    t('analysisWorkbench.dataMissing'),
+  ),
+)
+const unifiedSourceItems = computed<AnalysisSourceItem[]>(() =>
+  buildUnifiedSourceItems(selectedReport.value, fallbackSourceItems.value),
+)
 const hasSourcesWorkspace = computed(
   () =>
     structuredSourceItems.value.length > 0
@@ -739,11 +674,11 @@ const loadSummary = async (requestVersion: number) => {
     }
     selectedEventFilter.value = 'all'
     showAllFactors.value = false
-  } catch {
+  } catch (error) {
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return
     }
-    errorMessage.value = t('analysisWorkbench.error')
+    errorMessage.value = formatApiErrorMessage(error, t('analysisWorkbench.error'))
     summary.value = null
   } finally {
     if (isLatestWorkbenchRequest(requestVersion)) {
@@ -1146,12 +1081,12 @@ const pollAnalysisSession = async (sessionId: string, pollingToken: number) => {
     }
 
     scheduleSessionPoll(sessionId, pollingToken)
-  } catch {
+  } catch (error) {
     if (pollingToken !== activePollingToken) {
       return
     }
     streaming.value = false
-    errorMessage.value = t('analysisWorkbench.error')
+    errorMessage.value = formatApiErrorMessage(error, t('analysisWorkbench.error'))
     stopStreaming()
   }
 }
@@ -1176,71 +1111,6 @@ const refreshAnalysis = async () => {
     await beginAnalysisSession(null)
   } finally {
     researchPlanLoading.value = false
-  }
-}
-
-const triggerReportDownload = (content: string, fileName: string, mimeType: string) => {
-  if (typeof window === 'undefined' || typeof document === 'undefined') {
-    return
-  }
-  const normalizedContent = mimeType.includes('text/markdown') ? `\uFEFF${content}` : content
-  const blob = new Blob([normalizedContent], { type: mimeType })
-  const objectUrl = window.URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = objectUrl
-  anchor.download = fileName
-  try {
-    document.body.appendChild(anchor)
-  } catch {
-    // 测试环境中的锚点桩对象不是原生节点时，允许跳过真实挂载。
-  }
-  anchor.click()
-  try {
-    document.body.removeChild(anchor)
-  } catch {
-    // 同上：测试桩对象可能无法作为真实节点移除。
-  }
-  window.setTimeout(() => {
-    window.URL.revokeObjectURL(objectUrl)
-  }, 0)
-}
-
-const exportSelectedReport = async (format: 'markdown' | 'html' | 'package') => {
-  if (!selectedReport.value?.id) {
-    return
-  }
-  exportLoading.value = true
-  try {
-    const content = await analysisApi.exportReport(selectedReport.value.id, format)
-    if (!content.trim()) {
-      throw new Error('empty_export_content')
-    }
-    const suffix = format === 'html' || format === 'package' ? 'html' : 'md'
-    const fileStem = format === 'package'
-      ? `${tsCode.value || 'analysis-report'}-${selectedReport.value.id}-research-package`
-      : `${tsCode.value || 'analysis-report'}-${selectedReport.value.id}`
-    triggerReportDownload(
-      content,
-      `${fileStem}.${suffix}`,
-      format === 'markdown' ? 'text/markdown;charset=utf-8' : 'text/html;charset=utf-8',
-    )
-  } catch {
-    errorMessage.value = '导出报告失败，请稍后重试'
-  } finally {
-    exportLoading.value = false
-  }
-}
-
-const copySelectedReportSummary = async () => {
-  const content = activeSummaryMarkdown.value.trim()
-  if (!content) {
-    return
-  }
-  try {
-    await navigator.clipboard?.writeText(content)
-    copySummaryMessage.value = '摘要已复制'
-  } catch {
-    copySummaryMessage.value = '复制摘要失败'
   }
 }
 
@@ -1509,46 +1379,13 @@ watch(
           </p>
         </el-card>
 
-        <el-card
+        <ResearchPlanPreview
           v-if="researchPlanPreview"
-          class="analysis-panel analysis-research-plan"
-          data-testid="analysis-research-plan-preview"
-        >
-          <div class="analysis-panel__header">
-            <div>
-              <p class="analysis-panel__eyebrow">研究计划预览</p>
-              <h2 class="analysis-panel__title">{{ researchPlanPreview.summary }}</h2>
-            </div>
-            <span class="analysis-token">
-              {{ researchPlanPreview.web_search_recommended ? '建议联网增强' : '本地证据优先' }}
-            </span>
-          </div>
-          <div class="analysis-source-evidence">
-            <span
-              v-for="bucket in researchPlanPreview.focus_buckets"
-              :key="bucket.key"
-              class="analysis-token"
-            >
-              {{ `${bucket.label} × ${bucket.count}` }}
-            </span>
-          </div>
-          <ul class="analysis-risk-list">
-            <li
-              v-for="question in researchPlanPreview.priority_questions"
-              :key="question"
-            >
-              {{ question }}
-            </li>
-          </ul>
-          <div class="analysis-hero__secondary-actions">
-            <el-button type="primary" :loading="streaming" @click="confirmResearchPlan">
-              确认并生成
-            </el-button>
-            <el-button plain @click="cancelResearchPlan">
-              稍后再说
-            </el-button>
-          </div>
-        </el-card>
+          :plan="researchPlanPreview"
+          :streaming="streaming"
+          @confirm="confirmResearchPlan"
+          @cancel="cancelResearchPlan"
+        />
 
         <div class="analysis-content">
           <div class="analysis-main">
@@ -1939,91 +1776,25 @@ watch(
           </template>
 
           <template v-else>
-            <div v-if="hasSourcesWorkspace" class="analysis-sources-workspace">
-              <section v-if="structuredSourceItems.length > 0" class="analysis-sources-section">
-                <p class="analysis-sources-section__title">{{ t('analysisWorkbench.inputSourcesLabel') }}</p>
-                <div class="analysis-source-evidence">
-                  <span
-                    v-for="sourceItem in structuredSourceItems"
-                    :key="`${sourceItem.provider}-${sourceItem.count}`"
-                    class="analysis-token"
-                  >
-                    {{ `${formatStructuredSourceProvider(sourceItem.provider) ?? 'source'} × ${sourceItem.count ?? 0}` }}
-                  </span>
-                </div>
-              </section>
-
-              <section v-if="reportRuntimeMeta.length > 0" class="analysis-sources-section">
-                <p class="analysis-sources-section__title">{{ t('analysisWorkbench.reportMetaTitle') }}</p>
-                <div class="analysis-runtime-meta">
-                  <span
-                    v-for="metaItem in reportRuntimeMeta"
-                    :key="metaItem"
-                    class="analysis-token"
-                  >
-                    {{ metaItem }}
-                  </span>
-                </div>
-              </section>
-
-              <section v-if="unifiedSourceItems.length > 0" class="analysis-sources-section">
-                <p class="analysis-sources-section__title">来源工作区</p>
-                <div class="analysis-web-source-list">
-                  <component
-                    :is="sourceItem.url ? 'a' : 'button'"
-                    v-for="sourceItem in unifiedSourceItems"
-                    :key="sourceItem.id"
-                    class="analysis-web-source-item analysis-source-item"
-                    :data-testid="`analysis-source-item-${sourceItem.id}`"
-                    :href="sourceItem.url || undefined"
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    type="button"
-                    @click="focusSourceItem(sourceItem, $event)"
-                  >
-                    <strong>{{ sourceItem.title }}</strong>
-                    <span>
-                      {{ translateSourceKind(sourceItem.source_kind) }}
-                      ·
-                      {{ sourceItem.source_name || sourceItem.domain || t('analysisWorkbench.dataMissing') }}
-                    </span>
-                    <span>
-                      {{ sourceItem.published_at ? formatDateTime(sourceItem.published_at) : t('analysisWorkbench.webSourceMissingTime') }}
-                    </span>
-                    <span class="analysis-token">
-                      {{ translateSourceQuality(sourceItem.quality_status) }}
-                    </span>
-                    <span v-if="sourceItem.snippet">{{ sourceItem.snippet }}</span>
-                  </component>
-                </div>
-              </section>
-
-              <section v-if="webSourceItems.length > 0" class="analysis-sources-section">
-                <p class="analysis-sources-section__title">{{ t('analysisWorkbench.sourcesView') }}</p>
-                <div class="analysis-web-source-list">
-                  <a
-                    v-for="webSource in webSourceItems"
-                    :key="`${webSource.url ?? webSource.title}-${webSource.published_at ?? ''}`"
-                    class="analysis-web-source-item"
-                    :href="webSource.url"
-                    target="_blank"
-                    rel="noreferrer noopener"
-                  >
-                    <strong>{{ webSource.title ?? webSource.url }}</strong>
-                    <span>
-                      {{ webSource.source || webSource.domain || t('analysisWorkbench.dataMissing') }}
-                      ·
-                      {{ webSource.published_at ? formatDateTime(webSource.published_at) : t('analysisWorkbench.webSourceMissingTime') }}
-                    </span>
-                    <span v-if="webSource.domain">{{ webSource.domain }}</span>
-                    <span class="analysis-token">
-                      {{ translateWebSourceMetadataStatus(webSource.metadata_status) }}
-                    </span>
-                    <span v-if="webSource.snippet">{{ webSource.snippet }}</span>
-                  </a>
-                </div>
-              </section>
-            </div>
+            <SourceWorkspace
+              v-if="hasSourcesWorkspace"
+              :structured-sources="structuredSourceItems"
+              :runtime-meta="reportRuntimeMeta"
+              :source-items="unifiedSourceItems"
+              :web-sources="webSourceItems"
+              :data-missing-text="t('analysisWorkbench.dataMissing')"
+              :input-sources-title="t('analysisWorkbench.inputSourcesLabel')"
+              :report-meta-title="t('analysisWorkbench.reportMetaTitle')"
+              source-workspace-title="来源工作区"
+              :web-sources-title="t('analysisWorkbench.sourcesView')"
+              :web-source-missing-time-text="t('analysisWorkbench.webSourceMissingTime')"
+              :format-structured-source-provider="formatStructuredSourceProvider"
+              :format-date-time="formatDateTime"
+              :translate-source-kind="translateSourceKind"
+              :translate-source-quality="translateSourceQuality"
+              :translate-web-source-metadata-status="translateWebSourceMetadataStatus"
+              @focus-source="focusSourceItem"
+            />
             <p v-else class="analysis-empty-note">{{ t('analysisWorkbench.sourcesEmpty') }}</p>
           </template>
             </el-card>
