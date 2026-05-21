@@ -65,6 +65,8 @@ class EvaluationRun(BaseModel):
     status: Literal["success", "partial", "failed"]
     started_at: datetime
     completed_at: datetime | None = None
+    duration_ms: int | None = None
+    runtime_metadata: dict[str, object] = Field(default_factory=dict)
     summary: EvaluationRunSummary
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
 
@@ -76,6 +78,8 @@ class EvaluationRunListItem(BaseModel):
     status: Literal["success", "partial", "failed"]
     started_at: datetime
     completed_at: datetime | None = None
+    duration_ms: int | None = None
+    runtime_metadata: dict[str, object] = Field(default_factory=dict)
     summary: EvaluationRunSummary
 
 

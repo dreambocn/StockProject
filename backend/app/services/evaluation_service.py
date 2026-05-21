@@ -80,6 +80,8 @@ class EvaluationService:
             profiles=selected_profiles,
             case_results=case_results,
         )
+        completed_at = datetime.now(UTC)
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
         status = "failed" if all(result.failure_reason for result in case_results) else "success"
         run = EvaluationRun(
             run_id=f"eval-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}",
@@ -87,7 +89,14 @@ class EvaluationService:
             profiles=selected_profiles,
             status=status,
             started_at=started_at,
-            completed_at=datetime.now(UTC),
+            completed_at=completed_at,
+            duration_ms=duration_ms,
+            runtime_metadata={
+                "case_count": len(cases),
+                "profile_count": len(selected_profiles),
+                "source_count": sum(len(result.citations) for result in case_results),
+                "failure_count": sum(1 for result in case_results if result.failure_reason),
+            },
             summary=summary,
             case_results=case_results,
         )
@@ -129,6 +138,8 @@ class EvaluationService:
                 status=run.status,
                 started_at=run.started_at,
                 completed_at=run.completed_at,
+                duration_ms=run.duration_ms,
+                runtime_metadata=run.runtime_metadata,
                 summary=run.summary,
             )
             for run in filtered

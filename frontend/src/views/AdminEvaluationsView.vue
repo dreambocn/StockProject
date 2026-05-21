@@ -9,6 +9,7 @@ import {
   type EvaluationRunDetail,
   type EvaluationRunListItem,
 } from '../api/admin'
+import { ApiError } from '../api/http'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
@@ -80,6 +81,35 @@ const formatMetricLine = (metrics?: EvaluationMetricBreakdown) => {
   )
 }
 
+const formatDuration = (value: number | null | undefined) => {
+  if (typeof value !== 'number') {
+    return '--'
+  }
+  return value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} s`
+}
+
+const formatApiErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof ApiError && error.requestId) {
+    return `${error.message || fallback}（请求 ${error.requestId}）`
+  }
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+const runtimeMetaItems = computed(() => {
+  const run = latestRun.value
+  if (!run) {
+    return []
+  }
+  const metadata = run.runtime_metadata ?? {}
+  return [
+    { label: '运行 ID', value: run.run_id },
+    { label: '耗时', value: formatDuration(run.duration_ms) },
+    { label: 'Profile', value: run.profiles.join(' / ') },
+    { label: '来源数', value: String(metadata.source_count ?? '--') },
+    { label: '失败数', value: String(metadata.failure_count ?? '--') },
+  ]
+})
+
 const loadDatasets = async () => {
   if (!authStore.accessToken) {
     return
@@ -104,7 +134,7 @@ const loadRuns = async () => {
       topic: topicFilter.value || undefined,
     })
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '评估运行加载失败'
+    errorMessage.value = formatApiErrorMessage(error, '评估运行加载失败')
     runs.value = []
   } finally {
     loading.value = false
@@ -125,7 +155,7 @@ const runEvaluation = async () => {
     })
     await loadRuns()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '评估运行失败'
+    errorMessage.value = formatApiErrorMessage(error, '评估运行失败')
   } finally {
     running.value = false
   }
@@ -246,6 +276,13 @@ onMounted(async () => {
       <article v-for="metric in metricCards" :key="metric.key" class="metric-card">
         <span>{{ metric.label }}</span>
         <strong>{{ formatPercent(metric.value) }}</strong>
+      </article>
+    </section>
+
+    <section v-if="runtimeMetaItems.length > 0" class="runtime-meta-grid">
+      <article v-for="item in runtimeMetaItems" :key="item.label" class="runtime-meta-card">
+        <span>{{ item.label }}</span>
+        <strong>{{ item.value }}</strong>
       </article>
     </section>
 
@@ -418,6 +455,32 @@ p {
   gap: 0.8rem;
 }
 
+.runtime-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.runtime-meta-card {
+  border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+  background: var(--terminal-card-bg);
+  padding: 0.7rem 0.8rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.runtime-meta-card span {
+  color: var(--terminal-muted);
+  font-size: 0.78rem;
+}
+
+.runtime-meta-card strong {
+  color: var(--terminal-text);
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+
 .metric-card {
   padding: 0.85rem 0.95rem;
   display: grid;
@@ -507,6 +570,7 @@ p {
 @media (max-width: 980px) {
   .filter-panel,
   .metric-grid,
+  .runtime-meta-grid,
   .evaluations-content,
   .profile-grid {
     grid-template-columns: 1fr;

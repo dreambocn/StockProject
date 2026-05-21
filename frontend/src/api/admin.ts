@@ -138,6 +138,8 @@ export type EvaluationRunListItem = {
   status: 'success' | 'partial' | 'failed'
   started_at: string
   completed_at: string | null
+  duration_ms?: number | null
+  runtime_metadata?: Record<string, unknown>
   summary: EvaluationRunSummary
 }
 
