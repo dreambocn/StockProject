@@ -1,5 +1,4 @@
-import { requestJson } from './http'
-import { openEventSource } from './http'
+import { ApiError, buildApiUrl, openEventSource, requestJson } from './http'
 import type { StockDailySnapshot, StockInstrument } from './stocks'
 import { buildQueryString } from './query'
 
@@ -326,13 +325,15 @@ export const analysisApi = {
 
   async exportReport(reportId: string, format: 'markdown' | 'html' | 'package') {
     const response = await fetch(
-      `/api/analysis/reports/${encodeURIComponent(reportId)}/export?format=${format}`,
+      buildApiUrl(`/api/analysis/reports/${encodeURIComponent(reportId)}/export?format=${format}`),
       {
         method: 'GET',
       },
     )
     if (!response.ok) {
-      throw new Error('导出报告失败')
+      const requestId =
+        typeof response.headers?.get === 'function' ? response.headers.get('x-request-id') : null
+      throw new ApiError('导出报告失败', response.status, null, requestId)
     }
     return response.text()
   },
