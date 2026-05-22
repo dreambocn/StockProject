@@ -71,6 +71,7 @@ from app.services.job_service import (
     JOB_STATUS_FAILED,
     JOB_STATUS_PARTIAL,
     JOB_STATUS_SUCCESS,
+    JOB_STATUS_RUNNING,
     create_job_run,
     finish_job_run,
     mark_job_running,
