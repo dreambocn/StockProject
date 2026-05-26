@@ -110,6 +110,9 @@ const mountWorkbench = async (router: ReturnType<typeof createRouter>) => {
       events: [],
     })
   }
+  if (!vi.isMockFunction(analysisApi.getResearchPlan)) {
+    vi.spyOn(analysisApi, 'getResearchPlan').mockRejectedValue(new Error('计划接口失败'))
+  }
 
   const wrapper = mount(AnalysisWorkbenchView, {
     global: {
@@ -427,10 +430,10 @@ describe('AnalysisWorkbenchView', () => {
     })
     await router.isReady()
 
-    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+    const summarySpy = vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
       createMinimalSummary('600519.SH', '## 关注分析摘要'),
     )
-    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+    const reportsSpy = vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
       ts_code: '600519.SH',
       items: [],
     })
@@ -441,6 +444,15 @@ describe('AnalysisWorkbenchView', () => {
     expect(wrapper.text()).toContain('来源: 关注列表')
     expect(wrapper.text()).toContain('返回关注')
     expect(wrapper.text()).not.toContain('来源: 直接访问')
+    expect(summarySpy).toHaveBeenCalledWith('600519.SH', {
+      topic: null,
+      eventId: null,
+      triggerSource: 'watchlist_daily',
+    })
+    expect(reportsSpy).toHaveBeenCalledWith('600519.SH', 10, {
+      topic: null,
+      eventId: null,
+    })
 
     const backButton = wrapper
       .findAll('button')
@@ -1828,6 +1840,7 @@ describe('AnalysisWorkbenchView', () => {
       reused: false,
       cached: true,
     })
+    vi.spyOn(analysisApi, 'getResearchPlan').mockRejectedValue(new Error('计划接口失败'))
 
     const wrapper = mount(AnalysisWorkbenchView, {
       global: {

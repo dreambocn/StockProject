@@ -221,12 +221,13 @@ export type AnalysisSessionErrorEvent = {
 export const analysisApi = {
   async getStockAnalysisSummary(
     tsCode: string,
-    options?: { topic?: string | null; eventId?: string | null },
+    options?: { topic?: string | null; eventId?: string | null; triggerSource?: 'manual' | 'watchlist_daily' | null },
   ) {
     const query = buildQueryString({
       // 空值不下发，避免触发后端错误的过滤条件。
       topic: options?.topic || undefined,
       event_id: options?.eventId || undefined,
+      trigger_source: options?.triggerSource || undefined,
     })
     return requestJson<StockAnalysisSummaryResponse>(
       `/api/analysis/stocks/${encodeURIComponent(tsCode)}/summary${query}`,
@@ -236,13 +237,14 @@ export const analysisApi = {
   async getStockAnalysisReports(
     tsCode: string,
     limit = 10,
-    options?: { topic?: string | null; eventId?: string | null },
+    options?: { topic?: string | null; eventId?: string | null; triggerSource?: 'manual' | 'watchlist_daily' | null },
   ) {
     const query = buildQueryString({
       limit,
       // 空值不下发，保持后端默认口径。
       topic: options?.topic || undefined,
       event_id: options?.eventId || undefined,
+      trigger_source: options?.triggerSource || undefined,
     })
     return requestJson<AnalysisReportArchiveListResponse>(
       `/api/analysis/stocks/${encodeURIComponent(tsCode)}/reports${query}`,

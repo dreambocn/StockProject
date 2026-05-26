@@ -25,6 +25,25 @@ const resetWatchlistState = () => {
   loading.value = false
 }
 
+const formatWatchlistTime = (value: string | null) => {
+  if (!value) {
+    return '--'
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return '--'
+  }
+  // 关注页只需要用于快速扫视，精确到分钟即可，避免 ISO 时间戳占满卡片。
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed)
+}
+
 const loadWatchlist = async () => {
   const currentToken = authStore.accessToken
   if (!currentToken) {
@@ -169,8 +188,8 @@ watch(
         </div>
 
         <div class="watchlist-card__dates">
-          <p>{{ t('watchlist.latestSync') }}：{{ item.last_hourly_sync_at ?? '--' }}</p>
-          <p>{{ t('watchlist.latestAnalysis') }}：{{ item.last_daily_analysis_at ?? '--' }}</p>
+          <p>{{ t('watchlist.latestSync') }}：{{ formatWatchlistTime(item.last_hourly_sync_at) }}</p>
+          <p>{{ t('watchlist.latestAnalysis') }}：{{ formatWatchlistTime(item.last_daily_analysis_at) }}</p>
         </div>
       </el-card>
     </div>

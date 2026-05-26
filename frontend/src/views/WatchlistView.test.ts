@@ -191,6 +191,8 @@ describe('WatchlistView', () => {
 
     expect(wrapper.text()).toContain('我的关注')
     expect(wrapper.text()).toContain('贵州茅台')
+    expect(wrapper.text()).not.toContain('2026-03-23T18:10:00Z')
+    expect(wrapper.text()).toMatch(/最近自动分析：.*2026/)
 
     const actionButton = wrapper
       .findAll('button')

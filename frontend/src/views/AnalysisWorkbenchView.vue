@@ -294,6 +294,17 @@ const sourceKind = computed<SourceKind>(() => {
 })
 
 const sourceLabel = computed(() => t(`analysisWorkbench.sourceText.${sourceKind.value}`))
+const reportTriggerSource = computed<'watchlist_daily' | null>(() =>
+  sourceKind.value === 'watchlist' ? 'watchlist_daily' : null,
+)
+const buildReportQueryOptions = (topic: string | null, eventId: string | null) => {
+  const triggerSource = reportTriggerSource.value
+  return {
+    topic,
+    eventId,
+    ...(triggerSource ? { triggerSource } : {}),
+  }
+}
 
 const displayName = computed(() => summary.value?.instrument?.name ?? tsCode.value)
 const displayStatus = computed(() => translateStatus(summary.value?.status))
@@ -660,10 +671,10 @@ const loadSummary = async (requestVersion: number) => {
   errorMessage.value = ''
 
   try {
-    const payload = await analysisApi.getStockAnalysisSummary(currentTsCode, {
-      topic: currentTopic,
-      eventId: currentEventId,
-    })
+    const payload = await analysisApi.getStockAnalysisSummary(
+      currentTsCode,
+      buildReportQueryOptions(currentTopic, currentEventId),
+    )
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return
     }
@@ -700,10 +711,15 @@ const loadReports = async (requestVersion: number) => {
     return
   }
   try {
-    const payload = await analysisApi.getStockAnalysisReports(currentTsCode, 10, {
-      topic: currentTopic,
-      eventId: currentEventId,
-    })
+    const payload = await analysisApi.getStockAnalysisReports(
+      currentTsCode,
+      10,
+      {
+        // 历史区需要承接该股票的完整分析轨迹；watchlist 入口只让主报告优先自动日报，不应过滤归档列表。
+        topic: currentTopic,
+        eventId: currentEventId,
+      },
+    )
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return
     }
