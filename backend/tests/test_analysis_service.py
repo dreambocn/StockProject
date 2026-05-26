@@ -22,6 +22,7 @@ from app.models.analysis_report import AnalysisReport
 from app.models.news_event import NewsEvent
 from app.models.stock_daily_snapshot import StockDailySnapshot
 from app.models.stock_instrument import StockInstrument
+from app.models.user_watchlist_item import UserWatchlistItem
 from app.services.llm_analysis_service import AnalysisReportResult
 from app.services.analysis_service import (
     _build_structured_sources,
@@ -96,6 +97,58 @@ def test_analysis_service_aggregates_events_and_report(tmp_path: Path) -> None:
             assert result["events"][0]["event_id"] == "event-1"
             assert result["report"]["status"] == "ready"
             assert result["status"] == "ready"
+    asyncio.run(run_test())
+
+
+def test_analysis_summary_can_filter_watchlist_daily_report(tmp_path: Path) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="000002.SZ",
+                    symbol="000002",
+                    name="万科A",
+                    fullname="万科企业股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add_all(
+                [
+                    AnalysisReport(
+                        ts_code="000002.SZ",
+                        status="ready",
+                        summary="手动分析报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        trigger_source="manual",
+                        analysis_mode="functional_multi_agent",
+                        generated_at=datetime(2026, 5, 22, 12, 0, tzinfo=timezone.utc),
+                    ),
+                    AnalysisReport(
+                        ts_code="000002.SZ",
+                        status="ready",
+                        summary="关注列表日报",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        trigger_source="watchlist_daily",
+                        analysis_mode="single",
+                        generated_at=datetime(2026, 5, 26, 15, 56, tzinfo=timezone.utc),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            result = await get_stock_analysis_summary(
+                session,
+                "000002.SZ",
+                trigger_source="watchlist_daily",
+            )
+
+            assert result["report"]["summary"] == "关注列表日报"
+            assert result["report"]["trigger_source"] == "watchlist_daily"
+
     asyncio.run(run_test())
 
 
@@ -1119,6 +1172,147 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
         assert captured["price_window_anchor_count"] == 30
         assert "event=analysis_session_started session_id=session-1" in caplog.text
         assert "event=analysis_session_completed session_id=session-1" in caplog.text
+
+    asyncio.run(run_test())
+
+
+def test_run_analysis_session_by_id_marks_watchlist_daily_completed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+    captured: dict[str, object] = {}
+    generated_at = datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc)
+
+    async def fake_load_recent_news_events(*args, **kwargs):
+        _ = args, kwargs
+        return [
+            NewsEvent(
+                id="daily-event-1",
+                scope="stock",
+                cache_variant="default",
+                ts_code="600519.SH",
+                title="自选日报事件",
+                summary="摘要",
+                published_at=generated_at - timedelta(hours=1),
+                url="https://example.com/daily-event",
+                publisher="测试源",
+                source="test-source",
+                macro_topic="watchlist",
+                fetched_at=generated_at - timedelta(hours=1),
+            )
+        ]
+
+    async def fake_generate_stock_analysis_report(
+        *,
+        ts_code: str,
+        instrument_name: str | None,
+        events,
+        factor_weights,
+        session,
+        use_web_search: bool,
+        on_delta,
+    ):
+        _ = instrument_name, factor_weights, session, use_web_search, on_delta
+        captured["ts_code"] = ts_code
+        captured["event_count"] = len(list(events))
+        return AnalysisReportResult(
+            status="ready",
+            summary="自选股日报",
+            risk_points=[],
+            factor_breakdown=[],
+            generated_at=generated_at,
+            used_web_search=False,
+            web_search_status="disabled",
+            web_sources=[],
+        )
+
+    async def fake_price_windows(*args, **kwargs):
+        _ = args, kwargs
+        return {
+            generated_at.date(): [
+                {
+                    "trade_date": generated_at.date(),
+                    "close": 1500.0,
+                    "vol": 1000.0,
+                }
+            ]
+        }
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.generate_stock_analysis_report",
+        fake_generate_stock_analysis_report,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_price_windows_with_completion",
+        fake_price_windows,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr("app.services.analysis_service.cache_fresh_report_id", fake_cache)
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                UserWatchlistItem(
+                    user_id="user-1",
+                    ts_code="600519.SH",
+                    daily_analysis_enabled=True,
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="watchlist-daily-session-1",
+                    analysis_key="watchlist-daily-analysis-key",
+                    ts_code="600519.SH",
+                    topic="watchlist",
+                    anchor_event_id=None,
+                    status="queued",
+                    trigger_source="watchlist_daily",
+                )
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("watchlist-daily-session-1")
+
+        async with session_maker() as verify_session:
+            watch_item = (
+                await verify_session.execute(select(UserWatchlistItem))
+            ).scalar_one()
+            report = (
+                await verify_session.execute(
+                    select(AnalysisReport).where(
+                        AnalysisReport.session_id == "watchlist-daily-session-1"
+                    )
+                )
+            ).scalar_one()
+
+            assert watch_item.last_daily_analysis_at == generated_at.replace(tzinfo=None)
+            assert report.trigger_source == "watchlist_daily"
+            assert captured == {"ts_code": "600519.SH", "event_count": 1}
 
     asyncio.run(run_test())
 

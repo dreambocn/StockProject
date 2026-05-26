@@ -567,6 +567,7 @@ async def run_daily_watchlist_analysis(
                 session,
                 target.ts_code,
                 topic=None,
+                event_id=None,
                 force_refresh=False,
                 use_web_search=target.use_web_search,
                 trigger_source="watchlist_daily",

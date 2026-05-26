@@ -166,12 +166,13 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
                 ts_code: str,
                 *,
                 topic: str | None,
+                event_id: str | None,
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
                 execute_inline: bool,
             ):
-                _ = session, topic, force_refresh
+                _ = session, topic, event_id, force_refresh
                 called.append((ts_code, use_web_search, trigger_source, execute_inline))
                 return {
                     "session_id": "session-1",
@@ -227,6 +228,7 @@ def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
                 ts_code: str,
                 *,
                 topic: str | None,
+                event_id: str | None,
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
@@ -236,6 +238,7 @@ def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
                     session,
                     ts_code,
                     topic,
+                    event_id,
                     force_refresh,
                     use_web_search,
                     trigger_source,
@@ -489,6 +492,7 @@ def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
                 _ts_code: str,
                 *,
                 topic: str | None,
+                event_id: str | None,
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
@@ -496,6 +500,7 @@ def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
             ):
                 _ = (
                     topic,
+                    event_id,
                     force_refresh,
                     use_web_search,
                     trigger_source,

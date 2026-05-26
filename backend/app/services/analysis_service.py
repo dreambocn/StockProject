@@ -4,6 +4,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -15,6 +16,7 @@ from app.schemas.analysis import (
     StockAnalysisSummaryResponse,
 )
 from app.models.system_job_run import SystemJobRun
+from app.models.user_watchlist_item import UserWatchlistItem
 from app.schemas.stocks import (
     StockDailySnapshotResponse,
     StockInstrumentResponse,
@@ -450,6 +452,20 @@ async def _touch_analysis_session_heartbeat(
         await heartbeat_session.commit()
 
 
+async def _mark_watchlist_daily_analysis_completed(
+    session: AsyncSession,
+    *,
+    ts_code: str,
+    analyzed_at: datetime,
+) -> None:
+    statement = select(UserWatchlistItem).where(UserWatchlistItem.ts_code == ts_code)
+    rows = (await session.execute(statement)).scalars().all()
+    for row in rows:
+        # 关键流程：异步分析会话真正完成后再回写关注表，避免入队成功但报告失败时误标完成。
+        if row.daily_analysis_enabled:
+            row.last_daily_analysis_at = analyzed_at
+
+
 async def _run_analysis_session_heartbeat_loop(
     *,
     session_id: str,
@@ -537,6 +553,7 @@ async def get_stock_analysis_summary(
     *,
     topic: str | None = None,
     event_id: str | None = None,
+    trigger_source: str | None = None,
     published_from: datetime | None = None,
     published_to: datetime | None = None,
     event_limit: int | None = None,
@@ -562,6 +579,7 @@ async def get_stock_analysis_summary(
         normalized_ts_code,
         topic=topic,
         anchor_event_id=event_id,
+        trigger_source=trigger_source,
         analysis_mode=ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
     )
     if persisted_report is None:
@@ -570,6 +588,7 @@ async def get_stock_analysis_summary(
             normalized_ts_code,
             topic=topic,
             anchor_event_id=event_id,
+            trigger_source=trigger_source,
             analysis_mode="single",
         )
     event_context_status: Literal["direct", "topic_fallback", "none"] = "none"
@@ -580,6 +599,7 @@ async def get_stock_analysis_summary(
             normalized_ts_code,
             topic=topic,
             anchor_event_id=None,
+            trigger_source=trigger_source,
             analysis_mode=(
                 getattr(persisted_report, "analysis_mode", None)
                 or ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT
@@ -679,7 +699,7 @@ async def get_stock_analysis_summary(
 
 
 async def list_stock_analysis_report_archives(
-    session: AsyncSession, ts_code: str, *, topic: str | None = None, event_id: str | None = None, limit: int
+    session: AsyncSession, ts_code: str, *, topic: str | None = None, event_id: str | None = None, trigger_source: str | None = None, limit: int
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
     settings = get_settings()
@@ -688,6 +708,7 @@ async def list_stock_analysis_report_archives(
         ts_code=normalized_ts_code,
         topic=topic,
         anchor_event_id=event_id,
+        trigger_source=trigger_source,
         limit=limit,
         analysis_mode=ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
     )
@@ -697,6 +718,7 @@ async def list_stock_analysis_report_archives(
             ts_code=normalized_ts_code,
             topic=topic,
             anchor_event_id=event_id,
+            trigger_source=trigger_source,
             limit=limit,
             analysis_mode="single",
         )
@@ -1455,6 +1477,12 @@ async def run_analysis_session_by_id(session_id: str) -> None:
             session_row.progress_current = total_progress
             session_row.progress_total = total_progress
             session_row.heartbeat_at = report_generated_at
+            if session_row.trigger_source == "watchlist_daily":
+                await _mark_watchlist_daily_analysis_completed(
+                    session,
+                    ts_code=session_row.ts_code,
+                    analyzed_at=report_generated_at,
+                )
             if analysis_job is not None:
                 await finish_job_run(
                     session,

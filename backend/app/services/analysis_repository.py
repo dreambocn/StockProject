@@ -344,11 +344,14 @@ async def load_latest_report(
     *,
     topic: str | None = None,
     anchor_event_id: str | None = None,
+    trigger_source: str | None = None,
     analysis_mode: str = "single",
 ) -> AnalysisReport | None:
     statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code).where(
         AnalysisReport.analysis_mode == analysis_mode
     )
+    if trigger_source:
+        statement = statement.where(AnalysisReport.trigger_source == trigger_source)
     if topic:
         statement = statement.where(AnalysisReport.topic == topic)
     if anchor_event_id is None:
@@ -400,12 +403,15 @@ async def list_analysis_reports(
     ts_code: str,
     topic: str | None = None,
     anchor_event_id: str | None = None,
+    trigger_source: str | None = None,
     limit: int,
     analysis_mode: str = "single",
 ) -> list[AnalysisReport]:
     statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code).where(
         AnalysisReport.analysis_mode == analysis_mode
     )
+    if trigger_source:
+        statement = statement.where(AnalysisReport.trigger_source == trigger_source)
     if topic:
         statement = statement.where(AnalysisReport.topic == topic)
     if anchor_event_id is None:

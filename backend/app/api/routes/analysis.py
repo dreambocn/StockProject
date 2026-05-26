@@ -56,6 +56,7 @@ async def get_stock_analysis_summary_route(
     ts_code: str,
     topic: str | None = Query(default=None),
     event_id: str | None = Query(default=None),
+    trigger_source: str | None = Query(default=None),
     published_from: datetime | None = Query(default=None),
     published_to: datetime | None = Query(default=None),
     event_limit: int = Query(default=20, ge=1, le=100),
@@ -67,6 +68,7 @@ async def get_stock_analysis_summary_route(
         ts_code,
         topic=topic,
         event_id=event_id,
+        trigger_source=trigger_source,
         published_from=published_from,
         published_to=published_to,
         event_limit=event_limit,
@@ -174,6 +176,7 @@ async def get_stock_analysis_reports_route(
     ts_code: str,
     topic: str | None = Query(default=None),
     event_id: str | None = Query(default=None),
+    trigger_source: str | None = Query(default=None),
     limit: int = Query(default=10, ge=1, le=50),
     session: AsyncSession = Depends(get_db_session),
 ) -> AnalysisReportArchiveListResponse:
@@ -182,6 +185,7 @@ async def get_stock_analysis_reports_route(
         ts_code,
         topic=topic,
         event_id=event_id,
+        trigger_source=trigger_source,
         limit=limit,
     )
     return AnalysisReportArchiveListResponse.model_validate(payload)

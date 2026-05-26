@@ -54,12 +54,13 @@ def test_watchlist_workers_create_system_jobs(tmp_path) -> None:
                 ts_code: str,
                 *,
                 topic: str | None,
+                event_id: str | None,
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
                 execute_inline: bool,
             ):
-                _ = session, topic, force_refresh, use_web_search, trigger_source, execute_inline
+                _ = session, topic, event_id, force_refresh, use_web_search, trigger_source, execute_inline
                 return {
                     "session_id": "analysis-session-1",
                     "report_id": None,
