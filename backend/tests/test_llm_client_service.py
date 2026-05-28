@@ -130,7 +130,74 @@ def test_generate_llm_text_passes_web_search_tool_when_enabled() -> None:
 
         assert result == "OK"
         payload = fake_client.responses.calls[0]
-        assert payload["tools"] == [{"type": "web_search_preview"}]
+        assert payload["tools"] == [{"type": "web_search"}]
+
+    asyncio.run(_run())
+
+
+def test_generate_llm_result_marks_web_search_used_only_when_response_confirms_call() -> None:
+    async def _run() -> None:
+        fake_client = _FakeClient()
+        settings = Settings(
+            _env_file=None,
+            llm_base_url="https://aixj.vip",
+            llm_wire_api="responses",
+            llm_api_key="test-key",
+            llm_model="gpt-5.1-codex-mini",
+            llm_reasoning_effort="high",
+            llm_web_search_enabled=True,
+        )
+
+        result = await generate_llm_result(
+            "请总结最新消息",
+            client=fake_client,
+            settings=settings,
+            use_web_search=True,
+        )
+
+        assert result.used_web_search is False
+        assert result.web_search_status == "disabled"
+
+    asyncio.run(_run())
+
+
+def test_generate_llm_result_marks_web_search_used_from_response_call_item() -> None:
+    async def _run() -> None:
+        class _WebSearchResponsesApi(_FakeResponsesApi):
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    output_text="OK",
+                    output=[
+                        SimpleNamespace(type="web_search_call", status="completed"),
+                        SimpleNamespace(
+                            type="message",
+                            content=[SimpleNamespace(type="output_text", text="OK")],
+                        ),
+                    ],
+                )
+
+        fake_client = _FakeClient()
+        fake_client.responses = _WebSearchResponsesApi()
+        settings = Settings(
+            _env_file=None,
+            llm_base_url="https://aixj.vip",
+            llm_wire_api="responses",
+            llm_api_key="test-key",
+            llm_model="gpt-5.1-codex-mini",
+            llm_reasoning_effort="high",
+            llm_web_search_enabled=True,
+        )
+
+        result = await generate_llm_result(
+            "请总结最新消息",
+            client=fake_client,
+            settings=settings,
+            use_web_search=True,
+        )
+
+        assert result.used_web_search is True
+        assert result.web_search_status == "used"
 
     asyncio.run(_run())
 
@@ -286,7 +353,7 @@ def test_stream_llm_text_falls_back_when_web_search_stream_is_unsupported() -> N
             chunks.append(chunk)
 
         assert chunks == ["fallback text"]
-        assert fake_client.responses.calls[0]["tools"] == [{"type": "web_search_preview"}]
+        assert fake_client.responses.calls[0]["tools"] == [{"type": "web_search"}]
         assert "tools" not in fake_client.responses.calls[1]
 
     asyncio.run(_run())

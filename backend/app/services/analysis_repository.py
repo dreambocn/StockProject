@@ -35,12 +35,13 @@ def build_analysis_key(
     anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
-    analysis_mode: str = "single",
+    analysis_mode: str = "functional_multi_agent",
 ) -> str:
     # 分析 key 用于会话去重，包含主题/锚点/检索开关等关键维度。
     return (
         f"{ts_code.strip().upper()}|{(topic or '').strip()}|{(anchor_event_id or '').strip()}|"
-        f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}|{analysis_mode.strip() or 'single'}"
+        f"{int(use_web_search)}|{build_trigger_source_group(trigger_source)}|"
+        f"{analysis_mode.strip() or 'functional_multi_agent'}"
     )
 
 
@@ -223,7 +224,7 @@ async def create_analysis_report(
     started_at: datetime | None,
     completed_at: datetime | None,
     content_format: str,
-    analysis_mode: str = "single",
+    analysis_mode: str = "functional_multi_agent",
     orchestrator_version: str | None = None,
     selected_hypothesis: str | None = None,
     decision_confidence: str | None = None,
@@ -345,7 +346,7 @@ async def load_latest_report(
     topic: str | None = None,
     anchor_event_id: str | None = None,
     trigger_source: str | None = None,
-    analysis_mode: str = "single",
+    analysis_mode: str = "functional_multi_agent",
 ) -> AnalysisReport | None:
     statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code).where(
         AnalysisReport.analysis_mode == analysis_mode
@@ -376,7 +377,7 @@ async def load_latest_fresh_report(
     topic: str | None,
     anchor_event_id: str | None,
     freshness_minutes: int,
-    analysis_mode: str = "single",
+    analysis_mode: str = "functional_multi_agent",
 ) -> AnalysisReport | None:
     freshness_threshold = datetime.now(UTC) - timedelta(minutes=freshness_minutes)
     statement = (
@@ -405,7 +406,7 @@ async def list_analysis_reports(
     anchor_event_id: str | None = None,
     trigger_source: str | None = None,
     limit: int,
-    analysis_mode: str = "single",
+    analysis_mode: str = "functional_multi_agent",
 ) -> list[AnalysisReport]:
     statement = select(AnalysisReport).where(AnalysisReport.ts_code == ts_code).where(
         AnalysisReport.analysis_mode == analysis_mode
@@ -442,7 +443,7 @@ async def create_analysis_session_record(
     anchor_event_id: str | None,
     use_web_search: bool,
     trigger_source: str,
-    analysis_mode: str = "single",
+    analysis_mode: str = "functional_multi_agent",
     system_job_id: str | None = None,
     prompt_version: str | None = None,
     model_name: str | None = None,

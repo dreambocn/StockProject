@@ -294,16 +294,35 @@ const sourceKind = computed<SourceKind>(() => {
 })
 
 const sourceLabel = computed(() => t(`analysisWorkbench.sourceText.${sourceKind.value}`))
-const reportTriggerSource = computed<'watchlist_daily' | null>(() =>
-  sourceKind.value === 'watchlist' ? 'watchlist_daily' : null,
-)
 const buildReportQueryOptions = (topic: string | null, eventId: string | null) => {
-  const triggerSource = reportTriggerSource.value
   return {
     topic,
     eventId,
-    ...(triggerSource ? { triggerSource } : {}),
   }
+}
+
+const parseReportTime = (value: string | null | undefined) => {
+  if (!value) {
+    return 0
+  }
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+const resolveLatestDefaultReport = () => {
+  const candidates = [
+    summary.value?.report ?? null,
+    reportArchives.value[0] ?? null,
+  ].filter((item): item is AnalysisReportResponse => Boolean(item))
+  if (candidates.length === 0) {
+    return null
+  }
+  // 关键流程：入口来源只决定上下文和返回路径；默认阅读对象始终取时间线最新报告。
+  return candidates.reduce((latest, current) =>
+    parseReportTime(current.generated_at) > parseReportTime(latest.generated_at)
+      ? current
+      : latest,
+  )
 }
 
 const displayName = computed(() => summary.value?.instrument?.name ?? tsCode.value)
@@ -318,7 +337,7 @@ const selectedReport = computed(() => {
       return archived
     }
   }
-  return summary.value?.report ?? reportArchives.value[0] ?? null
+  return resolveLatestDefaultReport()
 })
 const displayedReportId = computed(() => selectedReport.value?.id ?? null)
 const activeSummaryMarkdown = computed(() => streamingMarkdown.value || selectedReport.value?.summary || '')
@@ -680,9 +699,6 @@ const loadSummary = async (requestVersion: number) => {
     }
     // 成功态只写入最新请求的结果，避免用户切换股票后被旧响应覆盖。
     summary.value = payload
-    if (!selectedReportId.value && payload.report?.id) {
-      selectedReportId.value = payload.report.id
-    }
     selectedEventFilter.value = 'all'
     showAllFactors.value = false
   } catch (error) {
@@ -718,9 +734,6 @@ const loadReports = async (requestVersion: number) => {
     }
     // 仅同步当前页面上下文的历史报告，避免跨股票污染。
     reportArchives.value = payload.items
-    if (!selectedReportId.value && payload.items[0]?.id) {
-      selectedReportId.value = payload.items[0].id
-    }
   } catch {
     if (isLatestWorkbenchRequest(requestVersion)) {
       reportArchives.value = []
@@ -1843,7 +1856,7 @@ watch(
                     :key="reportItem.id ?? reportItem.generated_at"
                     type="button"
                     class="analysis-history-item"
-                    :class="{ active: selectedReportId === reportItem.id }"
+                    :class="{ active: displayedReportId === reportItem.id }"
                     @click="selectReport(reportItem.id)"
                   >
                     <strong>{{ formatDateTime(reportItem.generated_at) }}</strong>

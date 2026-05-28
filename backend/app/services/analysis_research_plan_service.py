@@ -51,7 +51,7 @@ async def build_research_plan_payload(
     topic: str | None,
     event_id: str | None,
     use_web_search: bool,
-    analysis_mode: str = "single",
+    analysis_mode: str = ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
     instrument = await load_stock_instrument(session, normalized_ts_code)

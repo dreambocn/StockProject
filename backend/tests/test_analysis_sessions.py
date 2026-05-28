@@ -103,6 +103,7 @@ async def _seed_report(
     generated_at: datetime,
     trigger_source: str = "manual",
     used_web_search: bool = False,
+    analysis_mode: str = "functional_multi_agent",
 ) -> None:
     async with session_maker() as session:
         instrument = await session.get(StockInstrument, ts_code)
@@ -137,6 +138,7 @@ async def _seed_report(
                 started_at=generated_at - timedelta(minutes=1),
                 completed_at=generated_at,
                 trigger_source=trigger_source,
+                analysis_mode=analysis_mode,
                 used_web_search=used_web_search,
                 web_search_status="used" if used_web_search else "disabled",
                 content_format="markdown",
@@ -193,7 +195,6 @@ def test_research_plan_route_returns_stable_preview_without_creating_session(
                 "topic": "regulation_policy",
                 "event_id": "evt-plan-policy",
                 "use_web_search": True,
-                "analysis_mode": "functional_multi_agent",
             },
         )
 
@@ -214,6 +215,8 @@ def test_research_plan_route_returns_stable_preview_without_creating_session(
     assert "政策原文" in " ".join(item["label"] for item in payload["focus_buckets"])
     assert payload["source_scope"]["event_count"] == 2
     assert payload["estimated_steps"]
+    assert payload["analysis_mode"] == "functional_multi_agent"
+    assert "分配研究规划、取证、假设、质询和裁决角色" in payload["estimated_steps"]
     assert session_count == 0
 
 
@@ -237,22 +240,22 @@ def test_create_analysis_session_persists_confirmed_research_plan(
                 "force_refresh": True,
                 "use_web_search": True,
                 "trigger_source": "manual",
-                "analysis_mode": "functional_multi_agent",
                 "research_plan": plan_payload,
             },
         )
 
-        async def _load_session_plan(session_id: str) -> dict[str, object] | None:
+        async def _load_session(session_id: str) -> AnalysisGenerationSession | None:
             async with session_maker() as session:
-                row = await session.get(AnalysisGenerationSession, session_id)
-                return row.research_plan if row else None
+                return await session.get(AnalysisGenerationSession, session_id)
 
-        persisted_plan = asyncio.run(_load_session_plan(response.json()["session_id"]))
+        persisted_session = asyncio.run(_load_session(response.json()["session_id"]))
     finally:
         _cleanup_client(engine)
 
     assert response.status_code == 200
-    assert persisted_plan == plan_payload
+    assert persisted_session is not None
+    assert persisted_session.research_plan == plan_payload
+    assert persisted_session.analysis_mode == "functional_multi_agent"
 
 
 def test_create_analysis_session_uses_fresh_report_cache(tmp_path: Path) -> None:
@@ -354,6 +357,7 @@ def test_create_analysis_session_keeps_functional_multi_agent_cache_isolated(
                 session_maker,
                 ts_code="600519.SH",
                 generated_at=datetime.now(UTC),
+                analysis_mode="single",
             )
         )
         response = client.post(

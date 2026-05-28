@@ -69,7 +69,7 @@ class ResearchPlanRequest(BaseModel):
     topic: str | None = None
     event_id: str | None = None
     use_web_search: bool = False
-    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+    analysis_mode: Literal["single", "functional_multi_agent"] = "functional_multi_agent"
 
 
 class ResearchFocusBucketResponse(BaseModel):
@@ -86,7 +86,7 @@ class ResearchPlanResponse(BaseModel):
     source_scope: dict[str, object] = {}
     web_search_recommended: bool = False
     estimated_steps: list[str]
-    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+    analysis_mode: Literal["single", "functional_multi_agent"] = "functional_multi_agent"
 
 
 class AnalysisSourceItemResponse(BaseModel):
@@ -180,7 +180,7 @@ class AnalysisSessionCreateRequest(BaseModel):
     force_refresh: bool = False
     use_web_search: bool = False
     trigger_source: Literal["manual", "watchlist_daily"] = "manual"
-    analysis_mode: Literal["single", "functional_multi_agent"] = "single"
+    analysis_mode: Literal["single", "functional_multi_agent"] = "functional_multi_agent"
     research_plan: dict[str, object] | None = None
 
 

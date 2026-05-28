@@ -375,6 +375,39 @@ def _resolve_generation_event_limit(settings: object, fallback_limit: int) -> in
     return resolve_generation_event_limit(settings, fallback_limit)
 
 
+async def _load_latest_report_across_modes(
+    session: AsyncSession,
+    ts_code: str,
+    *,
+    topic: str | None,
+    anchor_event_id: str | None,
+    trigger_source: str | None,
+):
+    report_candidates = []
+    for analysis_mode in (ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT, "single"):
+        report = await load_latest_report(
+            session,
+            ts_code,
+            topic=topic,
+            anchor_event_id=anchor_event_id,
+            trigger_source=trigger_source,
+            analysis_mode=analysis_mode,
+        )
+        if report is not None:
+            report_candidates.append(report)
+
+    if not report_candidates:
+        return None
+
+    # 关键流程：分析页默认展示“最新生成结果”，不能让多 Agent/单 Agent
+    # 模式优先级覆盖真实时间线；watchlist 过滤仍由 trigger_source 控制。
+    return max(
+        report_candidates,
+        key=lambda report: getattr(report, "generated_at", None)
+        or datetime.min.replace(tzinfo=UTC),
+    )
+
+
 def _normalize_optional_json_object(payload: object) -> dict[str, object] | None:
     normalized = to_json_safe_payload(payload)
     if normalized is None:
@@ -574,36 +607,22 @@ async def get_stock_analysis_summary(
         settings,
         resolved_event_limit,
     )
-    persisted_report = await load_latest_report(
+    persisted_report = await _load_latest_report_across_modes(
         session,
         normalized_ts_code,
         topic=topic,
         anchor_event_id=event_id,
         trigger_source=trigger_source,
-        analysis_mode=ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
     )
-    if persisted_report is None:
-        persisted_report = await load_latest_report(
-            session,
-            normalized_ts_code,
-            topic=topic,
-            anchor_event_id=event_id,
-            trigger_source=trigger_source,
-            analysis_mode="single",
-        )
     event_context_status: Literal["direct", "topic_fallback", "none"] = "none"
     event_context_message: str | None = None
     if event_id and persisted_report is None:
-        persisted_report = await load_latest_report(
+        persisted_report = await _load_latest_report_across_modes(
             session,
             normalized_ts_code,
             topic=topic,
             anchor_event_id=None,
             trigger_source=trigger_source,
-            analysis_mode=(
-                getattr(persisted_report, "analysis_mode", None)
-                or ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT
-            ),
         )
         event_context_status = "topic_fallback"
         event_context_message = "未找到指定锚点事件，已回退到主题级分析"
@@ -799,7 +818,7 @@ async def build_research_plan(
     topic: str | None,
     event_id: str | None,
     use_web_search: bool,
-    analysis_mode: str = "single",
+    analysis_mode: str = ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
 ) -> dict[str, object]:
     try:
         return await build_research_plan_payload(
@@ -823,7 +842,7 @@ async def start_analysis_session(
     force_refresh: bool,
     use_web_search: bool,
     trigger_source: str,
-    analysis_mode: str = "single",
+    analysis_mode: str = ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
     research_plan: dict[str, object] | None = None,
     execute_inline: bool = False,
 ) -> dict[str, object]:

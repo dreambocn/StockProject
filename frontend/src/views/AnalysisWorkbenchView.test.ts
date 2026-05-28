@@ -12,7 +12,11 @@ vi.mock('element-plus/theme-chalk/el-switch.css', () => ({}))
 
 import AnalysisWorkbenchView from './AnalysisWorkbenchView.vue'
 import { i18n, setAppLocale } from '../i18n'
-import { analysisApi, type StockAnalysisSummaryResponse } from '../api/analysis'
+import {
+  analysisApi,
+  type AnalysisReportResponse,
+  type StockAnalysisSummaryResponse,
+} from '../api/analysis'
 import { watchlistApi } from '../api/watchlist'
 import { useAuthStore } from '../stores/auth'
 import { setAppTheme } from '../theme'
@@ -447,7 +451,6 @@ describe('AnalysisWorkbenchView', () => {
     expect(summarySpy).toHaveBeenCalledWith('600519.SH', {
       topic: null,
       eventId: null,
-      triggerSource: 'watchlist_daily',
     })
     expect(reportsSpy).toHaveBeenCalledWith('600519.SH', 10)
 
@@ -459,6 +462,87 @@ describe('AnalysisWorkbenchView', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/watchlist')
+  })
+
+  it('defaults to the newest archived report when entering from watchlist', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: { ts_code: '600519.SH', source: 'watchlist' },
+    })
+    await router.isReady()
+
+    const dailyReport: AnalysisReportResponse = {
+      ...createMinimalSummary('600519.SH', '## 自动日报').report!,
+      id: 'report-daily',
+      trigger_source: 'watchlist_daily',
+      generated_at: '2026-05-28T08:00:00Z',
+    }
+    const manualReport: AnalysisReportResponse = {
+      ...createMinimalSummary('600519.SH', '## 手动刷新分析').report!,
+      id: 'report-manual',
+      trigger_source: 'manual',
+      generated_at: '2026-05-28T10:00:00Z',
+    }
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ...createMinimalSummary('600519.SH', '## 自动日报'),
+      report: dailyReport,
+    })
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [manualReport, dailyReport],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.get('[data-testid="analysis-markdown"]').text()).toContain('手动刷新分析')
+    expect(wrapper.get('[data-testid="analysis-markdown"]').text()).not.toContain('自动日报')
+  })
+
+  it('defaults to the newest archived report when entering from hot news', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: {
+        ts_code: '600519.SH',
+        source: 'hot_news',
+        topic: 'commodity_supply',
+        event_id: 'evt-hot-1',
+      },
+    })
+    await router.isReady()
+
+    const contextualReport: AnalysisReportResponse = {
+      ...createMinimalSummary('600519.SH', '## 热点锚点旧报告').report!,
+      id: 'report-hot-context',
+      trigger_source: 'manual',
+      generated_at: '2026-05-28T08:00:00Z',
+    }
+    const newestReport: AnalysisReportResponse = {
+      ...createMinimalSummary('600519.SH', '## 最新股票分析').report!,
+      id: 'report-latest',
+      trigger_source: 'manual',
+      generated_at: '2026-05-28T11:00:00Z',
+    }
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue({
+      ...createMinimalSummary('600519.SH', '## 热点锚点旧报告'),
+      report: contextualReport,
+    })
+    vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [newestReport, contextualReport],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    const { wrapper } = await mountWorkbench(router)
+
+    expect(wrapper.get('[data-testid="analysis-markdown"]').text()).toContain('最新股票分析')
+    expect(wrapper.get('[data-testid="analysis-markdown"]').text()).not.toContain('热点锚点旧报告')
   })
 
   it('loads report archives without hot-news filters so stock history remains visible', async () => {

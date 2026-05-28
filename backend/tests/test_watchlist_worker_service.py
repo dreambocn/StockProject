@@ -159,7 +159,7 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
             )
             await session.commit()
 
-            called: list[tuple[str, bool, str, bool]] = []
+            called: list[tuple[str, bool, str, str, bool]] = []
 
             async def fake_start_analysis_session(
                 session,
@@ -170,10 +170,19 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
+                analysis_mode: str,
                 execute_inline: bool,
             ):
                 _ = session, topic, event_id, force_refresh
-                called.append((ts_code, use_web_search, trigger_source, execute_inline))
+                called.append(
+                    (
+                        ts_code,
+                        use_web_search,
+                        trigger_source,
+                        analysis_mode,
+                        execute_inline,
+                    )
+                )
                 return {
                     "session_id": "session-1",
                     "report_id": "report-1",
@@ -192,7 +201,15 @@ def test_run_daily_watchlist_analysis_deduplicates_and_skips_existing_report(
 
             assert result["processed"] == 1
             assert result["skipped"] == 1
-            assert called == [("600519.SH", True, "watchlist_daily", True)]
+            assert called == [
+                (
+                    "600519.SH",
+                    True,
+                    "watchlist_daily",
+                    "functional_multi_agent",
+                    True,
+                )
+            ]
 
             rows = (
                 await session.execute(
@@ -232,6 +249,7 @@ def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
+                analysis_mode: str,
                 execute_inline: bool,
             ):
                 _ = (
@@ -242,6 +260,7 @@ def test_run_daily_watchlist_analysis_does_not_complete_reused_running_session(
                     force_refresh,
                     use_web_search,
                     trigger_source,
+                    analysis_mode,
                     execute_inline,
                 )
                 return {
@@ -496,6 +515,7 @@ def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
                 force_refresh: bool,
                 use_web_search: bool,
                 trigger_source: str,
+                analysis_mode: str,
                 execute_inline: bool,
             ):
                 _ = (
@@ -504,6 +524,7 @@ def test_run_daily_watchlist_analysis_logs_warning_for_item_failure(
                     force_refresh,
                     use_web_search,
                     trigger_source,
+                    analysis_mode,
                     execute_inline,
                 )
                 raise RuntimeError("analysis failed")

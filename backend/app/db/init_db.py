@@ -257,7 +257,7 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
         "started_at": "TIMESTAMP",
         "completed_at": "TIMESTAMP",
         "content_format": "VARCHAR(16) DEFAULT 'markdown'",
-        "analysis_mode": "VARCHAR(32) DEFAULT 'single'",
+        "analysis_mode": "VARCHAR(32) DEFAULT 'functional_multi_agent'",
         "orchestrator_version": "VARCHAR(64)",
         "selected_hypothesis": "VARCHAR(64)",
         "decision_confidence": "VARCHAR(16)",
@@ -291,7 +291,7 @@ def _ensure_analysis_report_columns(sync_connection: Connection) -> None:
             )
         )
     required_session_column_sql: dict[str, str] = {
-        "analysis_mode": "VARCHAR(32) DEFAULT 'single'",
+        "analysis_mode": "VARCHAR(32) DEFAULT 'functional_multi_agent'",
         "orchestrator_version": "VARCHAR(64)",
         "role_count": "INTEGER",
         "role_completed_count": "INTEGER",

@@ -73,10 +73,12 @@ class FunctionalAnalysisResult:
 
 
 def normalize_analysis_mode(requested_mode: str | None, *, trigger_source: str) -> str:
-    mode = str(requested_mode or ANALYSIS_MODE_SINGLE).strip().lower()
-    if mode != ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT:
+    mode = str(requested_mode or ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT).strip().lower()
+    if mode == ANALYSIS_MODE_SINGLE:
         return ANALYSIS_MODE_SINGLE
-    return mode if trigger_source == "manual" else ANALYSIS_MODE_SINGLE
+    # 关键流程：分析默认优先进入多 Agent 流水线；只有调用方显式要求 single 时，
+    # 才保留旧的单 Agent 通道，用于兼容历史任务和定向回归。
+    return ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT
 
 
 def to_json_safe_payload(value: object) -> object:
@@ -240,12 +242,28 @@ async def _emit(cb: ROLE_EVENT | None, event_name: str, payload: dict[str, objec
         await cb(event_name, payload)
 
 
+def _aggregate_web_search_status(roles: list[FunctionalRoleResult]) -> str:
+    # 关键流程：联网工具不支持但普通模型回退成功，不等于分析不完整；
+    # 报告级状态仍要保留 unsupported，方便前端准确提示“已回退”。
+    if any(item.used_web_search for item in roles):
+        return "used"
+    if any(item.web_search_status == "unsupported" for item in roles):
+        return "unsupported"
+    return "disabled"
+
+
 async def _run_json_role(*, role_key: str, role_label: str, sort_order: int, system_instruction: str, prompt: str, fallback: dict[str, object], use_web_search: bool, input_snapshot: dict[str, object] | None) -> FunctionalRoleResult:
     started = datetime.now(UTC)
     failure_type = None
     try:
         llm = await generate_llm_result(prompt, system_instruction=system_instruction, max_output_tokens=800, use_web_search=use_web_search)
-        payload = to_json_safe_payload(_try_parse_json(llm.text) or fallback)
+        parsed_payload = _try_parse_json(llm.text)
+        if parsed_payload is not None:
+            # 关键流程：联网增强返回的 JSON 可能只补充 summary/引用线索；
+            # 缺失字段必须回填规则 fallback，避免后续角色读取关键键时报错。
+            payload = to_json_safe_payload({**fallback, **parsed_payload})
+        else:
+            payload = to_json_safe_payload(fallback)
         status = "completed"
     except Exception as exc:
         llm = LlmTextResult(text="", used_web_search=False, web_search_status="unsupported" if use_web_search else "disabled", web_sources=[], model_name="", reasoning_effort="", token_usage_input=None, token_usage_output=None)
@@ -280,9 +298,10 @@ async def _run_json_role(*, role_key: str, role_label: str, sort_order: int, sys
 async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_row, instrument, latest_snapshot, event_payloads: list[dict[str, object]], factor_weights: list[FactorWeight], on_final_delta: TEXT_EVENT | None = None, on_role_event: ROLE_EVENT | None = None) -> FunctionalAnalysisResult:
     _ = session
     name = getattr(instrument, "name", None) or session_row.ts_code
+    role_web_search_enabled = bool(session_row.use_web_search)
     roles: list[FunctionalRoleResult] = []
     await _emit(on_role_event, "role_status", {"role_key": "research_planner", "role_label": "研究规划", "status": "running"})
-    planner = await _run_json_role(role_key="research_planner", role_label="研究规划", sort_order=1, system_instruction="你是研究规划 Agent，只能输出 JSON，不允许给投资建议。", prompt=f"请围绕 {session_row.ts_code} 生成研究计划 JSON，字段至少包含 summary、focus_buckets、priority_questions、web_search_recommended、evidence_targets。", fallback=_fallback_plan(use_web_search=bool(session_row.use_web_search), events=event_payloads), use_web_search=False, input_snapshot={"ts_code": session_row.ts_code, "event_count": len(event_payloads)})
+    planner = await _run_json_role(role_key="research_planner", role_label="研究规划", sort_order=1, system_instruction="你是研究规划 Agent，只能输出 JSON，不允许给投资建议。若联网增强开启，请优先检索最新公开信息来校准研究问题。", prompt=f"请围绕 {session_row.ts_code} 生成研究计划 JSON，字段至少包含 summary、focus_buckets、priority_questions、web_search_recommended、evidence_targets。", fallback=_fallback_plan(use_web_search=role_web_search_enabled, events=event_payloads), use_web_search=role_web_search_enabled, input_snapshot={"ts_code": session_row.ts_code, "event_count": len(event_payloads)})
     roles.append(planner)
     await _emit(on_role_event, "role_completed", {"role_key": planner.role_key, "role_label": planner.role_label, "status": planner.status})
 
@@ -297,7 +316,9 @@ async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_
     if latest_snapshot is not None:
         ledger.append({"evidence_id": f"snapshot:{session_row.ts_code}", "bucket": "price_and_volume", "scope": "snapshot", "title": f"{session_row.ts_code} 最新行情快照", "summary": f"收盘价 {getattr(latest_snapshot, 'close', None)}，涨跌幅 {getattr(latest_snapshot, 'pct_chg', None)}", "published_at": to_json_safe_payload(getattr(latest_snapshot, "trade_date", None)), "source": "stock_daily_snapshots", "provider": "tushare", "url": None, "ts_code": session_row.ts_code, "topic": session_row.topic, "event_type": "snapshot", "source_priority": 100, "is_structured": True, "is_web_search": False})
         bucket_counts["price_and_volume"] = bucket_counts.get("price_and_volume", 0) + 1
-    retrieval = FunctionalRoleResult("evidence_retrieval", "证据检索", "completed", 2, "已整理原始证据账本。", to_json_safe_payload({"summary": "已根据研究计划整理证据账本。", "bucket_counts": bucket_counts, "total_items": len(ledger), "items": ledger[:8]}), False, "disabled", [], build_functional_prompt_version("evidence_retrieval"), None, None, None, None, None, None, datetime.now(UTC), datetime.now(UTC), to_json_safe_payload({"focus_buckets": planner.output_payload.get("focus_buckets", [])}))
+    retrieval_fallback = to_json_safe_payload({"summary": "已根据研究计划整理证据账本。", "bucket_counts": bucket_counts, "total_items": len(ledger), "items": ledger[:8]})
+    await _emit(on_role_event, "role_status", {"role_key": "evidence_retrieval", "role_label": "证据检索", "status": "running"})
+    retrieval = await _run_json_role(role_key="evidence_retrieval", role_label="证据检索", sort_order=2, system_instruction="你是证据检索 Agent，只能输出 JSON。若联网增强开启，请检索最新公开报道、公告或权威来源，并把可核验线索写入 items。", prompt=f"请围绕 {session_row.ts_code} 的研究计划整理证据账本 JSON，字段至少包含 summary、bucket_counts、total_items、items。已有结构化证据：{json.dumps(to_json_safe_payload(ledger[:8]), ensure_ascii=False)}", fallback=retrieval_fallback if isinstance(retrieval_fallback, dict) else {}, use_web_search=role_web_search_enabled, input_snapshot={"focus_buckets": planner.output_payload.get("focus_buckets", [])})
     roles.append(retrieval)
     await _emit(on_role_event, "role_completed", {"role_key": retrieval.role_key, "role_label": retrieval.role_label, "status": retrieval.status})
 
@@ -316,22 +337,24 @@ async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_
     if conflict:
         gaps.append("正负向事件同时存在，需警惕结论过于单边。")
     audit_payload = to_json_safe_payload({"summary": "已完成证据审计。", "overall_quality": "high" if not gaps and duplicate == 0 else "medium" if len(gaps) <= 2 else "low", "duplicate_title_count": duplicate, "conflict_count": conflict, "gap_count": len(gaps), "gaps": gaps[:5], "scorecard": {"structured_event_count": len(event_payloads), "bucket_count": len(bucket_counts), "has_price_snapshot": latest_snapshot is not None}})
-    audit = FunctionalRoleResult("evidence_audit", "证据审计", "completed", 3, "已完成证据审计。", audit_payload, False, "disabled", [], build_functional_prompt_version("evidence_audit"), None, None, None, None, None, None, datetime.now(UTC), datetime.now(UTC), to_json_safe_payload({"raw_item_count": len(ledger)}))
+    await _emit(on_role_event, "role_status", {"role_key": "evidence_audit", "role_label": "证据审计", "status": "running"})
+    audit = await _run_json_role(role_key="evidence_audit", role_label="证据审计", sort_order=3, system_instruction="你是证据审计 Agent，只能输出 JSON。若联网增强开启，请核验公开来源是否存在缺口、冲突或过期信息。", prompt=f"请审计 {session_row.ts_code} 的证据账本 JSON，字段至少包含 summary、overall_quality、duplicate_title_count、conflict_count、gap_count、gaps、scorecard。证据账本：{json.dumps(to_json_safe_payload(retrieval.output_payload), ensure_ascii=False)}", fallback=audit_payload if isinstance(audit_payload, dict) else {}, use_web_search=role_web_search_enabled, input_snapshot={"raw_item_count": len(ledger)})
     roles.append(audit)
     await _emit(on_role_event, "role_completed", {"role_key": audit.role_key, "role_label": audit.role_label, "status": audit.status})
 
     await _emit(on_role_event, "role_status", {"role_key": "hypothesis_builder", "role_label": "候选假设", "status": "running"})
-    hypotheses = await _run_json_role(role_key="hypothesis_builder", role_label="候选假设", sort_order=4, system_instruction="你是候选假设 Agent，只能输出 JSON，必须同时给出 bullish_hypothesis、neutral_hypothesis、bearish_hypothesis。", prompt=f"请围绕 {session_row.ts_code} 输出三种候选假设 JSON，字段至少包含 summary 和 hypotheses。每个 hypothesis 至少包含 key、title、summary、support_points、counter_points、confidence、base_score。", fallback=_fallback_hypotheses(name=name, ts_code=session_row.ts_code, events=event_payloads, factor_weights=factor_weights, gap_count=int(audit_payload['gap_count'])), use_web_search=bool(session_row.use_web_search), input_snapshot={"event_count": len(event_payloads), "factor_count": len(factor_weights), "audit_quality": audit_payload["overall_quality"]})
+    hypotheses = await _run_json_role(role_key="hypothesis_builder", role_label="候选假设", sort_order=4, system_instruction="你是候选假设 Agent，只能输出 JSON，必须同时给出 bullish_hypothesis、neutral_hypothesis、bearish_hypothesis。若联网增强开启，请结合最新公开信息修正假设。", prompt=f"请围绕 {session_row.ts_code} 输出三种候选假设 JSON，字段至少包含 summary 和 hypotheses。每个 hypothesis 至少包含 key、title、summary、support_points、counter_points、confidence、base_score。", fallback=_fallback_hypotheses(name=name, ts_code=session_row.ts_code, events=event_payloads, factor_weights=factor_weights, gap_count=int(audit.output_payload['gap_count'])), use_web_search=role_web_search_enabled, input_snapshot={"event_count": len(event_payloads), "factor_count": len(factor_weights), "audit_quality": audit.output_payload["overall_quality"]})
     roles.append(hypotheses)
     await _emit(on_role_event, "role_completed", {"role_key": hypotheses.role_key, "role_label": hypotheses.role_label, "status": hypotheses.status})
 
     hypothesis_items = [item for item in (hypotheses.output_payload.get("hypotheses") or []) if isinstance(item, dict)]
-    challenge_payload = _fallback_challenges(hypotheses=hypothesis_items, gap_count=int(audit_payload["gap_count"]), conflict_count=int(audit_payload["conflict_count"]))
-    challenge = FunctionalRoleResult("challenge_agent", "反向质询", "completed", 5, "已完成候选假设的反向质询。", challenge_payload, False, "disabled", [], build_functional_prompt_version("challenge_agent"), None, None, None, None, None, None, datetime.now(UTC), datetime.now(UTC), {"hypothesis_count": len(hypothesis_items)})
+    challenge_payload = _fallback_challenges(hypotheses=hypothesis_items, gap_count=int(audit.output_payload["gap_count"]), conflict_count=int(audit.output_payload["conflict_count"]))
+    await _emit(on_role_event, "role_status", {"role_key": "challenge_agent", "role_label": "反向质询", "status": "running"})
+    challenge = await _run_json_role(role_key="challenge_agent", role_label="反向质询", sort_order=5, system_instruction="你是反向质询 Agent，只能输出 JSON。若联网增强开启，请检索反向证据和未覆盖风险，避免结论单边化。", prompt=f"请对 {session_row.ts_code} 的候选假设做反向质询 JSON，字段至少包含 summary、challenges。候选假设：{json.dumps(to_json_safe_payload(hypothesis_items), ensure_ascii=False)}", fallback=challenge_payload, use_web_search=role_web_search_enabled, input_snapshot={"hypothesis_count": len(hypothesis_items)})
     roles.append(challenge)
     await _emit(on_role_event, "role_completed", {"role_key": challenge.role_key, "role_label": challenge.role_label, "status": challenge.status})
 
-    decision = _pick_decision(hypotheses=hypothesis_items, challenges=[item for item in (challenge.output_payload.get("challenges") or []) if isinstance(item, dict)], gap_count=int(audit_payload["gap_count"]), conflict_count=int(audit_payload["conflict_count"]))
+    decision = _pick_decision(hypotheses=hypothesis_items, challenges=[item for item in (challenge.output_payload.get("challenges") or []) if isinstance(item, dict)], gap_count=int(audit.output_payload["gap_count"]), conflict_count=int(audit.output_payload["conflict_count"]))
     await _emit(on_role_event, "role_status", {"role_key": "decision_agent", "role_label": "最终裁决", "status": "running"})
     decision_text = ""
     decision_failure_type = None
@@ -349,14 +372,14 @@ async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_
             f"请基于以下信息生成 {session_row.ts_code} 的中文 Markdown 股票分析简报。最终采纳假设：{decision['selected_hypothesis']}。最终置信度：{decision['decision_confidence']}。采纳理由：{decision['decision_reason_summary']}。仅使用二级标题：## 核心判断、## 关键证据、## 风险提示。不要输出过程说明。",
             system_instruction="你是最终裁决 Agent，负责把研究流水线的结论整理为用户可读的中文 Markdown 报告。只输出 Markdown。",
             max_output_tokens=900,
-            use_web_search=False,
+            use_web_search=role_web_search_enabled,
             on_delta=_handle_delta,
         )
         if not decision_text.strip():
             decision_text = decision_llm.text.strip()
     except Exception as exc:
         decision_failure_type = type(exc).__name__
-        decision_text = _fallback_markdown(name=name, ts_code=session_row.ts_code, decision=decision, hypotheses=hypothesis_items, gaps=[str(item) for item in audit_payload["gaps"]], challenges=[item for item in (challenge.output_payload.get("challenges") or []) if isinstance(item, dict)])
+        decision_text = _fallback_markdown(name=name, ts_code=session_row.ts_code, decision=decision, hypotheses=hypothesis_items, gaps=[str(item) for item in audit.output_payload["gaps"]], challenges=[item for item in (challenge.output_payload.get("challenges") or []) if isinstance(item, dict)])
         if on_final_delta is not None:
             await on_final_delta(decision_text)
 
@@ -369,7 +392,7 @@ async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_
         for item in role.web_sources:
             if item not in all_sources:
                 all_sources.append(item)
-    risks = [str(item) for item in audit_payload["gaps"]]
+    risks = [str(item) for item in audit.output_payload["gaps"]]
     for item in challenge.output_payload.get("challenges") or []:
         if isinstance(item, dict) and str(item.get("hypothesis_key") or "") == str(decision["selected_hypothesis"]):
             risks.extend(str(q) for q in (item.get("unresolved_questions") or []) if str(q).strip())
@@ -381,6 +404,7 @@ async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_
             continue
         seen_risks.add(item)
         deduped.append(item)
+    report_web_search_status = _aggregate_web_search_status(roles)
     return FunctionalAnalysisResult(
         status="ready" if all(item.status == "completed" for item in roles) else "partial",
         summary=decision_text,
@@ -388,7 +412,7 @@ async def run_functional_multi_agent_analysis(*, session: AsyncSession, session_
         factor_breakdown=[{"factor_key": item.factor_key, "factor_label": item.factor_label, "weight": item.weight, "direction": item.direction, "evidence": item.evidence, "reason": item.reason} for item in factor_weights],
         generated_at=datetime.now(UTC),
         used_web_search=any(item.used_web_search for item in roles),
-        web_search_status="used" if any(item.used_web_search for item in roles) else "disabled",
+        web_search_status=report_web_search_status,
         web_sources=all_sources,
         prompt_version=decision_role.prompt_version,
         model_name=decision_role.model_name,

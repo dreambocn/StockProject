@@ -21,7 +21,7 @@ class AnalysisGenerationSession(Base):
     )
     use_web_search: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     analysis_mode: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="single", index=True
+        String(32), nullable=False, default="functional_multi_agent", index=True
     )
     orchestrator_version: Mapped[str | None] = mapped_column(
         String(64), nullable=True

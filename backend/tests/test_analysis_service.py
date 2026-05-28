@@ -29,6 +29,7 @@ from app.services.analysis_service import (
     get_stock_analysis_summary,
     list_stock_analysis_report_archives,
     run_analysis_session_by_id,
+    start_analysis_session,
 )
 
 
@@ -148,6 +149,63 @@ def test_analysis_summary_can_filter_watchlist_daily_report(tmp_path: Path) -> N
 
             assert result["report"]["summary"] == "关注列表日报"
             assert result["report"]["trigger_source"] == "watchlist_daily"
+
+    asyncio.run(run_test())
+
+
+def test_analysis_summary_defaults_to_latest_report_across_trigger_sources(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="000001.SZ",
+                    symbol="000001",
+                    name="平安银行",
+                    fullname="平安银行股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add_all(
+                [
+                    AnalysisReport(
+                        ts_code="000001.SZ",
+                        status="ready",
+                        summary="较旧的自动日报",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        trigger_source="watchlist_daily",
+                        analysis_mode="functional_multi_agent",
+                        generated_at=datetime(2026, 5, 28, 8, 0, tzinfo=timezone.utc),
+                    ),
+                    AnalysisReport(
+                        ts_code="000001.SZ",
+                        status="ready",
+                        summary="较新的手动分析",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        trigger_source="manual",
+                        analysis_mode="single",
+                        generated_at=datetime(2026, 5, 28, 10, 0, tzinfo=timezone.utc),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            default_result = await get_stock_analysis_summary(session, "000001.SZ")
+            watchlist_result = await get_stock_analysis_summary(
+                session,
+                "000001.SZ",
+                trigger_source="watchlist_daily",
+            )
+
+            assert default_result["report"]["summary"] == "较新的手动分析"
+            assert default_result["report"]["trigger_source"] == "manual"
+            assert watchlist_result["report"]["summary"] == "较旧的自动日报"
+            assert watchlist_result["report"]["trigger_source"] == "watchlist_daily"
 
     asyncio.run(run_test())
 
@@ -1197,6 +1255,7 @@ def test_run_analysis_session_by_id_uses_balanced_event_selection_limit(
                     topic="commodity_supply",
                     anchor_event_id="stock-anchor",
                     status="queued",
+                    analysis_mode="single",
                 )
             )
             session.add_all(
@@ -1362,6 +1421,7 @@ def test_run_analysis_session_by_id_marks_watchlist_daily_completed(
                     anchor_event_id=None,
                     status="queued",
                     trigger_source="watchlist_daily",
+                    analysis_mode="single",
                 )
             )
             await session.commit()
@@ -1383,6 +1443,105 @@ def test_run_analysis_session_by_id_marks_watchlist_daily_completed(
             assert watch_item.last_daily_analysis_at == generated_at.replace(tzinfo=None)
             assert report.trigger_source == "watchlist_daily"
             assert captured == {"ts_code": "600519.SH", "event_count": 1}
+
+    asyncio.run(run_test())
+
+
+def test_start_analysis_session_defaults_watchlist_daily_to_functional_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.cache_active_session_id", fake_cache)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            await session.commit()
+
+            result = await start_analysis_session(
+                session,
+                "600519.SH",
+                topic=None,
+                event_id=None,
+                force_refresh=False,
+                use_web_search=True,
+                trigger_source="watchlist_daily",
+            )
+
+            persisted_session = (
+                await session.execute(
+                    select(AnalysisGenerationSession).where(
+                        AnalysisGenerationSession.id == result["session_id"]
+                    )
+                )
+            ).scalar_one()
+
+            assert result["status"] == "queued"
+            assert persisted_session.analysis_mode == "functional_multi_agent"
+            assert persisted_session.trigger_source == "watchlist_daily"
+            assert persisted_session.orchestrator_version == "functional-multi-agent-v1"
+
+    asyncio.run(run_test())
+
+
+def test_start_analysis_session_preserves_explicit_single_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.cache_active_session_id", fake_cache)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            await session.commit()
+
+            result = await start_analysis_session(
+                session,
+                "600519.SH",
+                topic=None,
+                event_id=None,
+                force_refresh=False,
+                use_web_search=True,
+                trigger_source="manual",
+                analysis_mode="single",
+            )
+
+            persisted_session = (
+                await session.execute(
+                    select(AnalysisGenerationSession).where(
+                        AnalysisGenerationSession.id == result["session_id"]
+                    )
+                )
+            ).scalar_one()
+
+            assert persisted_session.analysis_mode == "single"
+            assert persisted_session.orchestrator_version is None
 
     asyncio.run(run_test())
 
@@ -1683,6 +1842,186 @@ def test_run_analysis_session_by_id_persists_functional_pipeline_roles(
     asyncio.run(run_test())
 
 
+def test_run_analysis_session_by_id_persists_watchlist_daily_functional_pipeline_roles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def fake_load_recent_news_events(*args, **kwargs):
+        _ = args, kwargs
+        base_time = datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        return [
+            NewsEvent(
+                id="watchlist-functional-event-1",
+                scope="stock",
+                cache_variant="default",
+                ts_code="600519.SH",
+                symbol="600519",
+                title="自动日报事件",
+                summary="摘要",
+                published_at=base_time,
+                url="https://example.com/watchlist-functional-event-1",
+                publisher="测试源",
+                source="stock-source",
+                macro_topic="watchlist",
+                fetched_at=base_time,
+            )
+        ]
+
+    async def fake_run_functional_multi_agent_analysis(
+        *,
+        session,
+        session_row,
+        instrument,
+        latest_snapshot,
+        event_payloads,
+        factor_weights,
+        on_final_delta,
+    ):
+        _ = session, instrument, latest_snapshot, event_payloads, factor_weights
+        assert session_row.trigger_source == "watchlist_daily"
+        await on_final_delta("## 自动日报裁决\n采用中性假设。")
+        return {
+            "status": "ready",
+            "summary": "## 自动日报裁决\n采用中性假设。",
+            "risk_points": [],
+            "factor_breakdown": [],
+            "generated_at": datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc),
+            "used_web_search": False,
+            "web_search_status": "unsupported",
+            "web_sources": [],
+            "prompt_version": "functional-decision-v1",
+            "model_name": "test-model",
+            "reasoning_effort": "medium",
+            "token_usage_input": 120,
+            "token_usage_output": 80,
+            "cost_estimate": None,
+            "failure_type": None,
+            "analysis_mode": "functional_multi_agent",
+            "orchestrator_version": "functional-multi-agent-v1",
+            "selected_hypothesis": "neutral_hypothesis",
+            "decision_confidence": "medium",
+            "decision_reason_summary": "自动日报证据仍需观察。",
+            "pipeline_roles": [
+                {
+                    "role_key": "research_planner",
+                    "role_label": "研究规划",
+                    "status": "completed",
+                    "sort_order": 1,
+                    "summary": "已生成自动日报研究计划",
+                    "output_payload": {"focus_buckets": ["watchlist_news"]},
+                    "used_web_search": False,
+                    "web_search_status": "unsupported",
+                    "web_sources": [],
+                    "prompt_version": "functional-planner-v1",
+                    "model_name": "test-model",
+                    "reasoning_effort": "medium",
+                    "token_usage_input": 20,
+                    "token_usage_output": 20,
+                    "cost_estimate": None,
+                    "failure_type": None,
+                }
+            ],
+            "role_progress": [{"role_key": "research_planner", "status": "completed"}],
+            "active_role_key": "research_planner",
+            "pipeline_stage": "decisioning",
+        }
+
+    async def fake_publish(*args, **kwargs):
+        _ = args, kwargs
+
+    async def fake_cache(*args, **kwargs):
+        _ = args, kwargs
+
+    monkeypatch.setattr("app.services.analysis_service.SessionLocal", session_maker)
+    monkeypatch.setattr(
+        "app.services.analysis_service.load_recent_news_events",
+        fake_load_recent_news_events,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_service.run_functional_multi_agent_analysis",
+        fake_run_functional_multi_agent_analysis,
+    )
+    monkeypatch.setattr("app.services.analysis_service.event_bus.publish", fake_publish)
+    monkeypatch.setattr("app.services.analysis_service.cache_fresh_report_id", fake_cache)
+    monkeypatch.setattr(
+        "app.services.analysis_service.clear_cached_active_session_id",
+        fake_cache,
+    )
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add(
+                UserWatchlistItem(
+                    user_id="user-1",
+                    ts_code="600519.SH",
+                    daily_analysis_enabled=True,
+                )
+            )
+            session.add(
+                AnalysisGenerationSession(
+                    id="watchlist-functional-session-1",
+                    analysis_key="watchlist-functional-analysis-key",
+                    ts_code="600519.SH",
+                    topic=None,
+                    anchor_event_id=None,
+                    status="queued",
+                    trigger_source="watchlist_daily",
+                    analysis_mode="functional_multi_agent",
+                    orchestrator_version="functional-multi-agent-v1",
+                )
+            )
+            await session.commit()
+
+        await run_analysis_session_by_id("watchlist-functional-session-1")
+
+        async with session_maker() as verify_session:
+            persisted_report = (
+                await verify_session.execute(
+                    select(AnalysisReport).where(
+                        AnalysisReport.session_id == "watchlist-functional-session-1"
+                    )
+                )
+            ).scalar_one()
+            persisted_role = (
+                await verify_session.execute(
+                    select(AnalysisAgentRun).where(
+                        AnalysisAgentRun.report_id == persisted_report.id
+                    )
+                )
+            ).scalar_one()
+            watch_item = (
+                await verify_session.execute(select(UserWatchlistItem))
+            ).scalar_one()
+
+            assert persisted_report.trigger_source == "watchlist_daily"
+            assert persisted_report.analysis_mode == "functional_multi_agent"
+            assert persisted_report.web_search_status == "unsupported"
+            assert persisted_report.selected_hypothesis == "neutral_hypothesis"
+            assert persisted_role.role_key == "research_planner"
+            assert persisted_role.web_search_status == "unsupported"
+            assert persisted_role.summary == "已生成自动日报研究计划"
+            assert watch_item.last_daily_analysis_at == datetime(
+                2026,
+                3,
+                25,
+                13,
+                0,
+            )
+
+    asyncio.run(run_test())
+
+
 def test_run_analysis_session_by_id_refreshes_heartbeat_during_long_generation(
     tmp_path: Path,
     monkeypatch,
@@ -1776,6 +2115,7 @@ def test_run_analysis_session_by_id_refreshes_heartbeat_during_long_generation(
                     ts_code="600519.SH",
                     status="queued",
                     heartbeat_at=old_heartbeat,
+                    analysis_mode="single",
                 )
             )
             await session.commit()

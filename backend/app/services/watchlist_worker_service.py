@@ -571,6 +571,7 @@ async def run_daily_watchlist_analysis(
                 force_refresh=False,
                 use_web_search=target.use_web_search,
                 trigger_source="watchlist_daily",
+                analysis_mode="functional_multi_agent",
                 execute_inline=execute_inline,
             )
             analysis_status = str(analysis_result.get("status") or "")

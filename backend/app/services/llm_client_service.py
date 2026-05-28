@@ -80,6 +80,19 @@ def _iter_output_text_contents(response: object) -> list[object]:
     return contents
 
 
+def _response_has_web_search_call(response: object | None) -> bool:
+    if response is None:
+        return False
+
+    output_items = getattr(response, "output", None) or []
+    for item in output_items:
+        # Responses API 真正执行联网工具时会返回 web_search_call 项；
+        # 仅请求 tools 不代表网关一定执行了联网搜索。
+        if str(getattr(item, "type", "") or "") == "web_search_call":
+            return True
+    return False
+
+
 @dataclass
 class LlmTextResult:
     text: str
@@ -126,8 +139,8 @@ def _build_create_kwargs(
         "max_output_tokens": max_output_tokens,
     }
     if use_web_search and resolved_settings.llm_web_search_enabled:
-        # 联网增强默认关闭；只有显式开启且全局允许时才尝试挂载 web search tool。
-        request_kwargs["tools"] = [{"type": "web_search_preview"}]
+        # 联网增强默认关闭；只有显式开启且全局允许时才尝试挂载当前正式 web search tool。
+        request_kwargs["tools"] = [{"type": "web_search"}]
     return request_kwargs
 
 
@@ -233,11 +246,16 @@ async def generate_llm_result(
             **request_kwargs,
         )
         token_usage_input, token_usage_output = _extract_token_usage(response)
+        web_sources = _extract_web_sources(response)
+        actual_used_web_search = bool(
+            web_search_requested
+            and (_response_has_web_search_call(response) or web_sources)
+        )
         return LlmTextResult(
             text=_extract_output_text(response),
-            used_web_search=web_search_requested,
-            web_search_status="used" if web_search_requested else "disabled",
-            web_sources=_extract_web_sources(response),
+            used_web_search=actual_used_web_search,
+            web_search_status="used" if actual_used_web_search else "disabled",
+            web_sources=web_sources,
             model_name=resolved_model,
             reasoning_effort=resolved_reasoning_effort,
             token_usage_input=token_usage_input,
@@ -414,12 +432,19 @@ async def generate_streamed_llm_result(
         resolved_text = _extract_output_text(final_response)
 
     token_usage_input, token_usage_output = _extract_token_usage(final_response)
+    web_sources = (
+        _extract_web_sources(final_response) if final_response is not None else []
+    )
+    actual_used_web_search = bool(
+        web_search_requested
+        and (_response_has_web_search_call(final_response) or web_sources)
+    )
 
     return LlmTextResult(
         text=resolved_text,
-        used_web_search=web_search_requested,
-        web_search_status="used" if web_search_requested else "disabled",
-        web_sources=_extract_web_sources(final_response) if final_response is not None else [],
+        used_web_search=actual_used_web_search,
+        web_search_status="used" if actual_used_web_search else "disabled",
+        web_sources=web_sources,
         model_name=resolved_model,
         reasoning_effort=resolved_reasoning_effort,
         token_usage_input=token_usage_input,
