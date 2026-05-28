@@ -656,6 +656,76 @@ def test_analysis_service_reports_backfill_respects_three_three_ten_budget(
     asyncio.run(run_test())
 
 
+def test_analysis_report_archives_merge_functional_and_legacy_reports(
+    tmp_path: Path,
+) -> None:
+    engine, session_maker = _setup_async_session(tmp_path)
+
+    async def run_test():
+        async with session_maker() as session:
+            session.add(
+                StockInstrument(
+                    ts_code="600519.SH",
+                    symbol="600519",
+                    name="贵州茅台",
+                    fullname="贵州茅台酒股份有限公司",
+                    list_status="L",
+                )
+            )
+            session.add_all(
+                [
+                    AnalysisReport(
+                        id="report-functional-latest",
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="新分析流水线报告",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        analysis_mode="functional_multi_agent",
+                        generated_at=datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc),
+                    ),
+                    AnalysisReport(
+                        id="report-legacy-daily-1",
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="旧版自动分析报告一",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        trigger_source="watchlist_daily",
+                        analysis_mode="single",
+                        generated_at=datetime(2026, 5, 25, 9, 0, tzinfo=timezone.utc),
+                    ),
+                    AnalysisReport(
+                        id="report-legacy-daily-2",
+                        ts_code="600519.SH",
+                        status="ready",
+                        summary="旧版自动分析报告二",
+                        risk_points=[],
+                        factor_breakdown=[],
+                        trigger_source="watchlist_daily",
+                        analysis_mode="single",
+                        generated_at=datetime(2026, 5, 24, 9, 0, tzinfo=timezone.utc),
+                    ),
+                ]
+            )
+            await session.commit()
+
+            result = await list_stock_analysis_report_archives(
+                session,
+                "600519.SH",
+                limit=10,
+            )
+
+            # 历史列表是时间线视图，不能因为已有新版多 Agent 报告就隐藏旧版自动分析结果。
+            assert [item["id"] for item in result["items"]] == [
+                "report-functional-latest",
+                "report-legacy-daily-1",
+                "report-legacy-daily-2",
+            ]
+
+    asyncio.run(run_test())
+
+
 def test_analysis_service_skips_reenrichment_for_unavailable_fallback_ready_source(
     tmp_path: Path,
     monkeypatch,

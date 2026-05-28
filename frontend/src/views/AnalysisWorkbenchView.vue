@@ -700,8 +700,6 @@ const loadSummary = async (requestVersion: number) => {
 
 const loadReports = async (requestVersion: number) => {
   const currentTsCode = tsCode.value
-  const currentTopic = topicContext.value || null
-  const currentEventId = eventId.value || null
 
   if (!currentTsCode) {
     if (isLatestWorkbenchRequest(requestVersion)) {
@@ -714,11 +712,6 @@ const loadReports = async (requestVersion: number) => {
     const payload = await analysisApi.getStockAnalysisReports(
       currentTsCode,
       10,
-      {
-        // 历史区需要承接该股票的完整分析轨迹；watchlist 入口只让主报告优先自动日报，不应过滤归档列表。
-        topic: currentTopic,
-        eventId: currentEventId,
-      },
     )
     if (!isLatestWorkbenchRequest(requestVersion)) {
       return

@@ -42,6 +42,10 @@ docs/*.docx
 
 .VSCodeCounter/
 
+## Local runtime artifacts
+outputs/
+backend/data/evaluations/runs/
+
 
 ./AGENTS.md
 PROGRESS.md

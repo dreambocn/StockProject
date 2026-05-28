@@ -703,25 +703,28 @@ async def list_stock_analysis_report_archives(
 ) -> dict[str, object]:
     normalized_ts_code = ts_code.strip().upper()
     settings = get_settings()
-    reports = await list_analysis_reports(
-        session,
-        ts_code=normalized_ts_code,
-        topic=topic,
-        anchor_event_id=event_id,
-        trigger_source=trigger_source,
-        limit=limit,
-        analysis_mode=ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT,
-    )
-    if not reports:
-        reports = await list_analysis_reports(
+    reports_by_id: dict[str, object] = {}
+    for analysis_mode in (ANALYSIS_MODE_FUNCTIONAL_MULTI_AGENT, "single"):
+        mode_reports = await list_analysis_reports(
             session,
             ts_code=normalized_ts_code,
             topic=topic,
             anchor_event_id=event_id,
             trigger_source=trigger_source,
             limit=limit,
-            analysis_mode="single",
+            analysis_mode=analysis_mode,
         )
+        for report in mode_reports:
+            if report.id:
+                reports_by_id[report.id] = report
+    # 历史归档是同一股票的时间线视图，需要合并新版多 Agent 与旧版自动分析结果，
+    # 否则升级分析模式后旧日报会被隐藏，只剩最新一条可见。
+    reports = sorted(
+        reports_by_id.values(),
+        key=lambda report: getattr(report, "generated_at", None)
+        or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )[:limit]
     remaining_budget = 10
     for index, report in enumerate(reports):
         if index >= 3 or remaining_budget <= 0:

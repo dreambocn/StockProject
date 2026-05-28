@@ -25,7 +25,7 @@ from app.services.watchlist_worker_service import (
 LOGGER = get_logger(__name__)
 HONG_KONG_TZ = ZoneInfo("Asia/Hong_Kong")
 POLL_INTERVAL_SECONDS = 30
-IDLE_LOG_INTERVAL_SECONDS = 300
+IDLE_LOG_INTERVAL_SECONDS = 30
 
 
 async def _run_once(

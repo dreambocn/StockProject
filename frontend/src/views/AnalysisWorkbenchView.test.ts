@@ -449,10 +449,7 @@ describe('AnalysisWorkbenchView', () => {
       eventId: null,
       triggerSource: 'watchlist_daily',
     })
-    expect(reportsSpy).toHaveBeenCalledWith('600519.SH', 10, {
-      topic: null,
-      eventId: null,
-    })
+    expect(reportsSpy).toHaveBeenCalledWith('600519.SH', 10)
 
     const backButton = wrapper
       .findAll('button')
@@ -462,6 +459,34 @@ describe('AnalysisWorkbenchView', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.path).toBe('/watchlist')
+  })
+
+  it('loads report archives without hot-news filters so stock history remains visible', async () => {
+    setAppLocale('zh-CN')
+    const router = createRouterWithQuery()
+    await router.push({
+      path: '/analysis',
+      query: {
+        ts_code: '600519.SH',
+        source: 'hot_news',
+        topic: 'commodity_supply',
+        event_id: 'evt-hot-1',
+      },
+    })
+    await router.isReady()
+
+    vi.spyOn(analysisApi, 'getStockAnalysisSummary').mockResolvedValue(
+      createMinimalSummary('600519.SH', '## 热点锚点分析摘要'),
+    )
+    const reportsSpy = vi.spyOn(analysisApi, 'getStockAnalysisReports').mockResolvedValue({
+      ts_code: '600519.SH',
+      items: [],
+    })
+    vi.spyOn(watchlistApi, 'getWatchlist').mockResolvedValue({ items: [] })
+
+    await mountWorkbench(router)
+
+    expect(reportsSpy).toHaveBeenCalledWith('600519.SH', 10)
   })
 
   it('renders research header, decision deck and evidence workspace as separate regions', async () => {
