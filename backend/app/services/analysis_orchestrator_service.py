@@ -256,7 +256,24 @@ async def _run_json_role(*, role_key: str, role_label: str, sort_order: int, sys
     started = datetime.now(UTC)
     failure_type = None
     try:
-        llm = await generate_llm_result(prompt, system_instruction=system_instruction, max_output_tokens=800, use_web_search=use_web_search)
+        try:
+            llm = await generate_llm_result(prompt, system_instruction=system_instruction, max_output_tokens=800, use_web_search=use_web_search)
+        except Exception:
+            if not use_web_search:
+                raise
+            # 关键流程：部分第三方网关会把联网工具错误包装成不透明 500，
+            # LLM 客户端无法识别为 unsupported；这里再做一次普通模型重试。
+            fallback_llm = await generate_llm_result(prompt, system_instruction=system_instruction, max_output_tokens=800, use_web_search=False)
+            llm = LlmTextResult(
+                text=fallback_llm.text,
+                used_web_search=False,
+                web_search_status="unsupported",
+                web_sources=[],
+                model_name=fallback_llm.model_name,
+                reasoning_effort=fallback_llm.reasoning_effort,
+                token_usage_input=fallback_llm.token_usage_input,
+                token_usage_output=fallback_llm.token_usage_output,
+            )
         parsed_payload = _try_parse_json(llm.text)
         if parsed_payload is not None:
             # 关键流程：联网增强返回的 JSON 可能只补充 summary/引用线索；

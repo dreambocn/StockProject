@@ -161,7 +161,7 @@ def should_run_hourly(now: datetime) -> bool:
 
 
 def should_run_daily(now: datetime) -> bool:
-    return now.hour == 18 and now.minute == 10
+    return now.hour == 22 and now.minute == 00
 
 
 async def _load_watch_snapshot_payload(

@@ -272,10 +272,84 @@ def test_functional_multi_agent_marks_partial_when_role_fallback_is_used(
         _ = prompt, system_instruction, max_output_tokens
         if use_web_search:
             raise RuntimeError("web_search tool unsupported and fallback failed")
+        raise RuntimeError("plain llm fallback failed")
+
+    async def fake_generate_streamed_llm_result(
+        prompt: str,
+        *,
+        system_instruction: str | None = None,
+        max_output_tokens: int = 900,
+        use_web_search: bool = False,
+        on_delta=None,
+    ) -> LlmTextResult:
+        _ = prompt, system_instruction, max_output_tokens, use_web_search
+        if on_delta is not None:
+            await on_delta("## 核心判断\n规则 fallback 后生成分析。")
+        return LlmTextResult(
+            text="## 核心判断\n规则 fallback 后生成分析。",
+            used_web_search=False,
+            web_search_status="disabled",
+            web_sources=[],
+            model_name="test-model",
+            reasoning_effort="medium",
+            token_usage_input=8,
+            token_usage_output=9,
+        )
+
+    monkeypatch.setattr(
+        "app.services.analysis_orchestrator_service.generate_llm_result",
+        fake_generate_llm_result,
+    )
+    monkeypatch.setattr(
+        "app.services.analysis_orchestrator_service.generate_streamed_llm_result",
+        fake_generate_streamed_llm_result,
+    )
+
+    async def run_test() -> None:
+        result = await run_functional_multi_agent_analysis(
+            session=SimpleNamespace(),
+            session_row=SimpleNamespace(
+                ts_code="600519.SH",
+                topic="watchlist",
+                use_web_search=True,
+            ),
+            instrument=SimpleNamespace(name="贵州茅台"),
+            latest_snapshot=None,
+            event_payloads=[],
+            factor_weights=[],
+        )
+
+        hypothesis_role = next(
+            role for role in result.pipeline_roles if role.role_key == "hypothesis_builder"
+        )
+        assert result.status == "partial"
+        assert result.web_search_status == "unsupported"
+        assert hypothesis_role.status == "partial"
+        assert hypothesis_role.failure_type == "RuntimeError"
+
+    asyncio.run(run_test())
+
+
+def test_functional_multi_agent_retries_plain_llm_when_web_search_request_errors(
+    monkeypatch,
+) -> None:
+    calls: list[bool] = []
+
+    async def fake_generate_llm_result(
+        prompt: str,
+        *,
+        system_instruction: str | None = None,
+        max_output_tokens: int = 800,
+        use_web_search: bool = False,
+    ) -> LlmTextResult:
+        _ = prompt, system_instruction, max_output_tokens
+        calls.append(use_web_search)
+        if use_web_search:
+            raise RuntimeError("InternalServerError")
         return LlmTextResult(
             text=json.dumps(
                 {
-                    "summary": "已生成研究计划。",
+                    "summary": "联网请求失败后，普通模型回退成功。",
                     "focus_buckets": ["stock_news"],
                     "priority_questions": ["事件是否影响订单？"],
                     "web_search_recommended": True,
@@ -339,9 +413,11 @@ def test_functional_multi_agent_marks_partial_when_role_fallback_is_used(
         hypothesis_role = next(
             role for role in result.pipeline_roles if role.role_key == "hypothesis_builder"
         )
-        assert result.status == "partial"
+        assert result.status == "ready"
         assert result.web_search_status == "unsupported"
-        assert hypothesis_role.status == "partial"
-        assert hypothesis_role.failure_type == "RuntimeError"
+        assert hypothesis_role.status == "completed"
+        assert hypothesis_role.web_search_status == "unsupported"
+        assert hypothesis_role.failure_type is None
+        assert calls[:2] == [True, False]
 
     asyncio.run(run_test())
